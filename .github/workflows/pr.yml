@@ -34,13 +34,13 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Install pinned Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
+      - name: Install pinned Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
+          determinate: false
+          diagnostic-endpoint: ""
           github-token: ""
-          extra-conf: |
-            substituters = https://cache.nixos.org/
-            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbSOg9B2WgX072S1D/UsD08Q=
+          source-tag: v3.22.2
 
       - name: Evaluate the locked flake
         id: flake

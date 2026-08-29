@@ -150,7 +150,7 @@ let
 
   linuxTools = [
     pkgs.patchelf
-    pkgs.xorg-server
+    pkgs.xvfb-run
   ];
   linuxLibraries = [
     pkgs.glib

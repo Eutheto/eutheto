@@ -2,16 +2,16 @@
 
 # GitHub repository policy
 
-This directory owns contributor intake, required review, dependency automation, and CI/supply-chain policy for `eutheto`. It is Phase 00 infrastructure, not evidence of a public release or of deferred product behavior.
+This directory owns contributor intake, review policy, dependency automation, and CI/supply-chain policy for `eutheto`. It is Phase 00 infrastructure, not evidence of a public release or of deferred product behavior.
 
 ## Contents
 
-- [`CODEOWNERS`](CODEOWNERS) assigns default and sensitive-path review to the approved `@Eutheto/maintainers` team.
+- [`CODEOWNERS`](CODEOWNERS) assigns default and sensitive-path ownership to the `@Eutheto/maintainers` team.
 - [`ISSUE_TEMPLATE/`](ISSUE_TEMPLATE/) provides structured non-security bug and feature intake. Blank issues are disabled; suspected vulnerabilities must not be disclosed publicly and are directed to the current security policy.
 - [`pull_request_template.md`](pull_request_template.md) requires phase/issue traceability, DCO sign-off, exact verification evidence, and cross-cutting impact review.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) defines the rules for changing repository automation.
 - `dependabot.yml` owns grouped, reviewable dependency proposals.
-- `workflows/` contains the eight Phase 00 workflow entry points.
+- `workflows/` contains the seven Phase-00 workflow entry points.
 
 Repository-wide policy remains in [AGENTS.md](../AGENTS.md), [CONTRIBUTING.md](../CONTRIBUTING.md), [SECURITY.md](../SECURITY.md), and the active [Phase 00 roadmap](../docs/roadmap/00-repository-and-reproducible-tooling.md).
 
@@ -20,13 +20,12 @@ Repository-wide policy remains in [AGENTS.md](../AGENTS.md), [CONTRIBUTING.md](.
 | Workflow | Contract |
 |---|---|
 | `pr.yml` | Canonical locked-Nix pull-request checks and sanitized reports. |
-| `portable.yml` | Shared exact pins and native prerequisite verification across supported Linux, macOS, and Windows runners. |
-| `desktop-e2e.yml` | Packaged desktop evidence only when the required application and runner surface exists; otherwise an explicit deferred/unavailable gate. |
+| `portable.yml` | Shared exact pins, native prerequisite verification, source builds, and unbundled shell-launch smoke across supported Linux, macOS, and Windows runners. |
 | `security.yml` | Dependency, license, advisory, secret, SBOM, and Tauri-capability review without exposing secrets to pull requests. |
 | `benchmark.yml` | Scheduled and path-gated benchmark evidence only after an approved executable benchmark contract exists. |
 | `fuzz.yml` | Scheduled and path-gated fuzz evidence only after approved targets exist; never arbitrary pull-request scripts. |
 | `release.yml` | Separate build and protected signing jobs with digest verification; no publication while release, signing, updater, and identity gates are open. |
-| `dependency-update.yml` | Non-skippable frozen-lock, install-script, generated-drift, ownership, license/SBOM, protocol/worker, and applicable benchmark policy. |
+| `dependency-update.yml` | Immutable-action and isolated-major-migration policy; applicable build, generation, security, worker, and benchmark evidence is supplied by the existing owning workflows rather than repeated here. |
 
 A workflow file or green placeholder job is not passing evidence. Unimplemented commands, unavailable runners, and later-phase product gates must be represented as `deferred` or `unavailable`, never silently skipped or reported as success.
 
@@ -50,4 +49,4 @@ Public security issues are explicitly disallowed. The issue chooser points to th
 
 ## Ownership and change review
 
-The default owner and all sensitive-path owners are `@Eutheto/maintainers`. Sensitive paths include workflows, Nix and lockfiles, schemas/protocol/migrations, parsers and other untrusted-input boundaries, Tauri capabilities and permissions, credentials, updater/signing/release inputs, and license/SBOM policy. GitHub branch protection must require the applicable ownership review; CODEOWNERS by itself does not grant permission or prove approval.
+The default owner and all sensitive-path owners are `@Eutheto/maintainers`. Sensitive paths include workflows, Nix and lockfiles, schemas/protocol/migrations, parsers and other untrusted-input boundaries, Tauri capabilities and permissions, credentials, updater/signing/release inputs, and license/SBOM policy. While the repository has one active maintainer, `CODEOWNERS` remains an ownership map rather than an impossible self-approval gate. Branch protection must require applicable independent ownership review once a second qualified maintainer is active.

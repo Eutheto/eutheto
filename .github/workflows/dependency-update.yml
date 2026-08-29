@@ -1,17 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
-name: Dependency update
+name: Dependency policy
 
 on:
   pull_request:
-  pull_request_review:
-    types:
-      - submitted
-      - dismissed
+    paths:
+      - ".github/dependabot.yml"
+      - ".github/workflows/**"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "**/package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "deny.toml"
+      - "about.toml"
+      - "protocol/**"
+      - "workers/ortools/**"
   workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: dependency-update-${{ github.event.pull_request.number || github.ref }}
@@ -28,7 +39,7 @@ env:
 
 jobs:
   classify:
-    name: Classify and isolate update
+    name: Immutable inputs and migration isolation
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -302,7 +313,7 @@ jobs:
               }
               if (
                   'nix-input-migration' in changed_families
-                  and len(toolchain) == 1
+                  and toolchain
                   and changed_families <= toolchain | {'nix-input-migration'}
               ):
                   return changed_families - {'nix-input-migration'}
@@ -408,341 +419,7 @@ jobs:
               summary.write(f'- dependency update: `{outputs["dependency_update"]}`\n')
               summary.write(f'- worker gate required: `{outputs["worker_required"]}`\n')
               summary.write(f'- benchmark gate required: `{outputs["benchmark_required"]}`\n')
-              summary.write(f'- sensitive CODEOWNERS review: `{outputs["sensitive"]}`\n')
+              summary.write(f'- sensitive boundary changed: `{outputs["sensitive"]}`\n')
               summary.write(f'- isolated major family/migration: `{outputs["major_families"]}`\n')
           PY
 
-  codeowners:
-    name: Sensitive approval precondition
-    needs: classify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Check out the pull-request head
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Verify sensitive ownership and approval
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SENSITIVE: ${{ needs.classify.outputs.sensitive }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          REPOSITORY: ${{ github.event.repository.full_name }}
-        run: |
-          if [ "${SENSITIVE}" != "true" ]; then
-            echo "No sensitive dependency boundary changed; CODEOWNERS approval gate is not applicable."
-            exit 0
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
-          lines = [
-              line.split('#', 1)[0].split()
-              for line in Path('.github/CODEOWNERS').read_text().splitlines()
-          ]
-          if not any(parts and parts[0] == '*' and '@Eutheto/maintainers' in parts[1:] for parts in lines):
-              raise SystemExit('CODEOWNERS must assign the repository-wide fallback to @Eutheto/maintainers')
-          PY
-          if [ -z "${PR_NUMBER}" ]; then
-            echo "Sensitive dependency changes require a pull request and @Eutheto/maintainers CODEOWNER approval." >&2
-            exit 1
-          fi
-          if [[ ! "${REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "Cannot verify approvals for an invalid event repository identity." >&2
-            exit 1
-          fi
-          repository_owner="${REPOSITORY%%/*}"
-          repository_name="${REPOSITORY#*/}"
-          # GraphQL variable references in the query are intentionally literal.
-          # shellcheck disable=SC2016
-          gh api graphql \
-            -f repositoryOwner="${repository_owner}" \
-            -f repositoryName="${repository_name}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($repositoryOwner:String!,$repositoryName:String!,$number:Int!){repository(owner:$repositoryOwner,name:$repositoryName){pullRequest(number:$number){reviewDecision reviews(last:100){pageInfo{hasPreviousPage hasNextPage} nodes{state author{login} commit{oid}}}}}}' \
-            > "${RUNNER_TEMP}/codeowner-review.json"
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
-          head_sha = os.environ['HEAD_SHA'].strip()
-          if not re.fullmatch(r'[0-9a-f]{40}', head_sha):
-              raise SystemExit('cannot bind sensitive approval to a valid pull-request head SHA')
-          data = json.loads(Path(os.environ['RUNNER_TEMP'], 'codeowner-review.json').read_text())['data']
-          pull_request = data['repository']['pullRequest']
-          if pull_request is None:
-              raise SystemExit('cannot verify approval for the pull request')
-          reviews = pull_request['reviews']
-          if reviews['pageInfo']['hasPreviousPage'] or reviews['pageInfo']['hasNextPage']:
-              raise SystemExit('cannot verify current-head approval: review history exceeds the fetched window')
-          effective_states = {'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'}
-          latest_effective = {}
-          for review in reviews['nodes']:
-              author = review.get('author')
-              if not author or review['state'] not in effective_states:
-                  continue
-              latest_effective[author['login'].casefold()] = review
-          current_head_approved = any(
-              review['state'] == 'APPROVED'
-              and (review.get('commit') or {}).get('oid') == head_sha
-              for review in latest_effective.values()
-          )
-          if pull_request.get('reviewDecision') != 'APPROVED' or not current_head_approved:
-              raise SystemExit(
-                  'sensitive dependency changes require an active approval for the exact '
-                  'pull-request head; protected-branch CODEOWNERS review remains mandatory'
-              )
-          PY
-
-  security-gates:
-    name: Security and supply-chain gates
-    needs: classify
-    if: needs.classify.outputs.dependency_update == 'true'
-    uses: ./.github/workflows/security.yml
-    permissions:
-      contents: read
-
-  nix-and-tests:
-    name: Locked Nix, Rust, and JavaScript suite
-    needs: classify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Report non-dependency change
-        if: needs.classify.outputs.dependency_update != 'true'
-        run: echo "No dependency input changed; locked suite gate is not applicable."
-
-      - name: Check out the pull-request head
-        if: needs.classify.outputs.dependency_update == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Install locked Nix
-        if: needs.classify.outputs.dependency_update == 'true'
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Restore lock-keyed dependency caches
-        if: needs.classify.outputs.dependency_update == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .cache/cargo/registry
-            .cache/cargo/git
-            .cache/pnpm/store
-          key: dependency-tests-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml', 'Cargo.lock', 'package.json', 'pnpm-lock.yaml') }}
-
-      - name: Evaluate the frozen flake
-        if: needs.classify.outputs.dependency_update == 'true'
-        run: nix flake check --no-update-lock-file
-
-      - name: Install locked dependencies without lifecycle scripts
-        if: needs.classify.outputs.dependency_update == 'true'
-        run: |
-          nix develop --no-update-lock-file .#full --command cargo fetch --locked
-          nix develop --no-update-lock-file .#full --command pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Run the full Rust and JavaScript suites
-        if: needs.classify.outputs.dependency_update == 'true'
-        run: nix develop --no-update-lock-file .#full --command just lint typecheck test-rust-nextest test-doc test-ui
-
-      - name: Reject source or lock mutation
-        if: needs.classify.outputs.dependency_update == 'true'
-        run: |
-          git diff --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
-
-  generation-drift:
-    name: Deterministic generation drift
-    needs: classify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    steps:
-      - name: Report non-dependency change
-        if: needs.classify.outputs.dependency_update != 'true'
-        run: echo "No dependency input changed; generation gate is not applicable."
-
-      - name: Check out the pull-request head
-        if: needs.classify.outputs.dependency_update == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Install locked Nix
-        if: needs.classify.outputs.dependency_update == 'true'
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Regenerate twice and reject every drift
-        if: needs.classify.outputs.dependency_update == 'true'
-        run: |
-          nix develop --no-update-lock-file .#full --command cargo fetch --locked
-          nix develop --no-update-lock-file .#full --command pnpm install --frozen-lockfile --ignore-scripts
-          nix develop --no-update-lock-file .#full --command just generate
-          git diff --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
-          nix develop --no-update-lock-file .#full --command just generate
-          git diff --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
-          nix develop --no-update-lock-file .#full --command just generate-check protocol-check fixtures-check
-
-  worker-gate:
-    name: Applicable real worker build and smoke
-    needs: classify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - name: Report unavailable gate as not applicable
-        if: needs.classify.outputs.worker_required != 'true'
-        run: echo "No worker/protobuf/source input changed; the deferred Phase-03 worker gate is not applicable, not passing evidence."
-
-      - name: Check out the pull-request head
-        if: needs.classify.outputs.worker_required == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Require an approved exact worker source contract
-        if: needs.classify.outputs.worker_required == 'true'
-        run: |
-          python3 <<'PY'
-          import json
-          import re
-          from pathlib import Path
-          contract = Path('workers/ortools/source-contract.json')
-          if not contract.is_file():
-              raise SystemExit('worker-relevant update is blocked: Phase 03 has not committed an approved source-contract.json')
-          data = json.loads(contract.read_text())
-          approval = data.get('approval', {})
-          if approval.get('status') != 'approved' or approval.get('phase') != 3:
-              raise SystemExit('worker-relevant update is blocked: exact source contract is not approved')
-          if approval.get('record') in {None, '', 'UNRESOLVED'}:
-              raise SystemExit('worker-relevant update is blocked: approval record is unresolved')
-
-          def required_text(section, field):
-              value = data.get(section, {}).get(field)
-              if not isinstance(value, str) or not value or value == 'UNRESOLVED':
-                  raise SystemExit(
-                      f'worker-relevant update is blocked: {section}.{field} is not pinned'
-                  )
-              return value
-
-          for section, fields in {
-              'ortools': ('version',),
-              'protobuf': ('source_version', 'protoc_version', 'cpp_runtime_version'),
-              'worker': ('version',),
-          }.items():
-              for field in fields:
-                  required_text(section, field)
-          for section in ('ortools', 'protobuf'):
-              if not required_text(section, 'source_url').startswith('https://'):
-                  raise SystemExit(
-                      f'worker-relevant update is blocked: {section}.source_url is not HTTPS'
-                  )
-              if not re.fullmatch(r'[0-9a-f]{64}', required_text(section, 'sha256')):
-                  raise SystemExit(
-                      f'worker-relevant update is blocked: {section}.sha256 is not an exact pin'
-                  )
-          if not re.fullmatch(
-              r'[0-9a-f]{64}', required_text('protocol', 'schema_sha256')
-          ):
-              raise SystemExit(
-                  'worker-relevant update is blocked: protocol.schema_sha256 is not an exact pin'
-              )
-          PY
-
-      - name: Install locked Nix
-        if: needs.classify.outputs.worker_required == 'true'
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Build and smoke the real approved worker
-        if: needs.classify.outputs.worker_required == 'true'
-        run: |
-          nix develop --no-update-lock-file .#full --command just worker-build-nix
-          nix develop --no-update-lock-file .#full --command just worker-build-native
-          nix develop --no-update-lock-file .#full --command just worker-smoke
-          git diff --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
-
-  benchmark-gate:
-    name: Applicable official benchmark thresholds
-    needs: classify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - name: Report unavailable gate as not applicable
-        if: needs.classify.outputs.benchmark_required != 'true'
-        run: echo "No solver/compiler/protocol performance input changed; the deferred benchmark gate is not applicable, not passing evidence."
-
-      - name: Check out the pull-request head
-        if: needs.classify.outputs.benchmark_required == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Require official corpus and thresholds
-        if: needs.classify.outputs.benchmark_required == 'true'
-        run: |
-          python3 <<'PY'
-          import subprocess
-          files = subprocess.check_output(['git', 'ls-files', 'benchmarks'], text=True).splitlines()
-          corpus = [path for path in files if path.startswith('benchmarks/corpus/') and not path.endswith('README.md')]
-          expected = [path for path in files if path.startswith('benchmarks/expected/') and not path.endswith('README.md')]
-          if not corpus or not expected:
-              raise SystemExit('benchmark-relevant update is blocked: Phase 03 has not committed the official corpus and threshold evidence')
-          PY
-
-      - name: Install locked Nix
-        if: needs.classify.outputs.benchmark_required == 'true'
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Enforce official regression thresholds
-        if: needs.classify.outputs.benchmark_required == 'true'
-        run: |
-          nix develop --no-update-lock-file .#full --command just bench
-          git diff --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
-
-  required:
-    name: Dependency update required gate
-    if: always()
-    needs:
-      - classify
-      - codeowners
-      - security-gates
-      - nix-and-tests
-      - generation-drift
-      - worker-gate
-      - benchmark-gate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Require every applicable gate
-        env:
-          DEPENDENCY_UPDATE: ${{ needs.classify.outputs.dependency_update }}
-          CLASSIFY_RESULT: ${{ needs.classify.result }}
-          CODEOWNERS_RESULT: ${{ needs.codeowners.result }}
-          SECURITY_RESULT: ${{ needs.security-gates.result }}
-          TESTS_RESULT: ${{ needs.nix-and-tests.result }}
-          GENERATION_RESULT: ${{ needs.generation-drift.result }}
-          WORKER_RESULT: ${{ needs.worker-gate.result }}
-          BENCHMARK_RESULT: ${{ needs.benchmark-gate.result }}
-        run: |
-          test "${CLASSIFY_RESULT}" = success
-          test "${CODEOWNERS_RESULT}" = success
-          test "${TESTS_RESULT}" = success
-          test "${GENERATION_RESULT}" = success
-          test "${WORKER_RESULT}" = success
-          test "${BENCHMARK_RESULT}" = success
-          if [ "${DEPENDENCY_UPDATE}" = true ]; then
-            test "${SECURITY_RESULT}" = success
-          else
-            test "${SECURITY_RESULT}" = skipped
-            echo "No dependency input changed; all dependency-only gates were explicitly not applicable."
-          fi

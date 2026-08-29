@@ -145,12 +145,12 @@ only for local development and will be resolved by the identity gates in
 [Phase 11](../../docs/roadmap/README.md) with approved ADRs before any
 public release:
 
-| Value                                | Location                                            | Status                                                                |
-| ------------------------------------ | --------------------------------------------------- | --------------------------------------------------------------------- |
-| `dev.eutheto.phase00.desktop`        | `tauri.conf.json` identifier, `Cargo.toml` metadata | Development-only reverse-domain ID; **not** the production identifier |
-| `eutheto Phase 00 development shell` | `tauri.conf.json` productName, window title         | Provisional product name; **not** a release brand                     |
-| `icon.svg` / `icon.png`              | `src-tauri/icons/`                                  | Phase-00 placeholder mark; **not** a final logo or trademark          |
-| Bundle version `0.1.0`               | `tauri.conf.json`                                   | Development version; **not** a released version                       |
+| Value                                  | Location                                            | Status                                                                |
+| -------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| `dev.eutheto.phase00.desktop`          | `tauri.conf.json` identifier, `Cargo.toml` metadata | Development-only reverse-domain ID; **not** the production identifier |
+| `eutheto Phase 00 development shell`   | `tauri.conf.json` productName, window title         | Provisional product name; **not** a release brand                     |
+| `icon.svg` and generated desktop icons | `src-tauri/icons/`                                  | Phase-00 placeholder mark; **not** a final logo or trademark          |
+| Bundle version `0.1.0`                 | `tauri.conf.json`                                   | Development version; **not** a released version                       |
 
 See [identity gates](../../docs/architecture/identity-gates.md) for the full
 list of unresolved product, packaging, and signing gates.

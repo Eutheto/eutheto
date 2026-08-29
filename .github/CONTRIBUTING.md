@@ -10,18 +10,18 @@ This file applies to changes under `.github/`. The repository-wide [contribution
 2. Use the checked-in `Justfile`, Nix environment, and `xtask` entry points. A workflow must call the same repository command a contributor can run; it must not hide a second build or generation convention in YAML.
 3. Preserve closed gates. A job that cannot yet run must say `unavailable` or `deferred` and must not emit passing evidence. Phase 00 must not claim solver, packaged desktop E2E, signing, updater, benchmark, fuzz, publication, or production-identity evidence that does not exist.
 4. Keep changes narrow. Do not combine a workflow policy change with unrelated dependency or generated-output drift.
-5. Obtain `@Eutheto/maintainers` review for `.github/` and every security-sensitive path named in `CODEOWNERS`.
+5. Treat `CODEOWNERS` as the ownership map. While only one active maintainer exists, do not create an impossible self-approval gate; restore required independent ownership review when a second qualified maintainer is active.
 
 ## Workflow requirements
 
-The required workflow files are `pr.yml`, `portable.yml`, `desktop-e2e.yml`, `security.yml`, `benchmark.yml`, `fuzz.yml`, `release.yml`, and `dependency-update.yml`. Their presence does not make a deferred gate pass.
+The required Phase-00 workflow files are `pr.yml`, `portable.yml`, `security.yml`, `benchmark.yml`, `fuzz.yml`, `release.yml`, and `dependency-update.yml`. The portable workflow owns the current unbundled desktop launch smoke. Packaged desktop E2E remains deferred to the release phases.
 
 Every workflow change must satisfy all applicable rules:
 
 - Pin each external action to a verified full 40-character commit SHA. Put the latest compatible stable upstream tag in a nearby comment; never use a mutable tag or branch.
 - Set workflow-level `permissions: contents: read` by default, then grant only the narrower job-level permission an operation requires. Do not grant write permission to validation jobs.
 - Add event-appropriate concurrency groups. Cancel superseded branch and pull-request validation; do not cancel an in-progress protected signing or publication operation merely because another ref appeared.
-- Protect `main` with required `CODEOWNERS` review and stale-approval dismissal. The dependency workflow can verify an approved exact-head review with its repository token, but that token cannot enumerate private organization-team membership; the native branch-protection rule is the authority that requires `@Eutheto/maintainers`.
+- Protect `main` against force pushes, deletion, and non-linear history. Required independent `CODEOWNERS` approval is temporarily disabled while the repository has one active maintainer and must be restored when a second qualified maintainer is active.
 - Treat pull-request code, titles, bodies, labels, paths, artifacts, caches, and dependency scripts as untrusted. A fork pull request must receive no repository or environment secret and must not gain a privileged execution path through `pull_request_target`.
 - Use locked Nix for canonical Linux commands. Native Windows and macOS jobs must use the exact shared Rust, Node, and pnpm pins and the documented platform prerequisite verifier.
 - Use deterministic cache keys derived from runner platform, architecture, exact lockfiles/toolchain inputs, and a deliberate cache schema version. Restore-only public caches are preferred for untrusted pull requests. Never cache credentials, signing state, `.env` files, user data, or unsanitized reports.
@@ -36,7 +36,7 @@ Automated and manual dependency-update pull requests use committed, frozen `flak
 
 - Keep major Rust, Node, Tauri, OR-Tools, and schema migrations in separate, independently reviewable pull requests. Do not create a combined major-version rollup.
 - Block new or changed JavaScript install scripts until the exact package and script are reviewed and allowlisted with a rationale.
-- Require ownership review for cryptography, parsers and other untrusted-input boundaries, updater/signing, keyring/credentials, worker protocol, and Tauri permissions/capabilities.
+- Flag cryptography, parsers and other untrusted-input boundaries, updater/signing, keyring/credentials, worker protocol, and Tauri permissions/capabilities for ownership review. Enforce an independent approval once a second qualified maintainer is active.
 - A bot cannot create its own license, security, generated-drift, ownership, benchmark, or review exception.
 - Run only gates that exist and apply. Solver benchmarks and other later-phase evidence remain deferred until the governing contract and executable command exist.
 

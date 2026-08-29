@@ -9,7 +9,6 @@ on:
   schedule:
     - cron: "17 03 * * 1"
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
@@ -41,6 +40,11 @@ jobs:
 
       - name: Install locked Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          determinate: false
+          diagnostic-endpoint: ""
+          github-token: ""
+          source-tag: v3.22.2
 
       - name: Restore lock-keyed dependency caches
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -65,7 +69,7 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/security-evidence"
           nix develop --no-update-lock-file .#full --command pnpm audit --audit-level=high
-          nix develop --no-update-lock-file .#full --command pnpm list --recursive --depth Infinity --json > "${RUNNER_TEMP}/security-evidence/pnpm-inventory.raw.json"
+          nix develop --no-update-lock-file .#full --command sh -c "pnpm list --recursive --depth Infinity --json > \"\$1\"" sh "${RUNNER_TEMP}/security-evidence/pnpm-inventory.raw.json"
           nix develop --no-update-lock-file .#full --command node <<'NODE'
           const fs = require('node:fs');
           const path = require('node:path');
@@ -178,8 +182,6 @@ jobs:
           }
           NODE
 
-      - name: Run static analysis
-        run: nix develop --no-update-lock-file .#full --command just lint
 
       - name: Scan repository history for secrets
         run: nix run --no-update-lock-file --inputs-from . nixpkgs#gitleaks -- git --no-banner --redact .
