@@ -1,0 +1,314 @@
+# Assumptions, Decisions, and Current-Version Ledger
+
+## Ledger purpose and authority
+
+This dated ledger records implementation-time facts, corrections, unresolved gates, and evidence. It does **not** replace requirements in the phase roadmaps. Requirements remain in the applicable phase file; this ledger answers “what was verified, what value controls, who closes the gate, and from which evidence?”
+
+- **Blueprint:** `/home/zeb/Downloads/open-source-constraint-optimizer-development-mvp-post-mvp-blueprint.md`
+- **Blueprint SHA-256:** `ed094402135dc8e7a1c66b640484b4a4643e631024439016e48b895def00d13e`
+- **Verification date:** 2026-08-29
+- **Final project name:** `eutheto`
+- **Version policy:** use the latest stable supported version. If newest is incompatible or has a known blocker, use the newest compatible/safe stable and record the reason. Exact dependency/tool/action pins and integrity hashes are committed in Phase 0 lockfiles/toolchain files.
+- **Conflict rule:** direct npm registry, crates.io API, and GitHub releases API evidence recorded in the dated ledgers below controls over narrative agent reports. Conflicting values are not retained as alternatives.
+
+Related delivery files: [Phase 11 packaging/documentation](11-public-mvp-packaging-and-documentation.md), [Phase 12 stabilization/release](12-stabilization-and-public-release-gate.md), and [Phase 13 post-MVP](13-post-mvp-roadmap.md).
+
+## Final and unresolved identity decisions
+
+| Decision | Status/value | Owner/gate |
+|---|---|---|
+| Project name | **Resolved: `eutheto`** | Project-wide; Phase 0 records it everywhere |
+| License/contribution | **Resolved: Apache-2.0 and DCO; no CLA initially** | Phase 0 legal files; Phase 11/12 compliance |
+| Working CLI name | **Unresolved: `optimizer` is provisional, not final** | K.1 / Phase 0; must close before stable CLI docs and service mode |
+| Crate/package namespace and prefixes | **Resolved: `eutheto` namespace prefix**; Rust crates use `eutheto-*` and npm packages use `@eutheto/*`. The exact crate/package inventory names remain Phase-0 initialization decisions. | K.1 / Phase 0 |
+| Reverse-domain application ID | **Unresolved** | K.1 / Phase 0 and Phase 11 signing/updater |
+| Project file extension | **Unresolved**; `.optplan` is a blueprint working example, not a final decision | K.1 / Phase 0 and persistence/import docs |
+| Git hosting organization | **Unresolved** | K.1 / Phase 0 and Phase 11 release URLs |
+| Governance/security contacts | **Unresolved**; do not fabricate addresses | K.1 / Phase 11 governance/security |
+| Stable/beta application identifiers | **Unresolved** | K.1 / Phase 11 updater/signing continuity |
+| Release signing/notarization/key custody | **Unresolved choices; required before release** | K.1/K.5/K.8 / Phase 11–12 |
+
+## Controlling recommendations
+
+| Item | Latest observed | Controlling recommendation | Reason and owner |
+|---|---:|---:|---|
+| Rust | 1.98.0 | **1.97.1** | Rust 1.98.0 has a P-critical trait-object vtable miscompilation; re-evaluate when 1.98.1 or newer fixed stable exists and passes Phase 0/12 target suites. [Rust releases](https://blog.rust-lang.org/releases/) and [issue #161441](https://github.com/rust-lang/rust/issues/161441). |
+| Node.js | 26.8.1 Current | **24.20.0 LTS** | Production uses current LTS; re-evaluate Node 26 when it becomes LTS. Phase 0 owns engines/Nix. [Node distributions](https://nodejs.org/dist/). |
+| pnpm | 11.24.0 | **11.24.0** | Direct registry current stable supports Node `>=22.13`; replaces blueprint/report pnpm-10 guidance. Phase 0 owns lock/integrity and Nix availability. [npm](https://www.npmjs.com/package/pnpm). |
+| TypeScript | 7.0.2 | **6.0.3** | `typescript-eslint` 8.68.0 declares TypeScript `>=4.8.4 <6.1.0`; newest supported stable is 6.0.3. Phase 0 owns exact lock. [npm TypeScript](https://www.npmjs.com/package/typescript), [typescript-eslint](https://www.npmjs.com/package/typescript-eslint). |
+| protobuf/protoc | 36.0 | **Match pinned OR-Tools 9.15 protobuf/proto contract** | Do not blindly use newest protoc; Phase 3 closes generation and handshake compatibility. [protobuf v36.0](https://github.com/protocolbuffers/protobuf/releases/tag/v36.0). |
+| OR-Tools | 9.15 | **9.15 after K.3 gates** | Platform build, benchmark, CMake, linkage, protocol, SBOM/license, callback, and assumption-core gates remain. Phase 3 owns pin; Phase 11/12 owns exact artifacts. [release](https://github.com/google/or-tools/releases/tag/v9.15). |
+| Pumpkin | 0.5.0 | **0.5.0 after K.4 gates** | Actual support matrix, dedicated-thread ownership, cooperative cancellation/time limits, verifier/contracts, and benchmarks precede auto-routing. Phase 8 owns. [crates.io](https://crates.io/crates/pumpkin-solver). |
+
+## Complete direct npm-registry ledger
+
+All values below are from `https://registry.npmjs.org/<package>/latest` on the verification date. “Use” means current candidate for exact Phase-0 lockfile pin unless the controlling recommendation above overrides it.
+
+| Package | Direct version | Compatibility/decision note | Owning phase |
+|---|---:|---|---|
+| [`pnpm`](https://www.npmjs.com/package/pnpm) | 11.24.0 | Node `>=22.13`; use | 0 |
+| [`corepack`](https://www.npmjs.com/package/corepack) | 0.36.0 | Node `^22.22.2 || ^24.15.0 || >=26`; separately pin if used | 0 |
+| [`typescript`](https://www.npmjs.com/package/typescript) | 7.0.2 | discovery latest; use **6.0.3** due typescript-eslint `<6.1` | 0/6 |
+| [`vue`](https://www.npmjs.com/package/vue) | 3.5.42 | use | 0/6 |
+| [`@vue/compiler-sfc`](https://www.npmjs.com/package/@vue/compiler-sfc) | 3.5.42 | mandatory direct build pin; exact patch matches Vue | 0/6 |
+| [`vue-router`](https://www.npmjs.com/package/vue-router) | 5.3.0 | peers Vue `^3.5.34`, Vite 7/8, Pinia 3/4; use | 0/6 |
+| [`pinia`](https://www.npmjs.com/package/pinia) | 4.0.3 | peer Vue `^3.5.11`, TS `>=5.6`; ESM-only caveat reviewed | 0/6 |
+| [`@pinia/colada`](https://www.npmjs.com/package/@pinia/colada) | 1.4.2 | mandatory direct pin for server/async state; never authoritative scenario state | 0/6 |
+| [`@vue/devtools-api`](https://www.npmjs.com/package/@vue/devtools-api) | 8.2.1 | mandatory direct Pinia peer pin; production enablement reviewed | 0/6 |
+| [`vite`](https://www.npmjs.com/package/vite) | 8.2.2 | Node `^20.19 || >=22.12`; use | 0/6 |
+| [`@vitejs/plugin-vue`](https://www.npmjs.com/package/@vitejs/plugin-vue) | 6.0.8 | supports Vite through 8; use | 0/6 |
+| [`@tauri-apps/api`](https://www.npmjs.com/package/@tauri-apps/api) | 2.11.1 | use; independent of Rust crate patch | 0/6/11 |
+| [`@tauri-apps/cli`](https://www.npmjs.com/package/@tauri-apps/cli) | 2.11.4 | use | 0/6/11 |
+| [`@tauri-apps/plugin-updater`](https://www.npmjs.com/package/@tauri-apps/plugin-updater) | 2.10.1 | use; signed updater gate remains | 11 |
+| [`@tauri-apps/plugin-shell`](https://www.npmjs.com/package/@tauri-apps/plugin-shell) | 2.3.5 | exact-sidecar permission only | 3/11 |
+| [`tailwindcss`](https://www.npmjs.com/package/tailwindcss) | 4.3.3 | use | 0/6 |
+| [`@tailwindcss/vite`](https://www.npmjs.com/package/@tailwindcss/vite) | 4.3.3 | supports Vite 5–8; use | 0/6 |
+| [`shadcn-vue`](https://www.npmjs.com/package/shadcn-vue) | 2.8.2 | editable component source; use | 0/6 |
+| [`reka-ui`](https://www.npmjs.com/package/reka-ui) | 2.10.4 | Vue `>=3.4`; use | 0/6 |
+| [`@lucide/vue`](https://www.npmjs.com/package/@lucide/vue) | 1.37.0 | maintained Vue package; use; icons retain accessible names | 0/6 |
+| [`@tanstack/vue-table`](https://www.npmjs.com/package/@tanstack/vue-table) | 9.2.4 | Node `>=20`, Vue `>=3.2`; use v9 API | 6/7/9 |
+| [`@tanstack/vue-virtual`](https://www.npmjs.com/package/@tanstack/vue-virtual) | 3.13.36 | use | 6/7/9 |
+| [`konva`](https://www.npmjs.com/package/konva) | 10.3.2 | optional canvas peers are not browser runtime requirements; use | 9 |
+| [`vue-konva`](https://www.npmjs.com/package/vue-konva) | 3.4.0 | peers Vue 3 and Konva `>7`; use | 9 |
+| [`echarts`](https://www.npmjs.com/package/echarts) | 6.1.0 | selected analytical views only | 7/13 |
+| [`vue-echarts`](https://www.npmjs.com/package/vue-echarts) | 8.1.0 | peers Vue `^3.3`, ECharts `^6`; use | 7/13 |
+| [`eslint`](https://www.npmjs.com/package/eslint) | 10.9.1 | supports Node 24; use | 0/12 |
+| [`@vue/eslint-config-typescript`](https://www.npmjs.com/package/@vue/eslint-config-typescript) | 14.9.0 | supports ESLint 9/10 | 0/12 |
+| [`typescript-eslint`](https://www.npmjs.com/package/typescript-eslint) | 8.68.0 | supports ESLint 8/9/10; TypeScript `<6.1` controls TS recommendation | 0/12 |
+| [`eslint-plugin-vue`](https://www.npmjs.com/package/eslint-plugin-vue) | 10.10.0 | supports ESLint 8/9/10 | 0/12 |
+| [`prettier`](https://www.npmjs.com/package/prettier) | 3.9.6 | use if selected formatter | 0 |
+| [`vitest`](https://www.npmjs.com/package/vitest) | 4.1.11 | Node 20/22/24+, Vite 6/7/8; use | 0/12 |
+| [`@vue/test-utils`](https://www.npmjs.com/package/@vue/test-utils) | 2.5.0 | Vue 3 peers; use | 0/12 |
+| [`@testing-library/vue`](https://www.npmjs.com/package/@testing-library/vue) | 8.1.0 | use where user-centric tests help | 12 |
+| [`axe-core`](https://www.npmjs.com/package/axe-core) | 4.13.0 | use directly; `@axe-core/vue` does not exist | 12 |
+| [`webdriverio`](https://www.npmjs.com/package/webdriverio) | 9.31.4 | Node `>=18.20`; use | 12 |
+| [`@wdio/cli`](https://www.npmjs.com/package/@wdio/cli) | 9.31.4 | align with WebDriverIO | 12 |
+| [`@wdio/tauri-service`](https://www.npmjs.com/package/@wdio/tauri-service) | 1.3.0 | peers WebDriverIO 9; packaged Tauri E2E | 12 |
+| [`playwright`](https://www.npmjs.com/package/playwright) | 1.62.1 | pure Vite UI only, not Tauri replacement | 12 |
+| [`@playwright/test`](https://www.npmjs.com/package/@playwright/test) | 1.62.1 | align with Playwright | 12 |
+| [`tw-animate-css`](https://www.npmjs.com/package/tw-animate-css) | 1.4.0 | Tailwind-4/shadcn animation utility | 0/6 |
+| [`tailwind-merge`](https://www.npmjs.com/package/tailwind-merge) | 3.6.0 | one class-composition convention | 0/6 |
+| [`class-variance-authority`](https://www.npmjs.com/package/class-variance-authority) | 0.7.1 | shadcn variant utility | 0/6 |
+| [`clsx`](https://www.npmjs.com/package/clsx) | 2.1.1 | shadcn class utility | 0/6 |
+
+## Complete direct crates.io ledger
+
+Values are maximum stable releases reported by `https://crates.io/api/v1/crates/<crate>` on the verification date. Exact Cargo pins/features/licenses/MSRV are Phase-0 decisions; role-specific adoption remains gated by the owning phase.
+
+| Crate/tool | Stable | Decision/note | Owner |
+|---|---:|---|---|
+| [`serde`](https://crates.io/crates/serde) | 1.0.229 | use, explicit features | 0–2 |
+| [`serde_json`](https://crates.io/crates/serde_json) | 1.0.151 | use with strict boundaries | 0–2 |
+| [`schemars`](https://crates.io/crates/schemars) | 1.2.2 | 1.x generated-schema review | 0–2/10 |
+| [`ts-rs`](https://crates.io/crates/ts-rs) | 12.0.1 | generated DTO output checked in/reviewed | 0/6 |
+| [`thiserror`](https://crates.io/crates/thiserror) | 2.0.20 | typed library errors | 0–13 |
+| [`anyhow`](https://crates.io/crates/anyhow) | 1.0.104 | binary/application edges only | 0–13 |
+| [`tokio`](https://crates.io/crates/tokio) | 1.53.1 | explicit features; blocking work off executor | 0–13 |
+| [`tokio-util`](https://crates.io/crates/tokio-util) | 0.7.19 | cancellation tokens | 0–13 |
+| [`async-trait`](https://crates.io/crates/async-trait) | 0.1.92 | avoid when native async traits meet object-safety/design needs | 0/10 |
+| [`tracing`](https://crates.io/crates/tracing) | 0.1.44 | structured/redacted logs | 0/11 |
+| [`tracing-subscriber`](https://crates.io/crates/tracing-subscriber) | 0.3.23 | bounded production appender | 0/11 |
+| [`uuid`](https://crates.io/crates/uuid) | 1.26.0 | typed ID wrappers; evaluate v7 feature | 0–2 |
+| [`jiff`](https://crates.io/crates/jiff) | 0.2.35 | pre-1.0; IANA/DST fixtures | 0/5/13 |
+| [`rusqlite`](https://crates.io/crates/rusqlite) | 0.40.2 | bundled SQLite; dedicated service | 1 |
+| [`zstd`](https://crates.io/crates/zstd) | 0.13.3 | bounded compression | 1/11 |
+| [`zip`](https://crates.io/crates/zip) | 8.6.0 | newest stable; 9.0.0-pre3 excluded; strict wrapper | 1/11 |
+| [`blake3`](https://crates.io/crates/blake3) | 1.8.7 | content/model hashes, not passwords | 1–4/11 |
+| [`prost`](https://crates.io/crates/prost) | 0.14.4 | match `prost-build` and OR-Tools proto contract | 2/3 |
+| [`prost-build`](https://crates.io/crates/prost-build) | 0.14.4 | match prost/protoc gate | 2/3 |
+| [`reqwest`](https://crates.io/crates/reqwest) | 0.13.4 | Rust-only provider HTTP, strict redirects/timeouts | 10 |
+| [`url`](https://crates.io/crates/url) | 2.5.8 | endpoint/resource validation | 10/12 |
+| [`keyring`](https://crates.io/crates/keyring) | 4.1.6 | OS store; Linux behavior gate | 10/12 |
+| [`semver`](https://crates.io/crates/semver) | 1.0.28 | pack/backend/protocol compatibility | 2/11/13 |
+| [`csv`](https://crates.io/crates/csv) | 1.4.0 | bounded streaming imports | 5/9/13 |
+| [`clap`](https://crates.io/crates/clap) | 4.6.6 | final CLI name still unresolved | 1/11 |
+| [`directories`](https://crates.io/crates/directories) | 6.0.0 | preferred active option | 1 |
+| [`directories-next`](https://crates.io/crates/directories-next) | 2.0.0 | archived; do not adopt over `directories` | none |
+| [`zeroize`](https://crates.io/crates/zeroize) | 1.9.0 | best-effort secret buffers | 10/11 |
+| [`rstar`](https://crates.io/crates/rstar) | 0.13.0 | only after profiling vs custom indexed pairs | 9/13 |
+| [`cargo-nextest`](https://crates.io/crates/cargo-nextest) | 0.9.143 | test tool | 0/12 |
+| [`cargo-llvm-cov`](https://crates.io/crates/cargo-llvm-cov) | 0.9.0 | coverage tool; LLVM compatibility gate | 0/12 |
+| [`proptest`](https://crates.io/crates/proptest) | 1.11.0 | property tests | 0/12 |
+| [`insta`](https://crates.io/crates/insta) | 1.48.0 | reviewed semantic snapshots | 0/12 |
+| [`cargo-insta`](https://crates.io/crates/cargo-insta) | 1.48.0 | snapshot-review companion | 0/12 |
+| [`criterion`](https://crates.io/crates/criterion) | 0.8.2 | benchmarks plus project runner | 0/12 |
+| [`tempfile`](https://crates.io/crates/tempfile) | 3.27.0 | isolated tests/staging | 0/12 |
+| [`pretty_assertions`](https://crates.io/crates/pretty_assertions) | 1.4.1 | optional readable diffs | 0/12 |
+| [`cargo-fuzz`](https://crates.io/crates/cargo-fuzz) | 0.13.2 | separately pinned nightly | 0/12 |
+| [`libfuzzer-sys`](https://crates.io/crates/libfuzzer-sys) | 0.4.13 | fuzz harness | 0/12 |
+| [`cargo-deny`](https://crates.io/crates/cargo-deny) | 0.20.2 | license/ban/source/advisory gate | 0/11/12 |
+| [`cargo-about`](https://crates.io/crates/cargo-about) | 0.9.2 | Rust notices | 0/11/12 |
+| [`cargo-audit`](https://crates.io/crates/cargo-audit) | 0.22.2 | additional RustSec signal | 0/11/12 |
+| [`cargo-cyclonedx`](https://crates.io/crates/cargo-cyclonedx) | 0.5.9 | SBOM option | 0/11/12 |
+| [`pumpkin-solver`](https://crates.io/crates/pumpkin-solver) | 0.5.0 | K.4-gated | 8/13 |
+| [`pumpkin-core`](https://crates.io/crates/pumpkin-core) | 0.5.0 | match solver; cooperative termination | 8/13 |
+| [`tauri`](https://crates.io/crates/tauri) | 2.11.5 | align through tested Tauri contract, not patch-number assumptions | 0/6/11 |
+| [`tauri-build`](https://crates.io/crates/tauri-build) | 2.6.3 | direct maximum stable; ignore unrelated prerelease-like newest metadata | 0/6/11 |
+
+## Complete direct GitHub latest-release ledger
+
+| Repository/tool | Direct latest release | Use/gate | Owner |
+|---|---|---|---|
+| [google/or-tools](https://github.com/google/or-tools/releases/tag/v9.15) | v9.15 (2026-01-12) | K.3-gated pin | 3/11/12 |
+| [ConSol-Lab/Pumpkin](https://github.com/ConSol-Lab/Pumpkin/releases/tag/pumpkin-checker-v0.5.0) | pumpkin-checker-v0.5.0 (2026-08-05) | crates 0.5.0 control adapter; K.4 | 8/13 |
+| [ERGO-Code/HiGHS](https://github.com/ERGO-Code/HiGHS/releases/tag/v1.15.1) | v1.15.1 (2026-07-02) | post-MVP discovery; reverify/license/benchmark | 13 |
+| [scipopt/scip](https://github.com/scipopt/scip/releases/tag/v10.0.3) | v10.0.3 (2026-07-06) | post-MVP; require >=8.0.3 and exact components | 13 |
+| [MiniZinc/libminizinc](https://github.com/MiniZinc/libminizinc/releases/tag/2.10.0) | 2.10.0 (2026-07-23) | research adapter; mixed-license bundle review | 13 |
+| [NixOS/nix](https://github.com/NixOS/nix/releases) | **Direct query returned HTTP 404** | unresolved by this inventory; pin Nix through committed flake/installer evidence, never invent a version | 0 |
+| [NixOS/nixfmt](https://github.com/NixOS/nixfmt/releases/tag/v1.4.0) | v1.4.0 (2026-07-07) | use `pkgs.nixfmt` attribute after nixpkgs verification | 0 |
+| [casey/just](https://github.com/casey/just/releases/tag/1.58.0) | 1.58.0 (2026-08-03) | Phase-0 tool pin | 0 |
+| [ninja-build/ninja](https://github.com/ninja-build/ninja/releases/tag/v1.13.2) | v1.13.2 (2025-11-20) | match pinned native build | 0/3 |
+| [llvm/llvm-project](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.0) | llvmorg-23.1.0 (2026-08-25) | discovery only; use pinned nixpkgs compiler proven with OR-Tools | 0/3 |
+| [protocolbuffers/protobuf](https://github.com/protocolbuffers/protobuf/releases/tag/v36.0) | v36.0 (2026-08-20) | discovery; match OR-Tools instead of blind upgrade | 2/3 |
+| [anchore/syft](https://github.com/anchore/syft/releases/tag/v1.51.1) | v1.51.1 (2026-08-27) | exact SBOM tool pin; verify output format | 0/11/12 |
+| [sigstore/cosign](https://github.com/sigstore/cosign/releases/tag/v3.1.3) | v3.1.3 (2026-08-06) | signing choice/key model still gated; verify bundle compatibility | 11/12 |
+| [slsa-framework/slsa-verifier](https://github.com/slsa-framework/slsa-verifier/releases/tag/v2.7.1) | v2.7.1 (2025-06-27) | exact provenance verifier pin | 0/11/12 |
+| [cli/cli](https://github.com/cli/cli/releases/tag/v2.98.0) | v2.98.0 (2026-08-20) | release-tooling pin if adopted | 0/11 |
+| [docker/buildx](https://github.com/docker/buildx/releases/tag/v0.36.1) | v0.36.1 (2026-08-04) | Linux release tooling only if adopted | 0/11 |
+
+## Verified corrections and qualifications
+
+| Finding | Controlling resolution | Owner |
+|---|---|---|
+| Rust 1.98.0 was reported as the pin | Corrected to **1.97.1** until the P-critical issue is fixed by a newer stable and tested | 0/12 |
+| Blueprint/reports retained pnpm 10 | Corrected to direct current **pnpm 11.24.0** with Node 24 compatibility; exact Nix/package-manager integrity must be proven | 0 |
+| Desktop reports supplied many swapped/stale npm values | Replaced by the complete direct npm table: vue-router 5.3.0, Pinia 4.0.3, Tauri API 2.11.1/CLI 2.11.4/updater 2.10.1/shell 2.3.5, shadcn-vue 2.8.2, Reka 2.10.4, Table 9.2.4, Virtual 3.13.36, ECharts 6.1.0, vue-echarts 8.1.0, ESLint 10.9.1, Vitest 4.1.11, Vue Test Utils 2.5.0 | 0/6/9/11/12 |
+| TypeScript report recommended 7.0.2 | Corrected to **6.0.3** because typescript-eslint 8.68.0 excludes TypeScript >=6.1 | 0/12 |
+| Pumpkin report said 0.4.0 | Corrected to direct crates.io **0.5.0** | 8/13 |
+| Syft reports said 1.51.0 | Corrected to direct GitHub latest **1.51.1** | 0/11/12 |
+| protobuf report said 35.1 | Direct current is **36.0**, but neither is automatically selected; match OR-Tools 9.15 | 2/3 |
+| `nixfmt-rfc-style` attribute | Use current `pkgs.nixfmt`; old name is deprecated after nixpkgs 25.11. Directory invocation caveat remains; verify check invocation | 0 |
+| Linux app-indicator | Legacy `libayatana-appindicator` exists but is obsolete upstream; confirm Tauri requirement or current replacement in locked nixpkgs | 0/6 |
+| Tauri capabilities | Custom commands need explicit manifest/capability treatment; broad invoke registration is not sufficient for least privilege | 6/11/12 |
+| Tauri updater | Current configuration uses `bundle.createUpdaterArtifacts`; verify signed updater contract and endpoint/key lifecycle | 11/12 |
+| WebView2 | Not guaranteed on every clean Windows 10/Server/LTSC image; bootstrap/runtime strategy is a release gate | 11/12 |
+| AppImage | Supported but WebKitGTK/linuxdeploy behavior requires exact clean-machine evidence; “AppImage and/or deb” remains deliberate | 11/12 |
+| OR-Tools assumption core | v9.14/v9.15 issue #5141 may return a presolve literal outside assumptions; cores are sufficient, not necessarily minimal; pin diagnostic settings and characterize behavior | 3/4/12 |
+| Pumpkin cancellation | Cooperative polling can overrun nominal timeout during long propagation; solver is owned on a dedicated thread | 8/12/13 |
+| SCIP licensing | Only versions >=8.0.3 are Apache-2.0; exact assembled components still reviewed | 13 |
+| MiniZinc licensing | libminizinc MPL-2.0 does not make its bundled solver/UI distribution one license unit | 13 |
+| `keyring-rs` link | Canonical repository is [open-source-cooperative/keyring-rs](https://github.com/open-source-cooperative/keyring-rs); Linux Secret Service/fallback UX remains gated | 10/12 |
+| `directories-next` | Archived; prefer active `directories` 6.0.0 | 0/1 |
+| `async-trait` | Native async traits exist; use crate only where actual dispatch/object-safety design requires it | 0/10 |
+| Accessibility package | `@axe-core/vue` does not exist; use `axe-core` directly through the Vue test harness | 12 |
+| shadcn/Tailwind 4 | Use `tw-animate-css`; audit Tailwind-4 CSS-variable syntax | 0/6 |
+| Balanceframe references | Architecture patterns may be adapted, but repository provenance was not independently discoverable by the report; never make access to it a build requirement | 0 |
+
+## Appendix K gate ledger
+
+Every K item is represented below. “Version selected” does not mean the build/release evidence gate is closed.
+
+### K.1 — Repository initialization
+
+| Gate | Status on 2026-08-29 | Owner/closure evidence |
+|---|---|---|
+| Final project name | **Closed: eutheto** | Phase 0 workspace/package/docs normalization |
+| Rust/npm namespaces and prefixes | **Closed: Rust `eutheto-*`; npm `@eutheto/*`** | Final project-wide namespace decision; Phase 0 normalizes workspace/package manifests |
+| CLI executable, reverse-domain app ID, file extension, exact crate/package inventory names | **Open** | Phase 0 committed names and migration/update compatibility |
+| Hosting organization and governance contacts | **Open** | Phase 0/11 public repository, GOVERNANCE/SECURITY contacts |
+| Exact Rust | **Recommended 1.97.1; lock still Phase-0 action** | `rust-toolchain.toml`, target suite; revisit fixed stable |
+| Exact Node/pnpm | **Recommended Node 24.20.0 and pnpm 11.24.0; blueprint pnpm-10 text superseded** | package engines/packageManager integrity, Nix and CI smoke |
+| Tauri/Vue/Tailwind/shadcn/Reka/Lucide pins | **Current direct values recorded; lock open**, including mandatory direct `@pinia/colada` 1.4.2, `@vue/compiler-sfc` 3.5.42, `@vue/devtools-api` 8.2.1 and `@lucide/vue` 1.37.0 | Cargo/pnpm locks and desktop smoke |
+| Stable/beta IDs | **Open** | Phase 11 updater/signing path continuity |
+| Signing/notarization plan and protected environments | **Open** | Phase 11 documented key custody/rotation and protected-workflow evidence |
+
+### K.2 — Nix
+
+| Gate | Status | Owner/closure evidence |
+|---|---|---|
+| Verify `webkitgtk_4_1`, `libsoup_3`, app indicator, pnpm 11/current package path, Node 24, Syft, Cosign, SLSA verifier against committed nixpkgs | **Open per locked revision**; common attributes verified generally; app indicator qualified obsolete; blueprint `pnpm_10` no longer controls | Phase 0 `flake.lock` evaluation and shells |
+| Darwin shell/Xcode tools | **Open** | Phase 0 macOS shell smoke |
+| nixfmt check invocation | **Partially resolved: use `pkgs.nixfmt`; invocation still test-gated** | Phase 0 flake check |
+| Binary-cache plan | **Open until public CI exists** | Phase 0/11 cache ownership/trust docs |
+| Fully packaged Linux desktop derivation vs dev/worker/CLI only | **Open** | Phase 0/11 artifact scope decision |
+
+### K.3 — OR-Tools
+
+| Gate | Status | Owner/closure evidence |
+|---|---|---|
+| Exact release/commit | **Candidate 9.15; not closed until builds/benchmarks** | Phase 3 pin and target matrix |
+| Source hash and proto checksums | **Open** | Phase 3 derivation/proto-generation record |
+| Exact CMake disable flags | **Open against pinned source** | Disable language wrappers, examples, GLPK, proprietary/unrelated backends; build log/manifest |
+| Static/dynamic linkage per target | **Open** | Phase 3/11 package-size, notices, reliability decision |
+| Target dependent-library loading | **Open** | Packaged clean-machine worker tests |
+| Worker SBOM/license manifest | **Open** | Phase 3 generation, Phase 11/12 exact-artifact inspection |
+| Assumption/core APIs and callbacks | **Open/known issue** | Characterize #5141, single-worker diagnostic behavior, callback/cancellation contract tests |
+
+### K.4 — Pumpkin
+
+| Gate | Status | Owner/closure evidence |
+|---|---|---|
+| Exact version | **Candidate 0.5.0; exact Cargo lock open** | Phase 8 |
+| Actual API support matrix | **Open** | Generated capability/primitive tests |
+| Cancellation/time limit | **Open; known cooperative polling** | Dedicated-thread cancellation/overrun/crash tests |
+| Auto-routing benchmarks | **Open** | Compatible-subset fixed-budget results plus verifier |
+
+### K.5 — Desktop release targets
+
+| Gate | Status | Owner/closure evidence |
+|---|---|---|
+| Minimum Windows/macOS/Linux versions | **Open** | Phase 11/12 support statement and clean-machine matrix |
+| Windows WebView2 strategy | **Open/critical** | Bootstrap/runtime/offline/managed-host tests |
+| Wayland/X11 | **Open** | Phase 11/12 Linux manual/E2E |
+| AppImage/deb/rpm mix | **Open** | Clean-machine results control |
+| macOS x86_64 runner/support | **Open** | Runner availability and signed package smoke |
+| Updater endpoint/signing-key lifecycle | **Open** | Protected endpoint/key custody/rotation/revocation tests |
+
+### K.6 — AI adapters
+
+| Gate | Status | Owner/closure evidence |
+|---|---|---|
+| Current official provider APIs | **Mutable/open at implementation and each release** | Phase 10 conformance against official OpenAI Responses/Chat compatibility, Anthropic Messages, and current Gemini contract |
+| Tool schema/stream/event formats | **Open** | Recorded provider fixtures, normalization, malformed/stream tests |
+| Local OpenAI-compatible differences | **Open** | Capability detection/warnings for strict mode, streaming, parallel calls, endpoint shapes |
+| OS keyring on supported desktops/Linux fallback | **Open** | Credential create/read/replace/delete plus absent-daemon UX |
+| First-public provider set | **Open** | Enable only adapters meeting maintenance/test quality; AI remains optional |
+
+### K.7 — Domain semantics
+
+| Gate | Status | Owner/closure evidence |
+|---|---|---|
+| Workforce defaults with practitioners | **Open until review** | Phase 5/12 research evidence |
+| Fairness presets/weights | **Open until usability evidence** | Phase 5/7/12 |
+| DST, rolling-hours, repair semantics | **Open until domain fixtures/review** | Phase 5/7/12 |
+| Seating back-to-back classification | **Open until representative layouts** | Phase 9/12 |
+| Accessibility seat metadata without unnecessary sensitive data | **Open until privacy/accessibility review** | Phase 9/12 |
+| Non-authoritative legal/regulatory templates | **Permanent invariant; wording review open** | Phase 5/9/11/12 and future packs |
+
+### K.8 — Release readiness
+
+| Gate | Status before Phase 12 | Owner/closure evidence |
+|---|---|---|
+| Exact dependency licenses from locks/compiled artifacts | **Open** | Phase 11 exact notices/SBOM; Phase 12 review |
+| No GPL/proprietary solver linked/bundled | **Open** | Exact binary/dependency inspection and solver manifests |
+| Manual accessibility audit | **Open** | Phase 12 automated + keyboard/screen-reader/manual report |
+| Clean-machine installer/update/uninstall | **Open** | Every declared target, exact digests |
+| Publish source, notices, SBOM, checksums, signatures/attestations, migration notes | **Open until authorized release** | Phase 11 staging; Phase 12 publication/post-publish verification |
+
+## Additional current specifications and mutable contracts
+
+These verified findings supplement, but do not override, the direct inventory.
+
+| Item | Current finding | Decision/owner | Official evidence |
+|---|---|---|---|
+| SPDX specification | 3.0.1 stable; 3.1-RC is not production | Phase 11 selects output supported by tooling; Syft may default to SPDX JSON 2.3 | [SPDX specifications](https://spdx.dev/use/specifications/) |
+| REUSE specification/tool | Spec 3.3; reported tool 6.2.0 | If adopted, pin tool and make `reuse lint` exact | [REUSE spec](https://reuse.software/spec/) |
+| OpenSSF Scorecard | reported CLI 5.5.0/action 2.4.4 | SHA-pin action and least privileges if adopted | [Scorecard releases](https://github.com/ossf/scorecard/releases) |
+| OpenAI | `/v1/responses` preferred for new integration; Chat Completions may be needed for local compatibility | Phase 10 supports only tested subsets and normalizes tool calls | [Responses](https://platform.openai.com/docs/api-reference/responses), [function calling](https://platform.openai.com/docs/guides/function-calling) |
+| Anthropic | `/v1/messages`, `anthropic-version: 2023-06-01`, tool_use/tool_result | Reconfirm strict-schema/stream fixtures | [Messages](https://docs.anthropic.com/en/api/messages), [tool use](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview) |
+| Gemini | report conflict between v1 Interactions and v1beta Interactions remains mutable | Do not freeze narrative value; Phase 10 must use current official endpoint/schema fixtures | [function calling](https://ai.google.dev/gemini-api/docs/function-calling), [Interactions overview](https://ai.google.dev/gemini-api/docs/interactions-overview) |
+| Apache-2.0 | approved project license/SPDX identifier | Preserve notices/patent grant and exact artifact obligations | [license](https://www.apache.org/licenses/LICENSE-2.0), [SPDX Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
+| DCO | approved contribution sign-off | Document `git commit -s`; no CLA initially | [Developer Certificate of Origin](https://developercertificate.org/) |
+| Tauri 2 | sidecars, capabilities, updater, WebDriver/signing architecture verified at major-line level | Exact package/config/target behavior remains Phase 6/11/12 tested | [sidecars](https://v2.tauri.app/develop/sidecar/), [capabilities](https://v2.tauri.app/security/capabilities/), [updater](https://v2.tauri.app/plugin/updater/), [WebDriver](https://v2.tauri.app/develop/tests/webdriver/), [macOS signing](https://v2.tauri.app/distribute/sign/macos/) |
+
+## Revalidation triggers
+
+Re-run the relevant direct registry/API and official-contract checks before changing a lockfile/toolchain, starting a gated backend/provider/target branch, cutting beta/RC/stable, or after an upstream security/advisory notice. A revalidation updates this ledger and the owning phase evidence, never silently changes a recommendation. In particular:
+
+- move from Rust 1.97.1 only after a fixed stable exists and passes affected builds/tests;
+- move TypeScript to >=6.1 only after the selected typescript-eslint release declares support and lint/typecheck pass;
+- change OR-Tools/protobuf only as one tested worker/protocol unit;
+- change Pumpkin only with regenerated capability/cancellation/benchmark evidence;
+- change provider contracts only with recorded conformance fixtures;
+- change target/signing/updater assumptions only with clean-machine and key-lifecycle evidence;
+- publish only when every K.8 row is closed against exact artifact digests.
