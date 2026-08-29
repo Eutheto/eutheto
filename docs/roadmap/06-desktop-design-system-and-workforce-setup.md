@@ -2,13 +2,13 @@
 
 ## Outcome
 
-Deliver a calm, accessible Tauri/Vue desktop setup experience over the authoritative headless core: first launch and local project navigation; semantic light/dark themes; application-owned accessible components; typed Tauri API boundary; workforce people/import/work/eligibility/availability/rule/validation editors; and complete keyboard/focus/error-state behavior. The people CSV UI consumes the completed Phase 05 detect/map/preview/validate/apply/undo/rejected-row backend. A first-time user must create and validate a small schedule without an account, AI, solver terminology, or Advanced mode.
+Deliver a calm, accessible Tauri/Vue desktop setup experience over the authoritative headless core: first launch and local project navigation; intent-led editable-scenario import/export and full-backup/restore UI over Phase 01; semantic light/dark themes; application-owned accessible components; typed Tauri API boundary; workforce people/import/work/eligibility/availability/rule/validation editors; and complete keyboard/focus/error-state behavior. The people CSV UI consumes the completed Phase 05 detect/map/preview/validate/apply/undo/rejected-row backend. A first-time user must create and validate a small schedule without an account, AI, solver terminology, or Advanced mode.
 
 This phase edits scenarios only through the Phase 01 command/revision boundary and the [Phase 05 workforce pack](05-workforce-core-vertical-slice.md). It consumes validation evidence from [Phase 04](04-independent-verifier-and-explanations.md). Solve/result/repair/export screens are completed in [Phase 07](07-workforce-solving-results-repair-and-export.md); seating canvas components are completed in [Phase 09](09-seating-domain-and-venue-experience.md).
 
 ## Source coverage
 
-This phase incorporates blueprint Sections 21 and 22; Phase 6; frontend dependencies in Appendix B; Tauri API standards in Appendix D; TypeScript/Vue/schema/error standards in Appendix H; UI backlog items in Appendix I; Tauri/Vue references in Appendix J; repository/desktop/domain gates in Appendix K; frontend/accessibility/E2E tests in Section 26; and desktop-flow definition of done in Section 33.4.
+This phase incorporates blueprint Sections 21 and 22; Phase 6; frontend dependencies in Appendix B; Tauri API standards in Appendix D; TypeScript/Vue/schema/error standards in Appendix H; UI backlog items in Appendix I; Tauri/Vue references in Appendix J; repository/desktop/domain gates in Appendix K; frontend/accessibility/E2E tests in Section 26; desktop-flow definition of done in Section 33.4; the responsive progress contract in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and import/backup/share-preview UI foundations from [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md).
 
 ## Dependencies
 
@@ -156,11 +156,17 @@ project_get_metadata
 project_create
 project_duplicate
 project_archive
-project_restore
+project_unarchive
 project_delete
 project_import_preview
 project_import_apply
-project_export
+project_export_preview
+project_export_create
+project_backup_preview
+project_backup_create
+project_restore_preview
+project_restore_apply
+project_operation_cancel
 
 scenario_get_summary
 scenario_get_setup_status
@@ -220,6 +226,7 @@ Use Vue Router 5 in Tauri-compatible hash SPA mode unless a tested memory mode i
 /project/:scenarioId/results/:solutionId?
 /project/:scenarioId/history
 /settings
+/settings/backup-restore
 /about/licenses
 ```
 
@@ -315,7 +322,9 @@ Domain components are `WorkforceScheduleGrid`, `PersonTimeline`, `CoverageInspec
 
 First launch asks “What would you like to plan?” with **Work schedule**, **Event seating**, and **Open an existing project**. School scheduling may be visibly “Coming later” only as non-clickable discovery. No account, analytics consent, or AI setup is required.
 
-Project home shows title/domain, last opened, horizon/event date, validation/solution status, and clear local-storage indicator. Actions are open, duplicate, export, archive, and delete. Deletion has explicit confirmation, uses OS trash/recovery when feasible, and offers bundle export before permanent deletion.
+Project home shows title/domain, last opened, horizon/event date, validation/solution status, and clear local-storage indicator. Actions are open, duplicate, **Export editable scenario**, archive, and delete. Deletion has explicit confirmation, uses OS trash/recovery when feasible, and offers current portable export before permanent deletion.
+
+**Open an existing project** inspects the proposed `.eutheto` bundle before mutation and shows kind/source/version/counts, migrations/review warnings, integration reconnections, included/excluded data, and explicit Create copy/Replace/Skip collisions. **Backup & Restore** offers **Back up everything**, lists portable inclusions and credential/device/cache exclusions, then distinguishes **Add backup data** from **Replace current portable library**. Replace summarizes removal, requires confirmation, reports the attempted pre-restore safety backup, and never implies recovery exists when its creation failed. Every preview is stale-detected, cancellable, keyboard complete, screen-reader announced without spam, and followed by a success/recovery action.
 
 ### Guided but non-rigid setup
 
@@ -388,9 +397,9 @@ Example semantics: “Tuesday PM clinic requires two pediatric-qualified clinici
 
 ### Optimize boundary
 
-Phase 06 may expose the shared `Optimize` entry/status shell once full validation passes: revision/status, Quick/Balanced/Deep, optional time, repair indicator, backend only in Advanced. It never says “Run solver” in normal flow or implies Deep guarantees optimality. Phase 07 completes results/repair.
+Phase 06 may expose the shared `Optimize` entry/status shell once full validation passes: revision/status, Quick/Balanced/Deep, optional time, repair indicator, backend only in Advanced. It never says “Run solver” in normal flow, implies Deep guarantees optimality, or labels a backend incumbent as a valid plan. Phase 07 completes results/repair.
 
-Edits during a solve cancel it or leave it bound to its recorded revision and clearly mark the eventual result stale. Progress copy is driven only by real events and always offers cancellation.
+Edits during a solve cancel it or leave it bound to its recorded revision and clearly mark the eventual result stale. Operations completing below the perceptual threshold do not flash a spinner. At approximately 300–500 ms, a stable live region shows only real coarse phases—validation, candidate preparation, transportation when applicable, model build, optimization, verification, result preparation—plus elapsed time when useful and cancellation. It never invents percentages, cycles fake steps, floods assistive technology with callbacks, or announces a valid plan before independent verification.
 
 ### Advanced mode
 
@@ -439,10 +448,11 @@ Never bind destructive actions to one unmodified letter. Shortcut help is visibl
 
 - Virtualize large rows and columns based on measured need; use TanStack Table 9 and Virtual 3 current APIs.
 - Debounce view-only filtering, not committed commands indefinitely.
-- Move parsing, compilation, geometry, and solver work to Rust; never block the webview thread.
-- Throttle solve events and use stable component keys; do not rebuild full trees on selection.
+- Move parsing, compilation, geometry, solver, report, import, and export work to Rust/application jobs; never block the webview thread.
+- Bound and coalesce solve events; keep stable component keys and avoid rebuilding full trees on selection.
 - Update selection immediately, then fetch heavier detail.
-- Profile representative 100-person schedules; retain the 500-guest canvas benchmark for Phase 09.
+- Record action-to-result render spans separately from backend time and measure webview long tasks, input responsiveness, scroll, screen-reader announcement volume, cancellation latency, and result-view render.
+- Profile the versioned small/typical/stress workforce fixtures, including representative 100-person schedules; retain the 500-guest canvas benchmark for Phase 09.
 - Future canvas layers remain background/tables/seats/overlays/selection and cache geometry by layout hash.
 
 ## Error, empty, loading, stale, and offline states
@@ -451,18 +461,17 @@ Typed errors map to user input/validation, revision conflict, unsupported featur
 
 Every applicable major screen designs:
 
-- no entities yet;
-- no solution yet;
+- no entities or results yet;
 - solution stale after scenario changes;
-- active solve;
-- cancelled solve;
+- active/cancelled solve;
 - backend unavailable;
-- import rows rejected before application;
-- migrated project requiring review;
+- import inspection, migration/review warning, reconnection, collision review, stale preview, cancelled import, and rejected rows;
+- backup in progress, explicit exclusions, permission/space failure, cancellation, and verified completion;
+- restore add/replace choice, safety-backup success/failure, confirmation, interrupted/recoverable failure, and fresh-install success;
 - AI unavailable while core remains fully usable;
 - old solution from an earlier revision;
 - internal verification failure;
-- loading with an action/status description;
+- loading with an action/status description; and
 - local/offline operation with no account/network dependency.
 
 No indefinite spinner lacks text, cancellation, or timeout behavior. Revision conflicts offer refresh/reapply review rather than overwriting authoritative state.
@@ -475,14 +484,14 @@ English is sufficient for MVP, but all user strings use message keys; explanatio
 
 1. **UI-001 — versioned foundation:** lock the compatible stack, migrate breaking-major APIs cleanly, configure Tailwind 4/Vite, copy/review minimal shadcn-vue/Reka components, and define semantic tokens/themes/motion/typography.
 2. **Generated API boundary:** generate DTOs/commands/events, implement the only Tauri client layer, strict import restrictions, typed errors/revision handling, event cleanup, and minimal capabilities.
-3. **UI-002 — shell/navigation:** first launch, project home, routes, guided setup checklist, workspace/view stores, command palette/shortcuts, focus restoration, empty/error boundaries.
-4. **Common planner fields:** pickers, duration/date-time fields, rule strength/scope, import mapping, validation summary, empty/error recovery, and undo history with accessible contracts.
+3. **UI-002 — shell/navigation and portability:** first launch, project home, proposed `.eutheto` inspect/import/export, Backup & Restore route, intent-led preview/collision/add/replace/safety-backup/recovery flows, workspace/view stores, command palette/shortcuts, focus restoration, empty/error boundaries.
+4. **Common planner fields:** pickers, duration/date-time fields, rule strength/scope, import mapping, portable/share inclusion and privacy summaries, validation summary, empty/error recovery, and undo history with accessible contracts.
 5. **UI-003 — people/import:** people editor, qualification/type/team/contract fields, and the UI/client for the completed Phase 05 people CSV service: granted-file detection, mapping/identity review, additions/updates/duplicates/rejections preview, atomic apply, one-step undo, and rejected-row download.
 6. **Work/shift editor:** horizon/timezone/DST policy, presets/types/templates/instances, coverage/qualification slots, regeneration diff, detached-instance review.
 7. **Eligibility/availability:** virtualized matrix, bulk preview, calendar and accessible list editor, blocking-rule inspector.
 8. **UI-004 — rule/validation:** intent catalog, sentence builder, live scope preview, Required/Preference guidance, fast/full validation navigation and safe fixes.
-9. **Solve/status handoff:** shared mode/progress/status/error shell driven by versioned events, stale revision behavior, then handoff to Phase 07.
-10. **Accessibility/performance hardening:** keyboard/screen-reader/reduced-motion/contrast scripts, 100-person profiling, designed state matrix, localization-key review.
+9. **Solve/status handoff:** shared mode/progress/status/error shell driven by versioned events, 300–500 ms perceptual threshold, coarse truthful phase mapping, bounded announcements, cancellation, stale revision behavior, then handoff to Phase 07.
+10. **Accessibility/performance hardening:** keyboard/screen-reader/reduced-motion/contrast scripts, small/typical/100-person profiling, webview long-task/input/render evidence, designed state matrix, localization-key review.
 
 ## Tests and acceptance
 
@@ -512,6 +521,8 @@ English is sufficient for MVP, but all user strings use message keys; explanatio
 - rule empty scope cannot save accidentally; unsupported rule cannot appear enforced;
 - CSV mapping through the generated typed client previews additions/updates/duplicates/rejections from the Phase 05 service, never guesses similar-name identity, rejects stale previews, applies atomically, retrieves rejected-row details, and undoes as one batch;
 - recurrence regeneration shows diff and protects detached edits;
+- opening a proposed `.eutheto` bundle shows exact inspect/migration/reconnection/collision preview before mutation; Create copy/Replace/Skip, cancellation and stale preview map to Phase-01 typed services without frontend authority;
+- scenario export is labelled editable; full backup lists included/excluded data; add versus replace restore is unmistakable; destructive replace requires confirmation and truthfully reports pre-restore safety-backup failure/recovery;
 - all validation severities link to exact editors/fields and distinguish data issues from infeasibility.
 
 ### State/performance matrix
@@ -519,11 +530,13 @@ English is sufficient for MVP, but all user strings use message keys; explanatio
 - normal, empty, loading, stale, error, cancelled, offline, unavailable, migration-review, old-solution, import-rejection, and verification-failure states render meaningful text/recovery;
 - no indefinite spinner; cancellation/timeouts are visible;
 - representative 100-person matrices remain usable under measured render/input/scroll budgets with current Table 9/Virtual 3 APIs;
+- sub-threshold operations avoid progress flicker; longer operations show only real phases, remain cancellable, keep input/focus responsive, and coalesce screen-reader announcements;
+- raw backend incumbents never trigger verified-result copy, and optional later explanation work never blocks the already accepted result shell.
 - pure Vite UI tests do not replace packaged Tauri E2E later; Tauri-supported WebDriverIO covers packaged flows on supported platforms.
 
 ### Phase exit gate
 
-Phase 06 exits only when an unfamiliar user can create the small scenario through the first-time script without Advanced mode; all key setup actions work by keyboard; the people CSV flow uses the completed Phase 05 Rust backend for detection/mapping/preview/validation and applies as one undoable batch with rejected-row retrieval; Required/Preference language is consistent; every frontend mutation uses typed commands/revisions rather than local authoritative state; accessibility/performance/error-state gates pass; and the current breaking-major stack—including the mandatory direct pins—is pinned and used without stale package or API conventions. No Phase 07 importer is required for this gate.
+Phase 06 exits only when an unfamiliar user can create the small scenario through the first-time script without Advanced mode; all key setup actions work by keyboard; proposed `.eutheto` scenario inspect/import/export and full backup/add-or-replace restore use the completed Phase-01 preview/apply services with accurate inclusion, collision, reconnection, safety-backup and recovery states; the people CSV flow uses the completed Phase 05 Rust backend and applies as one undoable batch with rejected-row retrieval; Required/Preference language is consistent; every frontend mutation uses typed commands/revisions rather than local authoritative state; progress, accessibility, webview-responsiveness, performance, and error-state gates pass; and the current breaking-major stack is pinned and used without stale conventions. No Phase 07 domain importer or report renderer is required for this gate.
 
 A desktop flow is done only when normal, empty, loading, stale, error, and offline states exist; keyboard and focus work; screen-reader names/announcements work; destructive actions confirm; revision conflicts recover; analytics/performance impact is measured where relevant; and usability evidence supports the task.
 
@@ -559,4 +572,4 @@ A desktop flow is done only when normal, empty, loading, stale, error, and offli
 - Verify Tauri 2 Rust/npm/plugin compatibility, strict capabilities, Linux prerequisites, and packaged WebDriver behavior against exact locks. Windows WebView2, minimum OS versions, and Linux/macOS target packaging remain Phase 11 gates.
 - Pinia 4 ESM-only plus separate devtools API, TanStack Table 9 `useTable`/feature configuration, Tailwind 4 CSS-first/shadcn animation-variable changes, Router 5, Vite 8, Konva 10, and ECharts 6 are explicit breaking-major adoption work—not documentation-only version bumps.
 - Review workforce defaults/fairness language with practitioners and validate the first-time workflow with solver-naive users. Repeated confusion about Required vs Preference, rule scope, import identity, or validation vs infeasibility blocks public MVP.
-- The final project name is `eutheto`. Reverse-domain application ID, bundle extension, CLI name, hosting/governance contacts, release identifiers, and signing/updater choices remain explicit gates; UI copy/config must not invent them.
+- The final project name is `eutheto`. Reverse-domain application ID, CLI name, hosting/governance contacts, release identifiers, and signing/updater choices remain explicit gates. `.eutheto` is a proposed extension until the Phase-11 identity ADR closes; UI copy may label the proposal but cannot register a public association early.

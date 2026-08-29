@@ -1,0 +1,225 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 03 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI: "true"
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  TZ: UTC
+  RUST_BACKTRACE: "0"
+  RUST_TEST_THREADS: "1"
+  EUTHETO_TEST_SEED: "0"
+
+jobs:
+  security:
+    name: Locked policy, scans, and inventories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          determinate: false
+          diagnostic-endpoint: ""
+          github-token: ""
+          source-tag: v3.22.2
+
+      - name: Restore lock-keyed dependency caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/cargo/registry
+            .cache/cargo/git
+            .cache/pnpm/store
+          key: security-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml', 'Cargo.lock', 'package.json', 'pnpm-lock.yaml') }}
+
+      - name: Install without dependency lifecycle scripts
+        run: |
+          nix develop --no-update-lock-file .#full --command cargo fetch --locked
+          nix develop --no-update-lock-file .#full --command pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Enforce Rust advisories, licenses, bans, and sources
+        run: |
+          nix develop --no-update-lock-file .#full --command just rust-advisories
+          nix develop --no-update-lock-file .#release --command cargo about generate /dev/null >/dev/null
+
+      - name: Audit and inventory pnpm dependencies
+        run: |
+          mkdir -p "${RUNNER_TEMP}/security-evidence"
+          nix develop --no-update-lock-file .#full --command pnpm audit --audit-level=high
+          nix develop --no-update-lock-file .#full --command sh -c "pnpm list --recursive --depth Infinity --json > \"\$1\"" sh "${RUNNER_TEMP}/security-evidence/pnpm-inventory.raw.json"
+          nix develop --no-update-lock-file .#full --command node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const evidence = `${process.env.RUNNER_TEMP}/security-evidence`;
+          const repository = `${process.cwd()}${path.sep}`;
+          const inventory = JSON.parse(fs.readFileSync(`${evidence}/pnpm-inventory.raw.json`, 'utf8'));
+          const sanitize = value => {
+            if (Array.isArray(value)) return value.map(sanitize);
+            if (value && typeof value === 'object') {
+              return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, sanitize(child)]));
+            }
+            return typeof value === 'string' ? value.replaceAll(repository, '$REPOSITORY/') : value;
+          };
+          fs.writeFileSync(
+            `${evidence}/pnpm-inventory.json`,
+            `${JSON.stringify(sanitize(inventory), null, 2)}\n`
+          );
+          fs.rmSync(`${evidence}/pnpm-inventory.raw.json`);
+
+          const accepted = new Set([
+            'Apache-2.0', 'Apache-2.0 OR MIT', 'MIT', 'BSD-2-Clause',
+            'BSD-3-Clause', 'ISC', 'Unicode-3.0', 'Unicode-DFS-2016',
+            'Zlib', 'BSL-1.0', 'CC0-1.0'
+          ]);
+          // Package-scoped reviews accept these metadata candidates for the
+          // locked Phase-00 build graph; they do not make a legal conclusion.
+          const reviewed = new Map([
+            ['minimatch@10.2.6', 'BlueOak-1.0.0'],
+            ['lightningcss@1.33.0', 'MPL-2.0'],
+            ['lightningcss-darwin-arm64@1.33.0', 'MPL-2.0'],
+            ['lightningcss-darwin-x64@1.33.0', 'MPL-2.0'],
+            ['lightningcss-linux-arm64-gnu@1.33.0', 'MPL-2.0'],
+            ['lightningcss-linux-arm64-musl@1.33.0', 'MPL-2.0'],
+            ['lightningcss-linux-x64-gnu@1.33.0', 'MPL-2.0'],
+            ['lightningcss-linux-x64-musl@1.33.0', 'MPL-2.0'],
+            ['lightningcss-win32-arm64-msvc@1.33.0', 'MPL-2.0'],
+            ['lightningcss-win32-x64-msvc@1.33.0', 'MPL-2.0']
+          ]);
+          // Exact lifecycle-script reviews belong here with a package version,
+          // the exact script object, and review rationale in the change.
+          const reviewedScripts = new Map();
+          const blocked = /(?:^|[^A-Za-z])(?:A?GPL|SSPL|BUSL|Commons-Clause|NC|ND|Proprietary)(?:[^A-Za-z]|$)/i;
+          const root = 'node_modules/.pnpm';
+          const queue = fs.existsSync(root) ? [root] : [];
+          const seen = new Set();
+          const rows = [];
+          const failures = [];
+          const scriptFailures = [];
+          while (queue.length) {
+            const dir = queue.pop();
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const item = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                queue.push(item);
+              } else if (entry.isFile() && entry.name === 'package.json' && item.includes('/node_modules/')) {
+                let pkg;
+                try { pkg = JSON.parse(fs.readFileSync(item, 'utf8')); } catch { continue; }
+                if (!pkg.name || !pkg.version) continue;
+                const id = `${pkg.name}@${pkg.version}`;
+                if (seen.has(id)) continue;
+                seen.add(id);
+                const candidate = typeof pkg.license === 'string' ? pkg.license.trim() : '';
+                const lifecycleScripts = Object.fromEntries(
+                  ['preinstall', 'install', 'postinstall']
+                    .filter(name => typeof pkg.scripts?.[name] === 'string')
+                    .map(name => [name, pkg.scripts[name]])
+                );
+                const reviewedScript = reviewedScripts.get(id);
+                if (
+                  Object.keys(lifecycleScripts).length > 0 &&
+                  JSON.stringify(reviewedScript) !== JSON.stringify(lifecycleScripts)
+                ) {
+                  scriptFailures.push(`${id}: ${JSON.stringify(lifecycleScripts)}`);
+                }
+                let decision = 'accepted-candidate';
+                if (!candidate || blocked.test(candidate)) {
+                  decision = 'blocked-or-unknown';
+                  failures.push(`${id}: ${candidate || 'missing license metadata'}`);
+                } else if (!accepted.has(candidate)) {
+                  if (reviewed.get(id) === candidate) decision = 'package-reviewed-candidate';
+                  else {
+                    decision = 'review-required';
+                    failures.push(`${id}: ${candidate}`);
+                  }
+                }
+                rows.push({
+                  package: id,
+                  licenseMetadataCandidate: candidate || null,
+                  decision,
+                  lifecycleScripts,
+                  lifecycleScriptReview: Object.keys(lifecycleScripts).length === 0
+                    ? 'none'
+                    : 'package-reviewed'
+                });
+              }
+            }
+          }
+          rows.sort((a, b) => a.package.localeCompare(b.package));
+          fs.writeFileSync(
+            `${process.env.RUNNER_TEMP}/security-evidence/pnpm-license-candidates.json`,
+            `${JSON.stringify({ schemaVersion: 1, legalConclusions: false, packages: rows }, null, 2)}\n`
+          );
+          if (failures.length) {
+            console.error('Blocked or unreviewed pnpm license metadata candidates:\n' + failures.join('\n'));
+            process.exit(1);
+          }
+          if (scriptFailures.length) {
+            console.error('Unreviewed dependency lifecycle scripts:\n' + scriptFailures.join('\n'));
+            process.exit(1);
+          }
+          NODE
+
+
+      - name: Scan repository history for secrets
+        run: nix run --no-update-lock-file --inputs-from . nixpkgs#gitleaks -- git --no-banner --redact .
+
+      - name: Generate notice and SBOM smoke evidence
+        run: |
+          nix develop --no-update-lock-file .#full --command just licenses
+          nix develop --no-update-lock-file .#full --command just sbom
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          cp THIRD_PARTY_NOTICES.md "${RUNNER_TEMP}/security-evidence/THIRD_PARTY_NOTICES.md"
+          cp xtask/generated/license-inventory.json "${RUNNER_TEMP}/security-evidence/license-inventory.json"
+          cp xtask/generated/sbom.spdx.json "${RUNNER_TEMP}/security-evidence/sbom.spdx.json"
+
+      - name: Record Tauri capability diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="${BASE_SHA}"
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          git diff --no-ext-diff --full-index "${base}" HEAD -- \
+            apps/desktop/src-tauri/capabilities \
+            apps/desktop/src-tauri/permissions \
+            apps/desktop/src-tauri/tauri.conf.json \
+            > "${RUNNER_TEMP}/security-evidence/tauri-capability.diff"
+          sha256sum \
+            apps/desktop/src-tauri/capabilities/main.json \
+            apps/desktop/src-tauri/tauri.conf.json \
+            > "${RUNNER_TEMP}/security-evidence/tauri-capability.sha256"
+          nix run --no-update-lock-file --inputs-from . nixpkgs#gitleaks -- dir --no-banner --redact "${RUNNER_TEMP}/security-evidence"
+
+      - name: Upload sanitized security evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/security-evidence
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9

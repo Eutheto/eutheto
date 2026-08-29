@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability — private reporting policy
+    url: https://github.com/Eutheto/eutheto/security/policy
+    about: Do not open a public issue. Read the current policy and use only the approved private channel when it is published.

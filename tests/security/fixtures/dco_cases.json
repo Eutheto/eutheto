@@ -1,0 +1,46 @@
+{
+  "cases": [
+    {
+      "name": "valid",
+      "author_name": "Ada Example",
+      "author_email": "ada@example.test",
+      "message": "Add deterministic DCO sample\n\nSigned-off-by: Ada Example <ada@example.test>\n",
+      "valid": true
+    },
+    {
+      "name": "multiple",
+      "author_name": "Ada Example",
+      "author_email": "ada@example.test",
+      "message": "Add deterministic multi-signoff sample\n\nSigned-off-by: Grace Example <grace@example.test>\nSigned-off-by: Ada Example <ada@example.test>\n",
+      "valid": true
+    },
+    {
+      "name": "mixed-malformed",
+      "author_name": "Ada Example",
+      "author_email": "ada@example.test",
+      "message": "Add deterministic mixed-signoff sample\n\nSigned-off-by: Ada Example <ada@example.test>\nSigned-off-by: Grace Example grace@example.test\n",
+      "valid": false
+    },
+    {
+      "name": "missing",
+      "author_name": "Ada Example",
+      "author_email": "ada@example.test",
+      "message": "Add unsigned deterministic sample\n",
+      "valid": false
+    },
+    {
+      "name": "mismatched",
+      "author_name": "Ada Example",
+      "author_email": "ada@example.test",
+      "message": "Add mismatched deterministic sample\n\nSigned-off-by: Grace Example <grace@example.test>\n",
+      "valid": false
+    },
+    {
+      "name": "malformed",
+      "author_name": "Ada Example",
+      "author_email": "ada@example.test",
+      "message": "Add malformed deterministic sample\n\nSigned-off-by: Ada Example ada@example.test\n",
+      "valid": false
+    }
+  ]
+}

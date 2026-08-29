@@ -1,0 +1,26 @@
+{
+  "compatibility": {
+    "accepted_wire_versions": [
+      1
+    ],
+    "unknown_version_action": "bounded_error_then_close"
+  },
+  "framing": {
+    "length_prefix_bytes": 4,
+    "length_prefix_order": "big-endian",
+    "max_payload_bytes": 65536,
+    "min_payload_bytes": 1
+  },
+  "limits": {
+    "capabilities_per_handshake": 16,
+    "error_message_bytes": 512,
+    "frames_per_session": 32,
+    "manifest_sha256_bytes": 64,
+    "nesting_depth": 4,
+    "request_id_bytes": 64,
+    "worker_identity_bytes": 128,
+    "worker_version_bytes": 64
+  },
+  "protocol": "eutheto.solver-worker",
+  "wire_version": 1
+}

@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: Apache-2.0
+// Protocol version and limits: protocol/version.json.
+syntax = "proto3";
+
+package eutheto.solver.worker.v1;
+
+// One length-prefixed transport frame. Exactly one body member must be present.
+message SolverWorkerFrame {
+  uint32 protocol_version = 1;
+  string request_id = 2;
+
+  oneof body {
+    WorkerRequest request = 3;
+    WorkerResult result = 4;
+    WorkerError error = 5;
+  }
+
+  reserved 6 to 15;
+}
+
+message WorkerRequest {
+  oneof kind {
+    HandshakeRequest handshake = 1;
+    HealthRequest health = 2;
+  }
+
+  reserved 3 to 15;
+}
+
+// Empty by design. The enclosing frame carries the requested protocol version.
+message HandshakeRequest {
+  reserved 1 to 15;
+}
+
+// Empty by design. Health has no domain or solve semantics.
+message HealthRequest {
+  reserved 1 to 15;
+}
+
+message WorkerResult {
+  oneof kind {
+    HandshakeResult handshake = 1;
+    HealthResult health = 2;
+  }
+
+  reserved 3 to 15;
+}
+
+message HandshakeResult {
+  string worker_identity = 1;
+  string worker_version = 2;
+  // Lowercase hexadecimal SHA-256 of the canonical installed solver manifest.
+  string manifest_sha256 = 3;
+  repeated WorkerCapability capabilities = 4;
+
+  reserved 5 to 15;
+}
+
+enum WorkerCapability {
+  WORKER_CAPABILITY_UNSPECIFIED = 0;
+  WORKER_CAPABILITY_HEALTH = 1;
+}
+
+message HealthResult {
+  HealthState state = 1;
+
+  reserved 2 to 15;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_READY = 1;
+}
+
+message WorkerError {
+  WorkerErrorCode code = 1;
+  string message = 2;
+  // Set only for WORKER_ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION.
+  optional uint32 rejected_protocol_version = 3;
+
+  reserved 4 to 15;
+}
+
+enum WorkerErrorCode {
+  WORKER_ERROR_CODE_UNSPECIFIED = 0;
+  WORKER_ERROR_CODE_MALFORMED_FRAME = 1;
+  WORKER_ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION = 2;
+  WORKER_ERROR_CODE_RESOURCE_LIMIT = 3;
+  WORKER_ERROR_CODE_UNSUPPORTED_REQUEST = 4;
+  WORKER_ERROR_CODE_INTERNAL = 5;
+}

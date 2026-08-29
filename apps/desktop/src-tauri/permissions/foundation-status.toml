@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-foundation-status-read"
+description = "Allows the main local window to read the coarse Phase-00 foundation status."
+commands.allow = ["app_get_foundation_status"]

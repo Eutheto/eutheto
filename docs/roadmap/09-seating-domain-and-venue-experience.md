@@ -4,11 +4,11 @@
 
 Deliver the official event-seating domain as a complete, independently verified desktop and CLI vertical slice. Eutheto assigns each included guest to an **actual seat** with stable identity, canonical venue geometry, table membership, world position, facing direction, adjacency, proximity, accessibility, and relationship semantics. The product must never collapse this domain to guest-to-table assignment.
 
-The phase includes schemas/migrations, deterministic integer geometry, table/seat generation and custom placement, every MVP required rule and preference, CP-SAT compilation, symmetry control, independent verification, import, accessible venue/list editors, results, locks/repair/alternatives, and deterministic CSV/SVG/print/JSON output.
+The phase includes schemas/migrations, deterministic integer geometry, table/seat generation and custom placement, every MVP required rule and preference, CP-SAT compilation, symmetry control, independent verification, import, accessible venue/list editors, results, locks/repair/alternatives, current portable conversion, and deterministic CSV/SVG/one-file HTML/PDF/JSON output.
 
 ## Source coverage
 
-This phase is the implementation source of truth for blueprint Section 19, relevant canvas/API/accessibility material in Sections 21–22, Phase 9, rule/desktop/backend Definitions of Done in Sections 31–33, CLI Appendix C, Tauri API Appendix D, complete Appendix G geometry/rule material, and backlog `SEAT-001` through `SEAT-005` plus relevant `QA-001` work from Appendix I.
+This phase is the implementation source of truth for blueprint Section 19, relevant canvas/API/accessibility material in Sections 21–22, Phase 9, rule/desktop/backend Definitions of Done in Sections 31–33, CLI Appendix C, Tauri API Appendix D, complete Appendix G geometry/rule material, backlog `SEAT-001` through `SEAT-005` plus relevant `QA-001` work from Appendix I, the seating benchmark/rendering slice in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md), and seating portable/share specialization in [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md).
 
 Project-wide contracts are in [README.md](README.md), evidence/version gates in [assumptions.md](assumptions.md), domain/IR contracts in [Phase 02](02-domain-pack-and-planning-ir-contracts.md), solving in [Phase 03](03-ortools-worker-vertical-slice.md), independent verification in [Phase 04](04-independent-verifier-and-explanations.md), result/repair patterns in [Phase 07](07-workforce-solving-results-repair-and-export.md), and router policy in [Phase 08](08-pumpkin-backend-and-router.md). The optional assistant in [Phase 10](10-ai-assistant-mvp.md) may propose only typed seating commands and cannot replace deterministic setup.
 
@@ -32,6 +32,7 @@ Project-wide contracts are in [README.md](README.md), evidence/version gates in 
 8. **Manual edits are reversible and verified:** guest movement, table transforms, seat edits, adjacency overrides, and locks are command-history operations.
 9. **Accepted outputs only:** arrangement exports derive from an accepted independently verified solution and canonical geometry.
 10. **Privacy minimization:** store only guest/category/relationship data genuinely required; relationship labels are neutral and user-defined where possible.
+11. **Seating share data is minimized and immutable.** Reports derive a versioned seating Share Result Model from an accepted arrangement and exact privacy options. It includes only selected guest aliases/names, table/seat assignments, deterministic plan geometry, accessible list semantics, safe provenance, and optional transportation summaries—not the editable relationship graph or arbitrary scenario data.
 
 ## Complete domain model
 
@@ -231,13 +232,13 @@ Guided flow:
 10. review visually and highlight allowed, prohibited, and related seats for a selected guest;
 11. adjust and lock through reversible commands;
 12. repair after guest/table/layout changes while minimizing movement;
-13. export guest/table lists, deterministic high-resolution plan, and project bundle.
+13. export guest/table lists, deterministic high-resolution plan, privacy-reviewed immutable HTML/PDF result, or editable proposed `.eutheto` scenario.
 
 The seating workspace maps setup routes to `venue`, `guests`, `relationships`, and `arrangement`. The domain UI manifest lists setup steps, entities, rule kinds, result views, importers, and exporters; purpose-built Vue components implement rich canvas/relationship interaction rather than forcing a schema-generated canvas.
 
 ## Canvas, design, performance, and accessibility
 
-Use **Konva 10.3.2** with **vue-konva 3.4.0**, pinned in the Phase 00 lockfile. The scene has separate background, table, seat, relationship/geometry overlay, and selection layers. Cache derived viewport data by layout hash; query `SeatingViewport { bounds, zoom_bucket }` instead of returning the full document for large layouts. Rust performs parsing, transforms, and geometry classification. Profile representative 500-guest layouts, avoid rebuilding the scene on selection, and update selection immediately before fetching detail.
+Use **Konva 10.3.2** with **vue-konva 3.4.0**, pinned in the Phase 00 lockfile. The scene has separate background, table, seat, relationship/geometry overlay, and selection layers. Cache derived viewport data by layout hash; query `SeatingViewport { bounds, zoom_bucket }` instead of returning the full document for large layouts. Rust performs parsing, transforms, and geometry classification. Profile representative 500-guest layouts, avoid rebuilding the scene on selection, and update selection immediately before fetching detail. Measure pan/zoom/select/input/render responsiveness separately from compile/backend/verification time so canvas work cannot hide solve regressions or vice versa.
 
 Vue may hold viewport, zoom, selection, and temporary drag state. A drag preview is never authoritative; commit one transform command with `expected_revision`, then reconcile from returned invalidations. Canvas and list editors observe the same Rust view and commands.
 
@@ -267,6 +268,8 @@ Manual guest placement is a command and can become soft/hard lock. Repair after 
 
 Offer only meaningful recorded alternatives such as Balanced, relationships/preference focused, minimal changes, or occupancy focused where the scenario uses those objectives. Verify each sequential result and compare authoritative score/geometry metrics; do not manufacture arbitrary symmetric variants.
 
+Seating reuses Phase 07's one-parent-budget, 300–500 ms progress threshold, truthful coarse phases, cancellation, status/proof language, and first-verified-feasible delivery. A raw backend arrangement never appears as a valid floor plan. The accepted arrangement and accessible list render before optional detailed explanation or AI paraphrase; a 500-guest result must not create one unbounded DOM/canvas update.
+
 ## Imports and exports
 
 ### Imports
@@ -278,16 +281,25 @@ Offer only meaningful recorded alternatives such as Balanced, relationships/pref
 
 Every import uses safe detection, explicit mapping/summary, stable-ID matching, additions/updates/duplicates/rejections preview, validation, one atomic undoable batch, and a rejected-row report. Never execute image metadata, macros, templates, paths, or embedded instructions.
 
-### Exports
+### Exports and result sharing
 
-- project bundle using the extension selected by the unresolved gate (working blueprint extension `.optplan`);
+- editable proposed `.eutheto` scenario/full backup through the shared Phase-01 portable services and seating pack conversion/migrations;
 - assignment CSV by guest;
 - assignment CSV by table;
 - deterministic SVG venue plan;
-- local print-friendly HTML;
+- one self-contained interactive HTML result report;
+- direct PDF from the same validated Share Result Model and reviewed local renderer; and
 - JSON through the CLI.
 
-SVG is generated from canonical Rust geometry or a reviewed shared deterministic geometry module, never from a rasterized/low-resolution canvas screenshot. It includes stable geometry, labels, legends/status metadata, correct transforms/orientation, and accessibility-conscious text/contrast. Export preview identifies included rules/history/solution, solution revision and verification, and whether the result is stale. PNG/PDF are post-MVP unless generated later through a reviewed SVG conversion path.
+Arrangement CSV/SVG/HTML/PDF/solution JSON require one accepted independently verified result and immutable canonical geometry. Editable scenario/full backup uses its separate valid portable-input gate and is available without a result. Preview shows scenario/result/revision/verification identities, stale status, exact selected report sections and privacy fields, editable/backup inclusions, and provider/reconnection exclusions.
+
+The seating pack contributes versioned current Portable Scenario and Share Result schemas plus sequential historical migrations. Stable guest/table/seat IDs, canonical millimeter/millidegree geometry, relationships/rules, source references, and extension data round-trip semantically; unknown semantics fail safely. Provider-restricted or cached content is represented only by allowed references/metadata and never copied against policy.
+
+SVG is generated from canonical Rust geometry or a reviewed shared deterministic geometry module, never from a rasterized canvas screenshot. It carries stable geometry, labels, legends/status/provenance, correct transforms/orientation, accessible text/contrast, and no executable or remote content.
+
+HTML/PDF reuse Phase 07’s generic privacy-filtered Share Result builder, safe inert-data embedding, restrictive self-contained-report CSP, offline `file://` shell, print styles, and controlled local PDF path. The seating report embeds the deterministic schematic and accessible guest/table/seat lists; supports local view switching, search/filter/highlight, selection, detail expansion and print; and has no edit/solve/provider/server/storage/network authority. No essential meaning depends on remote fonts, icons, map tiles, services, canvas pixels, or color. Potentially sensitive guest names, addresses, source titles, notes, relationships/constraints, rejected alternatives, objective details, and external links default absent and are itemized by the exact preview payload.
+
+PNG remains post-MVP. Hosted reports, annotations, signatures, encrypted bundles, automatic backups and rich map/routing presentation remain post-MVP.
 
 ## Commands, API, events, and CLI
 
@@ -297,19 +309,19 @@ Generated TypeScript declarations include seating DTOs. Mutations carry scenario
 
 Use general scenario endpoints (`scenario_get_view`, entity/search/catalog queries, `scenario_apply_command`, batch, validation, undo/redo/history), solve endpoints, and complete solution compare/explain/counterfactual/lock/repair/export endpoints from Appendix D. Events carry version/timestamp/request/job/scenario/revision fields. Only frontend API modules call Tauri; Vue components call typed services/composables.
 
-The working CLI name `optimizer` remains an unresolved naming gate. The CLI can validate, apply typed commands, solve, verify, compare, explain, and export seating scenarios without the desktop. `solutions export` supports seating CSV/SVG/JSON plus print output through the applicable export command. Human/JSON results use the `eutheto` schema namespace and stable exit codes; every saved solution is independently accepted.
+The working CLI name `optimizer` remains an unresolved naming gate. The CLI can validate, apply typed commands, solve, verify, compare, explain, and export seating scenarios without the desktop. `projects import/export` uses the portable services; `solutions export --format csv|svg|html|pdf|json` uses the accepted-result/privacy gates and report builder. Human/JSON results use the `eutheto` schema namespace and stable exit codes; every saved solution is independently accepted.
 
 ## Ordered work packages
 
-1. **SEAT-001 — Schema/entities/migrations:** all venue/table/seat/guest/group/relationship/rule/preference/lock/policy shapes, commands, document examples, and import identities.
+1. **SEAT-001 — Schema/entities/migrations/portability:** all venue/table/seat/guest/group/relationship/rule/preference/lock/policy shapes, commands, document examples, import identities, current Portable Scenario/Share Result schemas, sequential migrations, capability declarations, and semantic round-trip fixtures.
 2. **SEAT-002 — Integer geometry engine:** transforms, generation, stable seat IDs, distance/orientation/adjacency/back-to-back sets, overrides, layout hash/cache, Appendix G fixture, independent geometry evaluator.
 3. **SEAT-003a — Rule slices:** each Required and Preference through validation, IR, OR-Tools translation, verifier, provenance/explanation, fixture, round trip, and size review.
 4. **SEAT-003b — Formulation and symmetry:** allowed-pair filtering, table/group helpers, tuple/forbidden-pair generation, safe symmetry options, benchmark/model estimation.
 5. **SEAT-004 — Venue experience:** routes, viewport query, layered Konva canvas, table/seat/overlay editors, synchronized accessible list/numeric controls, keyboard/focus and error states.
 6. **Guest setup/import:** guest/group/relationship editors, CSV mappings, atomic import reports, privacy minimization.
 7. **SEAT-005 — Solve/results/repair:** result canvas/lists/search/overlays/inspectors, locks, repair diffs, meaningful alternatives, counterfactual and status evidence.
-8. **SEAT-005 — Export:** accepted-solution gate, guest/table CSV, deterministic SVG, local print HTML, CLI JSON and visual/canonical snapshot checks.
-9. **Acceptance and usability:** full fixture corpus, 500-guest profiling, transform properties, canvas/list synchronization, keyboard/screen-reader and proximity-rule task scripts.
+8. **SEAT-005 — Export/share:** distinct editable/result gates; exact privacy preview; guest/table CSV; deterministic safe SVG; accessible offline one-file HTML; direct PDF/print; CLI JSON; source-edit immutability; visual/canonical/privacy/security/browser snapshots.
+9. **Acceptance and usability:** versioned small/typical/symmetry/stress benchmark manifests; complete phase/model/quality metrics; 500-guest solve/result/canvas profiling; transform properties; canvas/list synchronization; keyboard/screen-reader and proximity-rule task scripts.
 
 ## Tests and acceptance fixtures
 
@@ -324,11 +336,15 @@ Minimum checked-in fixtures:
 7. **Infeasible relationships:** Required same-table plus minimum-distance rules that cannot coexist.
 8. **Symmetry benchmark:** many identical tables/interchangeable seats.
 
-Each fixture includes visual geometry snapshot, complete deterministic pair-set/hash assertions, domain validation, expected status/metrics, every Required evaluator, score invariants, stable explanations, accepted-solution gating, and import/export preservation. Do not assert one arrangement when equivalent solutions exist unless deterministic settings intentionally do so.
+Each fixture includes visual geometry snapshot, complete deterministic pair-set/hash assertions, domain validation, expected status/metrics, every Required evaluator, score invariants, stable explanations, accepted-solution gating, current/historical Portable Scenario and Share Result preservation, unknown-semantic rejection, and import/export preservation. Do not assert one arrangement when equivalent solutions exist unless deterministic settings intentionally do so.
+
+Benchmark evidence records geometry/candidate preprocessing, Planning-IR/model size, backend startup/solve, first incumbent, first verified feasible, verification, result preparation, initial canvas and accessible-list render, total time, termination/proof, and authoritative score. Assertions cover sub-threshold no-flicker behavior, truthful longer progress, cancellation latency, event/announcement bounds, optional-explanation delay/failure, and UI responsiveness under the 500-guest fixture. Phase 12 calibrates release thresholds against the cross-domain reference machine and corpus.
 
 Property/differential tests cover integer transform composition; translation/rotation invariance; canonical seat numbering; pair normalization; distance/angular inclusive boundaries; checked overflow; generated/custom adjacency; back-to-back overrides; stale layout hash rejection; compiler/verifier mutation; symmetry on/off semantic equivalence; and SVG/canonical geometry agreement.
 
-Desktop acceptance proves canvas/list synchronization through revisioned commands, keyboard parity for every drag operation, focus restoration, screen-reader labels/announcements, non-color overlays, stale/error/empty/active states, undo/redo, and responsive 500-guest pan/zoom/select. Required usability task: create an across-table physical-separation rule, inspect its overlay/evidence, optimize, manually move/lock, repair, and export.
+Share/report tests prove exact preview-to-payload equality; default omission of sensitive/source-only fields; inert rendering of malicious guest/relationship/label text; one-file `file://` operation with zero required network requests; HTML/SVG/list semantic agreement; keyboard/focus/screen-reader and graphical/list parity; print/PDF page context and grayscale readability; immutable generated output after source edits; atomic cancellation/failure cleanup; supported-browser compatibility; and responsive 500-guest output.
+
+Desktop acceptance proves canvas/list synchronization through revisioned commands, keyboard parity for every drag operation, focus restoration, screen-reader labels/announcements, non-color overlays, stale/error/empty/active states, undo/redo, and responsive 500-guest pan/zoom/select. Required usability task: create an across-table physical-separation rule, inspect its overlay/evidence, optimize, manually move/lock, repair, export editable data, and share a privacy-reviewed immutable arrangement.
 
 ## Risks and failure handling
 
@@ -355,14 +371,14 @@ Phase 09 is complete only when:
 - canvas and list editors remain synchronized solely through revisioned commands, with undoable guest/table/seat/lock edits;
 - venue transform properties, compiler/verifier differential tests, and safe symmetry equivalence pass;
 - hard locks survive repair and every accepted manual/repaired result verifies;
-- deterministic SVG exactly matches canonical geometry, and all CSV/SVG/HTML/JSON outputs enforce accepted-solution provenance;
+- deterministic SVG exactly matches canonical geometry; CSV/SVG/HTML/PDF/JSON arrangement outputs enforce accepted-result provenance and exact privacy selection; editable proposed `.eutheto` output round-trips complete seating meaning without requiring a solution;
 - all major states, keyboard routes, focus, labels, announcements, reduced motion, non-color cues, and screen-reader scripts pass;
-- representative 500-guest profiling meets the responsiveness gate without moving geometry/solving onto the webview thread;
+- versioned small/typical/stress performance evidence records solver and render paths separately, first verified arrangements are not withheld by proof or optional explanations, and representative 500-guest profiling meets the responsiveness gate without moving geometry/solving onto the webview thread;
 - desktop and CLI provide equivalent deterministic non-AI creation, validation, solve, explanation, repair, and export behavior.
 
 ## Deferred and non-goals
 
-- PNG/PDF except through a later reviewed deterministic SVG conversion path.
+- PNG and richer raster/vector conversion beyond the required deterministic SVG and direct PDF path.
 - CAD/BIM, map/routing services, arbitrary floor-plan interpretation, automatic obstacle safety certification, and legal venue compliance.
 - Guest-to-table-only modeling, screenshot-based authoritative export, arbitrary visual-only relationships, or canvas-only functionality.
 - School timetabling, plugin marketplace, dynamic native packs, and multi-backend portfolio behavior.
@@ -374,4 +390,4 @@ Phase 09 is complete only when:
 - The wider verified frontend inventory as of 2026-08-29 is Vue 3.5.42, Vue Router 5.3.0, Pinia 4.0.3, Vite 8.2.2, Tailwind 4.3.3, shadcn-vue 2.8.2, Reka 2.10.4, TanStack Table 9.2.4, TanStack Virtual 3.13.36, ECharts 6.1.0, and vue-echarts 8.1.0. Exact locks remain Phase 00 actions.
 - Public acceptance requires profiling the chosen Konva layer/cache/hit-detection strategy on 500-guest layouts and manual screen-reader/keyboard tests; library choice alone does not satisfy accessibility/performance.
 - Geometry distance/orientation thresholds, back-to-back defaults, display-unit rounding, event presets, and user-facing score weights require usability/domain review and explicit persisted defaults.
-- CLI name, application ID, bundle extension, signing, and hosting remain unresolved project gates; examples do not close them.
+- CLI name, application ID, signing, and hosting remain unresolved project gates. `.eutheto` is the proposed portable extension; Phase 11 closes the extension/media type/file association before public use.

@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Bug report
+description: Report a reproducible, non-security defect in implemented behavior.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form only for non-security defects in behavior that exists in the current phase. For a suspected vulnerability, stop and follow the Security policy link in the issue chooser. Never disclose vulnerability details publicly.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and did not find the same defect.
+          required: true
+        - label: This report contains no suspected vulnerability, credential, private data, captured user scenario, or unsanitized diagnostic.
+          required: true
+        - label: I am reporting implemented behavior, not a deferred roadmap feature.
+          required: true
+
+  - type: input
+    id: phase-or-issue
+    attributes:
+      label: Phase or issue ID
+      description: Identify the active roadmap phase, work-package ID, or existing issue this behavior belongs to.
+      placeholder: "Phase 00 / FOUND-001 / #123"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Repository and automation
+        - Nix or native development environment
+        - Rust workspace or CLI
+        - Frontend or desktop shell
+        - Schema, protocol, generation, or migration
+        - License or supply chain
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: Give the commit SHA, branch, or other exact source revision where you observed the defect.
+      placeholder: "Full commit SHA or branch and date"
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Defect summary
+      description: Describe one observable defect and its impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: List deterministic steps, commands, and the smallest synthetic input needed to reproduce the defect.
+      placeholder: |
+        1. Start from ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: State the behavior required by the current contract or documentation and link that authority when possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: State exactly what happened, including stable error text when useful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS and architecture, Nix or native route, and relevant pinned tool versions. Say when an item is unknown.
+      placeholder: |
+        OS/architecture:
+        Development route:
+        Relevant tool versions:
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Verification and sanitized evidence
+      description: List the exact commands or scenario run and attach only minimal, sanitized output. Do not claim checks you did not run.
+      placeholder: |
+        Commands/scenario run:
+        Result:
+        Sanitized output or artifact:
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add a suspected regression range or other non-sensitive context. Remove secrets, personal data, local paths, and unrelated logs.

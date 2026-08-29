@@ -95,7 +95,7 @@ eutheto/
 └── TRADEMARKS.md
 ```
 
-Workflows are `pr.yml`, `portable.yml`, `desktop-e2e.yml`, `security.yml`, `benchmark.yml`, `fuzz.yml`, `release.yml`, and `dependency-update.yml`. `AGENTS.md` states dependency boundaries, canonical commands, generated-code rules, schema/protocol discipline, and tests expected from human and AI contributors. Platform conditionals live in `nix/tooling.nix` or package derivations, not throughout `flake.nix`.
+Workflows are `pr.yml`, `portable.yml`, `security.yml`, `benchmark.yml`, `fuzz.yml`, `release.yml`, and `dependency-update.yml`. The portable matrix owns the current unbundled desktop launch smoke; packaged desktop E2E remains a later release-phase workflow. `AGENTS.md` states dependency boundaries, canonical commands, generated-code rules, schema/protocol discipline, and tests expected from human and AI contributors. Platform conditionals live in `nix/tooling.nix` or package derivations, not throughout `flake.nix`.
 
 ## Current verified version baseline (2026-08-29)
 
@@ -202,22 +202,22 @@ Use it for cross-platform hashing, JSON, target triples, licenses and generated 
 
 ### Dependency-update workflow gate
 
-`dependency-update.yml` is a required, non-skippable workflow implementing blueprint §§24.11 and 25.17. Every automated or manual dependency-update PR must use frozen committed `flake.lock`, workspace `Cargo.lock`, `pnpm-lock.yaml`, CI-action SHAs, OR-Tools source/hash manifest, and generated protocol evidence, and must pass all of the following before merge:
+`dependency-update.yml` is a required policy workflow implementing the immutable-action and routine-update isolation parts of blueprint §§24.11 and 25.17. It does not repeat build, generation, security, worker, or benchmark commands already owned by other workflows. Every automated or manual dependency-update PR must use frozen committed `flake.lock`, workspace `Cargo.lock`, `pnpm-lock.yaml`, CI-action SHAs, OR-Tools source/hash metadata when applicable, and generated protocol evidence, and must pass the applicable existing gates before merge:
 
-1. `nix flake check` and the canonical full Rust and JavaScript test suites from the pinned Nix environment;
-2. the native worker build and executable smoke test, with its source/protobuf/manifest checks intact;
-3. `cargo-deny` license, ban, source and advisory policy, the additional `cargo-audit` signal, pnpm audit/inventory, notice and SBOM generation, and the repository allow/review/block license policy;
-4. deterministic generation followed by the generated-file drift check for DTOs, schemas, protocol outputs, matrices, notices and other checked-in products;
-5. the published official solver benchmark regression thresholds whenever a solver, adapter, worker protocol, protobuf, compiler, planning-IR performance dependency, or solver build input changes.
+1. `pr.yml` for `nix flake check` and the canonical full Rust and JavaScript suite;
+2. `security.yml` for Rust and pnpm advisory/license/source policy, secret scanning, notices, and SBOM evidence;
+3. `portable.yml` for native source build, test, and unbundled desktop-launch evidence;
+4. deterministic generation and drift checks through the canonical `just check` path;
+5. the real worker workflow and published official solver benchmark thresholds once their owning phases provide executable gates.
 
-JavaScript packages with new or changed install scripts are blocked unless the exact script and package are explicitly reviewed and allowlisted with rationale. CODEOWNERS approval is mandatory for dependency changes touching cryptography, parsers or untrusted-input handling, updater/signing, keyring/credentials, the worker protocol, or Tauri permissions/capabilities. Routine update PRs isolate major Rust, Node, Tauri, OR-Tools, and schema migrations: one independently reviewable major family or migration per PR, never a combined major-update rollup. CI actions remain immutable-commit pinned, and review/benchmark exceptions cannot be created by the dependency bot.
+JavaScript packages with new or changed install scripts are blocked unless the exact script and package are explicitly reviewed and allowlisted with rationale. Routine update PRs isolate major Rust, Node, Tauri, OR-Tools, and schema migrations: one independently reviewable major family or migration per PR, never a combined major-update rollup. CI actions remain immutable-commit pinned, and dependency automation cannot create a license, security, generation, worker, benchmark, or review exception. `CODEOWNERS` remains the sensitive-path ownership map. Required independent approval is temporarily disabled while the repository has one active maintainer and must be restored when a second qualified maintainer is active.
 
 ## Ordered work packages
 
 1. **FOUND-001 — Identity, workspaces, legal baseline.** Initialize Cargo/pnpm, normalized names, legal/governance/security/trademark/DCO files, CODEOWNERS, SPDX/REUSE policy and unresolved identity ADR without fake contacts.
 2. **FOUND-002 — Nix.** Add thin flake/lock, tooling/default/full/release shells, packages/checks/source filter, `.envrc`, safe caches and no-side-effect welcome; correct nixfmt and pnpm assumptions.
 3. **FOUND-003 — Pins, commands, generation.** Commit the current matrix, `Justfile`, `xtask`, deterministic DTO/schema/protocol/license workflows and the dependency-update policy, including the routine-PR migration-isolation rule above.
-4. **FOUND-004 — CI/supply chain.** Add eight workflows with full action SHAs, least privilege, concurrency/cache controls, native prerequisites, digest handoff and sanitized artifacts.
+4. **FOUND-004 — CI/supply chain.** Add seven non-duplicative workflows with full action SHAs, least privilege, concurrency/cache controls, native prerequisites, digest handoff and sanitized artifacts.
 5. **FOUND-005 — Real desktop boundary.** Minimal Vue/Vite/TS/Tauri shell, generated API, strict TS and no mock domain authority. Register custom commands through Tauri `AppManifest`/capabilities because `invoke_handler` alone permits all windows; minimum permissions/CSP; only `apps/desktop/src/api` imports invoke/event.
 6. **Architecture/ADRs.** Materialize ADR-001–018, contributor boundaries, schema/protocol discipline, and automated dependency/architecture enforcement for both the normal-crate `unsafe` exception gate and the prohibition on hidden global mutable state.
 7. **Worker/release scaffolds.** Worker manifest schema, explicitly gated derivation, release-tool inventory, license inputs and protected-signing checklist.
@@ -230,9 +230,8 @@ JavaScript packages with new or changed install scripts are blocked unless the e
 CI:
 
 - `pr.yml`: pinned checkout/Nix, public cache, flake check, Nix-shell install/check, later worker smoke, sanitized reports;
-- `portable.yml`: Ubuntu, supported macOS x86_64/arm64, Windows; shared pins, native core and shell builds;
-- `desktop-e2e.yml`: Tauri WebDriverIO embedded provider on supported OSs, Linux virtual display;
-- `security.yml`: deny/audit, pnpm lock/license/audit, static/secret scans, optional REUSE, SBOM smoke, capability diff;
+- `portable.yml`: Ubuntu, supported macOS x86_64/arm64, Windows; shared pins, native core and shell builds, and current unbundled shell-launch smoke;
+- `security.yml`: deny/audit, pnpm lock/license/audit, secret scans, optional REUSE, SBOM smoke, capability diff;
 - benchmark/fuzz are scheduled/path-gated and never run arbitrary PR scripts; release has protected separate build/sign jobs.
 
 Fixed clock/time zone/locale/seed/thread count and temp directories are mandatory test context. Future coverage gates are established: verifier/migrations/protocol ≥90% branch; command/persistence/domain/compiler ≥80% line; frontend business logic ≥75% line; documented exceptions only, never excluding difficult code to meet a number.

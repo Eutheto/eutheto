@@ -8,7 +8,7 @@ Pumpkin 0.5.0 may be integrated only after actual pinned-API compatibility, dedi
 
 ## Source coverage
 
-This phase covers blueprint Section 14 in full, Section 16 in full, Phase 8, Sections 31.3–31.4, 32, and backend Definition of Done 33.3, CLI Appendix C solver surfaces, Tauri API Appendix D solve surfaces, and backlog `SOLVER-001`/`PUMPKIN-001` from Appendix I.
+This phase covers blueprint Section 14 in full, Section 16 in full, Phase 8, Sections 31.3–31.4, 32, and backend Definition of Done 33.3, CLI Appendix C solver surfaces, Tauri API Appendix D solve surfaces, backlog `SOLVER-001`/`PUMPKIN-001` from Appendix I, and the router/fallback evidence required by [Performance and Solver UX Targets](performance-and-solver-ux-targets.md).
 
 Shared contracts are in [README.md](README.md), version evidence and unresolved gates in [assumptions.md](assumptions.md), the planning IR in [Phase 02](02-domain-pack-and-planning-ir-contracts.md), stable OR-Tools implementation in [Phase 03](03-ortools-worker-vertical-slice.md), verification in [Phase 04](04-independent-verifier-and-explanations.md), and the first complete official-domain corpus in [Phase 07](07-workforce-solving-results-repair-and-export.md). Seating in [Phase 09](09-seating-domain-and-venue-experience.md) consumes the same router without backend-specific domain code.
 
@@ -211,7 +211,7 @@ The working CLI name `optimizer` remains an unresolved naming gate. `solvers lis
 - Status tests cover optimal, feasible, infeasible, unknown with/without incumbent, timeout, cancellation, invalid model, unavailable, panic/failure, and verification failure.
 - Fallback tests cover all five policy classes, total-budget exhaustion, and proof that infeasibility/invalid-model do not silently retry.
 - Component property tests prove merged values and scores equal unsplit semantics; adversarial fairness/global-objective cases refuse decomposition.
-- Benchmarks use the compatible subset of all official workforce fixtures and later seating fixtures, recording model size, solve status, verified score, wall time, memory, cancellation latency, backend/adapter versions, and environment. Performance alone never overrides correctness.
+- Benchmarks use the compatible subset of all official workforce fixtures and later seating fixtures, recording candidate/model size, translation/startup, first incumbent, first independently verified feasible, final solve/verify/total time, solve status/termination/proof, authoritative score, bound, memory, cancellation latency, fallback consumed/remaining budget, backend/adapter versions, and environment. Performance alone never overrides correctness, and backend time alone never substantiates an end-to-end product claim.
 - Desktop/CLI tests verify disabled incompatible choices, experimental labels, reasons, no reliability regression when Pumpkin is not compiled/available, and sanitization of diagnostics.
 
 ## Risks and failure handling
@@ -241,6 +241,7 @@ Phase 08 is complete only when:
 - generated support matrix and runtime descriptor cannot drift silently;
 - backend version, adapter version, seed, threads, options, model hash, selection/reasons, and component proof are recorded;
 - status/cancellation/timeouts, crash/malformed-result handling, packaging availability, benchmark comparison, and user-facing stability labels satisfy backend Definition of Done;
+- every fallback and backend comparison consumes the original remaining parent budget and preserves first-backend failure/proof evidence rather than restarting time or hiding defects;
 - disabling or omitting Pumpkin leaves default UX, CLI, solving, verification, and exports fully functional and no less reliable.
 
 ## Deferred and non-goals

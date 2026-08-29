@@ -8,7 +8,7 @@ The phase proves that official domain logic is not coupled to Vue/Tauri. [Phase 
 
 ## Source coverage
 
-This phase incorporates blueprint Section 18 in full; the workforce document contract in Appendix F; Phase 5; workforce CLI behavior from Appendix C; workforce backlog items from Appendix I; planning/provenance/verification contracts from Sections 13 and 17; testing from Section 26; rule completion and definitions of done from Sections 31.3 and 33.2; and domain/version gates from Appendix K. Every MVP workforce rule, preference, validation, import/export, result view, and fixture is cataloged below even when its implementation is intentionally assigned to Phase 07.
+This phase incorporates blueprint Section 18 in full; the workforce document contract in Appendix F; Phase 5; workforce CLI behavior from Appendix C; workforce backlog items from Appendix I; planning/provenance/verification contracts from Sections 13 and 17; testing from Section 26; rule completion and definitions of done from Sections 31.3 and 33.2; domain/version gates from Appendix K; the workforce compiler/fixture responsibilities in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and workforce portable/share-model groundwork from [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). Every MVP workforce rule, preference, validation, import/export, result view, and fixture is cataloged below even when implementation is dependency-gated to Phase 07.
 
 ## Dependencies
 
@@ -304,7 +304,7 @@ optimizer solutions export <scenario> <solution> --format csv|ics|json
 
 Relevant stable exit codes are `0` success, `2` usage, `3` validation failure, `4` proven infeasible, `5` no verified solution within limits, `6` backend unavailable/incompatible/failed, `7` independent-verification alarm, `8` file/bundle/database/migration error, `10` revision/state conflict, and `130` cancellation. Infeasibility is a successful execution path with code `4`, not an internal exception.
 
-The Phase 05 export proof includes normalized solution JSON and assignments CSV round-trip. The full MVP export ledger remains portable project bundle (working `.optplan` extension), assignments CSV, people/shift summary CSV, per-person/combined iCalendar, local print-friendly HTML, and CLI JSON; Phase 07 completes the unimplemented formats.
+The Phase 05 export proof includes normalized solution JSON and assignments CSV round-trip plus workforce Portable Scenario/Share Result conversion fixtures. The full MVP ledger is editable scenario/full backup through the proposed `.eutheto` portable contract, assignments CSV, people/shift summary CSV, per-person/combined iCalendar, one-file privacy-filtered offline HTML, direct PDF, and CLI JSON; Phase 07 completes the unimplemented formats and recipient UX.
 
 ## Illustrative canonical workforce fixture
 
@@ -503,7 +503,7 @@ Expected behavior is deterministic generation of September instances in `America
 
 ## Acceptance fixture corpus
 
-Commit versioned fixtures with fixed clock, explicit timezone/locale, stable IDs, budgets/seeds, and reviewed expected semantics:
+Commit versioned fixtures with fixed clock, explicit timezone/locale, stable IDs, budgets/seeds, reviewed expected semantics, model-size envelope, warm/cold preconditions, and required timing/quality fields:
 
 1. **Clinic only, small:** 8 people, 4 weeks, availability and fairness.
 2. **Clinic + overnight call:** 12 people with cross-category 10-hour elapsed rest.
@@ -514,6 +514,8 @@ Commit versioned fixtures with fixed clock, explicit timezone/locale, stable IDs
 7. **DST transition:** overnight shifts across spring-forward and fall-back transitions.
 8. **Large benchmark:** configurable 100+ people and thousands of candidate assignments.
 
+The small, clinic+overnight, and large/stress fixtures form the workforce instances of benchmark Packs A–D. Record candidate pairs before and after each deterministic rejection class, Planning-IR size, compile/backend/verify/total spans, first incumbent, first verified feasible, termination/proof, and authoritative score. Phase 05 establishes deterministic manifests and compiler/CLI evidence; Phase 07 measures the complete desktop result path; Phase 12 calibrates release thresholds.
+
 The executable-fixture portion of the Phase 05 gate requires complete compile/solve/verify assertions for clinic+overnight, infeasible coverage, and DST plus the initial clinic slice. The other documents and stable expectations are committed now and graduate as their rule implementations land in Phase 07. For every executable fixture assert domain validation, expected status, independent verification, score invariants, stable explanation keys, and applicable import/export round trip. Do not assert one exact schedule when equivalent solutions exist unless the deterministic test profile intentionally makes that contract.
 
 ## Import completion and downstream contracts
@@ -522,17 +524,17 @@ Phase 05 completes people CSV end to end under the backend contract above. The c
 
 The complete result-view ledger for Phase 07/desktop is person schedule grid, shift/location grid, person timeline, uncovered/overcovered work, required-rule summary, preference summary, fairness distribution, base-schedule changes, warnings/status, and explanation panel. Large grids are virtualized rather than creating a DOM cell for a year-long matrix.
 
-The complete export ledger is the portable bundle using the unresolved working `.optplan` extension, assignments CSV, people/shift summary CSV, per-person/combined ICS, local print-friendly HTML, and CLI JSON. XLSX, PDF, payroll/vendor adapters, and calendar synchronization are post-MVP.
+The complete export ledger is editable scenario/full backup through the proposed `.eutheto` portable contract, assignments CSV, people/shift summary CSV, per-person/combined ICS, one-file privacy-filtered standalone HTML, direct PDF, and CLI JSON. Phase 05 supplies workforce current/historical portable conversion fixtures and accepted Result→Share Result payload groundwork; Phase 07 completes recipient rendering/privacy UX. XLSX, payroll/vendor adapters, live calendar synchronization, encryption, signatures, and hosted sharing are post-MVP.
 
 ## Ordered work packages
 
-1. **WF-001 — schema/entities/migrations and people CSV import:** version the aggregate and every entity/value object, JSON Schema, typed IDs, commands, migration/round-trip fixtures, and future-rule-preserving serialization; complete bounded detection, explicit mapping/identity decisions, validated preview, atomic batch apply, one-step undo/redo, and rejected-row report services.
+1. **WF-001 — schema/entities/migrations and people CSV import:** version the aggregate and every entity/value object, internal and portable JSON Schema, stable typed IDs and capability metadata, current/historical portable conversions/migrations, commands, semantic round-trip fixtures, and future-rule/declared-nonsemantic-extension preservation; complete bounded CSV detection, explicit mapping/identity decisions, validated preview, atomic batch apply, one-step undo/redo, and rejected-row report services.
 2. **WF-002 — timezone/shift generation:** calendars, horizon bounds, recurring templates, detached-instance diff semantics, overnight/reporting day, ambiguous/nonexistent local time policy, and deterministic generation.
 3. **WF-003 — eligibility, availability, coverage, and no-overlap:** build the static candidate graph from qualification/assignment eligibility, effective ranges, and availability predicates; retain rejection provenance and the model-size estimate; complete coverage/qualification slots and no-overlap/compatibility through the full rule-completion artifacts.
 4. **WF-004 slice — minimum rest:** complete scoped cross-category elapsed minimum rest, including overnight and DST boundaries, through compiler, verifier, provenance/explanation, command/document/CLI, and edge/infeasible fixtures. Maximum-hours and consecutive-assignment rules remain parse-and-preserve catalog entries here and are completed in Phase 07.
 5. **WF-006 slice — compiler/workforce projection:** variables only for feasible pairs, exact initial constraints, bounded objective used by fixtures, capability/provenance maps, canonical ordering/hash, and the workforce implementation of the Phase 04 normalized-solution projection contract.
 6. **WF-007 slice — workforce verifier/score/evidence:** independent structural/eligibility/availability/coverage/overlap/rest evaluation, verifier-owned score/evidence/checksum, stable workforce message keys, and acceptance/quarantine integration against the completed Phase 04 pack contract.
-7. **WF-008 — CLI and fixtures:** create/apply/validate/solve/verify/explain/export flow, stable envelopes/exit codes, Appendix F fixture, acceptance corpus, and UI-independent execution.
+7. **WF-008 — CLI and fixtures:** create/apply/validate/solve/verify/explain/export flow, stable envelopes/exit codes, Appendix F fixture, benchmark manifests for small/typical/stress workloads, required timing/quality evidence, acceptance corpus, and UI-independent execution.
 8. **Phase 07 handoff:** preserve and test schema/catalog entries for hours, rolling windows, consecutive/count/skill/lock/mutual/travel, every preference, fairness, repair, the four remaining import formats, results, and remaining exports.
 
 ## Rule-completion discipline
@@ -561,6 +563,8 @@ Additionally, Required/Preference meaning must be unambiguous; empty/default sco
 
 - JSON Schema accepts all valid entity/rule shapes and rejects missing, unknown-newer, invalid reference, negative/bounds, and unsafe empty-scope cases;
 - command/inverse restores canonical hash; batches are atomic/undoable; migration fixtures upgrade sequentially and round-trip without losing stable IDs/later catalog entries;
+- workforce current portable export/import preserves every enabled Required rule, Preference, stable reference, time-zone/DST meaning and accepted-result identity; historical migration fixtures are deterministic; unknown semantic rule/capability blocks while declared nonsemantic extensions preserve;
+- initial workforce Share Result contribution rejects unaccepted/mismatched revisions and exposes only explicit recipient view fields, privacy flags, status/provenance and stable identities—not the full Scenario Model.
 - people CSV tests cover supported encoding/header detection, explicit column mapping, exact external-ID updates, unresolved/similar-name review, additions/duplicates/rejections, proposed-state validation, bounded reports, cancellation, stale revision/input/mapping rejection, atomic failure, and one-step apply/undo/redo;
 - template regeneration/detach diffs never overwrite manual changes silently;
 - timezone tests cover normal days, nonexistent spring time, both ambiguous fall instants, overnight boundaries, reporting-day policy, effective qualification/availability edges, inclusive horizon end, wall/elapsed duration differences;
@@ -575,6 +579,7 @@ Additionally, Required/Preference meaning must be unambiguous; empty/default sco
 - unsupported later rule fails compatibility rather than being ignored;
 - deliberate compiler and verifier mutations are detected;
 - feasible candidate verifies, deliberately invalid candidate quarantines, backend score cannot replace authoritative score.
+- benchmark fixtures prove deterministic candidate pruning and model-size bounds, record the stable phase/quality metrics, and never equate raw first incumbent with first independently verified feasible.
 
 ### CLI and fixture acceptance
 
@@ -610,7 +615,7 @@ Phase 05 exits only when workforce schema/migrations/entities are versioned; ini
 
 - Phase 07 completes fixed/rolling hours, consecutive/count/skill-mix/locks/mutual/travel, the full preference/fairness/stability policy, repair, results, the four remaining import formats, and remaining exports.
 - Desktop setup, people-import UI, and the rule builder are Phase 06; they consume the Phase 05 headless import backend. Desktop solving/results is Phase 07.
-- Map-service travel integration, XLSX/PDF/payroll/vendor adapters, live calendar sync, and legal-compliance certification are not MVP requirements.
+- Map-service travel integration, XLSX/payroll/vendor adapters, live calendar sync, encrypted/signed bundles, automatic backups, hosted sharing, and legal-compliance certification are not MVP requirements. Standalone HTML and direct PDF are Phase-07 MVP outputs under the shared privacy-filtered report contract.
 - No universal rule-expression DSL, arbitrary custom code, dynamic native pack, or Tauri dependency in workforce core.
 - Do not optimize/model unsupported rule types approximately; capability rejection is required.
 
@@ -622,4 +627,4 @@ Evidence date: **2026-08-29**.
 - Exact public fairness presets and weights require usability/practitioner evidence. Until then fixtures use explicit recorded policies rather than claiming universal fairness.
 - OR-Tools **9.15** is used only after Phase 03 platform/build/benchmark/license/protobuf/assumption-core gates. Workforce infeasibility wording respects the known assumption-core issue gate.
 - Rust stays **1.97.1** until a fixed stable newer than 1.98.0 resolves the known P-critical compiler issue.
-- The final project name is `eutheto`; external format namespace is normalized accordingly. The working CLI name `optimizer` and bundle extension `.optplan` remain explicit unresolved gates and must be changed cleanly across examples/contracts if selected differently.
+- The final project name is `eutheto`; external format namespace is normalized accordingly. The working CLI name `optimizer` remains unresolved. `.eutheto` is the proposed bundle extension and must remain labelled pending until the Phase-11 identity ADR closes its media type/file-association commitment.

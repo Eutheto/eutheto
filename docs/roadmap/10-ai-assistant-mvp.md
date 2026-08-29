@@ -8,7 +8,7 @@ Eutheto remains fully usable with AI disabled: workforce and seating creation, i
 
 ## Source coverage
 
-This phase is the implementation source of truth for blueprint Section 23; the AI-relevant controls of Section 24; AI placement and failure states in Section 22; Phase 10; AI Definition of Done 33.5; relevant core/desktop definitions of done; CLI/API Appendix C–D; current-provider assumptions from Appendix K.6/J.5; and backlog `AI-001` through `AI-005` plus the AI-relevant parts of `SEC-001` from Appendix I.
+This phase is the implementation source of truth for blueprint Section 23; the AI-relevant controls of Section 24; AI placement and failure states in Section 22; Phase 10; AI Definition of Done 33.5; relevant core/desktop definitions of done; CLI/API Appendix C–D; current-provider assumptions from Appendix K.6/J.5; backlog `AI-001` through `AI-005` plus the AI-relevant parts of `SEC-001` from Appendix I; the AI critical-path exclusion in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and the no-AI-authority boundary in [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md).
 
 Project-wide principles and ADRs are in [README.md](README.md); dated API/version evidence and unresolved conformance gates are in [assumptions.md](assumptions.md). Typed domain commands come from [Phase 02](02-domain-pack-and-planning-ir-contracts.md), deterministic verification/evidence from [Phase 04](04-independent-verifier-and-explanations.md), workforce tools from [Phase 07](07-workforce-solving-results-repair-and-export.md), and seating tools from [Phase 09](09-seating-domain-and-venue-experience.md). The assistant must not depend on the experimental backend in [Phase 08](08-pumpkin-backend-and-router.md).
 
@@ -38,6 +38,8 @@ Section 24 ownership is intentionally split. This phase owns only AI-relevant ca
 11. **Provider errors preserve state.** No hidden retry on authentication/billing errors; partial proposals are unapplied unless the user explicitly reviews a valid smaller batch.
 12. **Verified means configured rules passed.** AI suggestions are not legal/professional advice and cannot turn presets into compliance claims.
 13. **Adapter enablement is conformance-gated.** Every AI adapter enabled in a build must pass its complete recorded conformance suite for the exact implemented contract. An adapter that is excluded, unfinished, stale, or failing conformance stays disabled and exposes an accurate unavailable state and reason; it cannot block the non-AI core release.
+14. **AI is outside the deterministic result critical path.** A provider call cannot be required to start, solve, verify, score, persist, render, or export an accepted plan. The verified result appears before optional AI paraphrase; AI/provider timing is recorded separately and cannot be used to qualify core solver latency.
+15. **AI has no portability or publication authority.** It cannot inspect raw bundle contents, initiate/apply import or restore, create backups/exports/share reports, select privacy fields, or include conversations/provider payloads in portable or Share Result data. Deterministic non-AI services own every such preview and action.
 
 ## Provider-neutral architecture
 
@@ -142,7 +144,7 @@ Safe, bounded reads may execute automatically within the current scenario and re
 - `solution.get_rule_evidence`;
 - `history.get_recent_changes`.
 
-Each read schema requires scenario/revision scope where applicable, stable cursor/page size, filters from a typed allowlist, and response limits. Reads cannot enumerate the filesystem, database, credentials, other projects, hidden notes, or arbitrary history.
+Each read schema requires scenario/revision scope where applicable, stable cursor/page size, filters from a typed allowlist, and response limits. Reads cannot enumerate the filesystem, raw bundle/report data, database, credentials, other projects, hidden notes, or arbitrary history.
 
 ### Scenario-write proposal tools
 
@@ -164,7 +166,7 @@ Schemas are generated from the domain command catalog and use domain language, c
 
 `solve.propose_start` is the only MVP application-action proposal. It carries a typed `SolveStartRequest`, never a `ScenarioCommand`, and requires a separate structured preview and explicit confirmation. Rust checks its scenario revision and pre-solve validation again immediately before dispatching it to `solve_start`; it never enters `Vec<ScenarioCommand>` or `scenario_apply_batch`.
 
-Export, delete, credential, arbitrary settings, update, filesystem, URL fetch, shell, code, and SQL operations are not general AI tools in the MVP.
+Export, backup, import/restore, Share Result/privacy selection, delete, credential, arbitrary settings, update, filesystem, URL fetch, shell, code, and SQL operations are not AI tools in the MVP. AI conversations and provider request/response content are excluded by default from editable bundles, full backups, diagnostics, and share reports; no model can override those code-owned policies.
 
 ## Tool-call validation and policy loop
 
@@ -360,12 +362,14 @@ For enabled built-in adapters, test Anthropic `tool_use`/immediate `tool_result`
 - large context/output/body/decompression/tool-loop limits;
 - conversation retention/deletion and persistence failure;
 - OpenAI Responses and Gemini Interactions default fixtures always set `store: false`; any future consented provider-retention mode proves disclosure, provider deletion, and end-to-end delete behavior;
-- deterministic evidence grounding, incomplete evidence, and equivalent-optimum language.
+- deterministic evidence grounding, incomplete evidence, and equivalent-optimum language;
+- import/restore/export/backup/share/privacy operations are absent from the allowlist, and model text cannot alter portable inclusion, report fields, or output destinations.
 
 ### Product acceptance
 
 - complete application functionality with AI globally disabled, no credential, provider offline, and assistant hidden;
 - provider failures and malformed calls leave scenario revision/document unchanged;
+- slow, cancelled, malformed, or unavailable AI paraphrase never delays or hides an already accepted deterministic result, and provider timing remains separate from solve/verify/render metrics;
 - representative workforce flow conversationally proposes a person/eligibility/availability/rest/coverage/fairness configuration and applies only after preview;
 - representative seating flow proposes a guest/relationship/minimum-distance/seat-lock configuration and applies only after preview;
 - identical operations are possible through deterministic non-AI UI/CLI;
@@ -402,6 +406,8 @@ Phase 10 is complete only when:
 - imported prompt injection, malicious endpoints, malformed calls, redirects, and tool loops cannot expand capabilities or leak credentials;
 - provider timeout/rate/auth/model/refusal/incompatibility/stream/proposal failures preserve scenario state;
 - deterministic explanation evidence remains inspectable and incomplete evidence is accurately labeled;
+- deterministic accepted results remain available without waiting for AI, provider failures cannot affect their status, and AI latency is excluded from core optimizer performance claims;
+- import/restore/export/backup/share behavior and privacy selections remain wholly deterministic and AI-independent; AI conversations/provider payloads do not leak into portable/share output;
 - privacy, stateless provider requests, retention, destination, alias/notes, local-only, usage, cancellation, credential/conversation deletion, future consented provider-retention deletion, and all accessibility/error-state UX pass;
 - representative workforce and seating rules can be configured conversationally and through equivalent deterministic UI.
 
@@ -420,4 +426,4 @@ Phase 10 is complete only when:
 - Validate OpenAI strict-schema subset and Responses/Chat-Completions differences; Anthropic nested schema/`additionalProperties` behavior and immediate tool results; Gemini raw REST endpoint/auth/schema/stream semantics; and local endpoint tool/stream/parallel capability before enabling each adapter or feature.
 - Ollama 0.33.2 and LM Studio 0.4.23 are dated preset references, not eutheto dependencies or promises; test the actual configured endpoint/model.
 - Exact provider model names are intentionally not hard-coded as enduring defaults. Model catalog, context limits, usage fields, pricing display, and retirement handling come from current provider capability/configuration with safe fallbacks.
-- AI provider API churn cannot block core release: every enabled adapter must pass current conformance, while an excluded, failing, or stale adapter is disabled with accurate `Unavailable`/`Disabled` status and reason and deterministic functionality remains complete. CLI name, application ID, hosting organization, bundle extension, signing, and governance contacts remain separate unresolved gates.
+- AI provider API churn cannot block core release: every enabled adapter must pass current conformance, while an excluded, failing, or stale adapter is disabled with accurate `Unavailable`/`Disabled` status and reason and deterministic functionality remains complete. CLI name, application ID, hosting organization, signing, and governance contacts remain separate unresolved gates; `.eutheto` remains a proposed extension until the Phase-11 identity ADR closes.

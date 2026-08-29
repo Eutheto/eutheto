@@ -8,11 +8,11 @@ The public-MVP baseline is defined in [Phase 11](11-public-mvp-packaging-and-doc
 
 ## Source coverage
 
-This phase fully maps blueprint Section 20; immediate/later scope in Sections 6.4–6.5; Section 12.2's post-MVP pack model; Section 14.11; Sections 16.3–16.6; Sections 24.9 and 24.12; future targets and distribution options in Section 27; every branch in Section 30; Appendix C.8; and applicable validation/definition-of-done/stop-condition gates.
+This phase fully maps blueprint Section 20; immediate/later scope in Sections 6.4–6.5; Section 12.2's post-MVP pack model; Section 14.11; Sections 16.3–16.6; Sections 24.9 and 24.12; future targets and distribution options in Section 27; every branch in Section 30; Appendix C.8; applicable validation/definition-of-done/stop-condition gates; and the explicitly deferred opportunities in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) and [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md).
 
 ## Dependencies
 
-- The Phase-12 public MVP provides the authoritative headless Rust core, versioned scenario/domain/Planning-IR contracts, reversible commands, transactional persistence/migrations, independent verifier, workforce and seating packs, bundled OR-Tools worker, experimental Pumpkin gate, desktop, CLI, exports, security/privacy controls, and release pipeline.
+- The Phase-12 public MVP provides the authoritative headless Rust core, versioned internal/portable/result/share/Planning-IR contracts, reversible commands, transactional persistence/migrations, independent verifier, workforce and seating packs, bundled OR-Tools worker, experimental Pumpkin gate, desktop, CLI, editable scenario/full backup/add-or-replace restore, immutable offline HTML/PDF result sharing, security/privacy controls, and release pipeline.
 - Changes remain backward-compatible within semantic-version policy or intentionally trigger a versioned migration and compatibility notice.
 - Every new pack, rule, backend, service, provider capability, target, and serialized field completes the same definitions of done as public-MVP features.
 - Desktop and CLI remain first-class without accounts, servers, hosted services, telemetry, proprietary solvers, third-party packs, or AI.
@@ -28,12 +28,15 @@ This phase fully maps blueprint Section 20; immediate/later scope in Sections 6.
 - Portfolio execution shares one global budget, verifies each incumbent, compares authoritative score vectors, cancels safely, preserves provenance, and respects battery/resource constraints.
 - Telemetry, collaboration, servers, remote solves, AI gateways, and hosted services are optional. Opening, validating, solving locally, verifying, and exporting never require them.
 - Legal/regulatory presets remain non-authoritative starting templates unless separately maintained and jurisdiction-reviewed.
+- Post-MVP optimization may reuse only immutable, hash-addressed validated artifacts and accepted-result hints. Cache, precompute, warm start, portfolio, or adaptive policy never changes semantics, verification, revision identity, one-operation resource accounting, or truthful status/provenance.
+- Portable/report enhancements remain optional layers over current canonical schemas and purpose-built Share Result data. Encryption, signatures, automation, merge and hosting cannot weaken local unencrypted recovery, exact preview, atomicity, privacy, export/exit, or offline access.
 
 ### At/after-1.0 compatibility contract
 
 Every branch delivered at or after 1.0 must:
 
-- publish and honor a documented support window for scenario and bundle formats;
+- publish and honor a documented support window for scenario and portable bundle formats;
+- keep released migrations immutable, export current canonical formats, preserve declared nonsemantic extensions, and reject unknown required semantics safely;
 - preserve the public CLI and pack API according to semantic versioning;
 - announce deprecations and retain deprecated public behavior for the documented deprecation period before removal;
 - document worker-protocol compatibility ranges for each release or bundle workers that match the release's protocol exactly.
@@ -53,9 +56,11 @@ Every branch delivered at or after 1.0 must:
 - native specialized algorithms;
 - optional HiGHS, SCIP, MiniZinc, commercial-solver, and routing adapters;
 - collaboration/server and enterprise integrations;
+- the proposed [Transportation domain-pack plan](14-transportation-domain-pack.md), independently entered from completed Phase 12;
 - additional official domain packs;
 - richer imports and structured import assistance;
 - AI/local-provider improvements;
+- encrypted/automatic backup, signed bundles, selected multi-scenario portability, richer result-report profiles, annotations/branding, and optional hosted sharing;
 - optional anonymous diagnostics;
 - Linux arm64, Windows arm64, and additional package/repository targets;
 - optional hosted services that never gate the local product.
@@ -160,9 +165,11 @@ Pattern choice fits finite meaningful patterns; occurrence variables fit custom 
 8. Optimize.
 9. Review by section, teacher, room, cohort, and cycle day.
 10. Lock edits and repair.
-11. Project the cycle to the academic calendar and export.
+11. Project the cycle to the academic calendar;
+12. export editable portable data or full backup; and
+13. share a privacy-reviewed accepted timetable through accessible one-file HTML/PDF, CSV, or calendar output.
 
-Use purpose-built pattern editors and timetable grids, not a giant generic rule form. Imports provide templates, bounded streaming parsing, field mapping, preview, rejected-row reports, and transactional apply. Results provide status/score/evidence, filters, explanations, lock/repair, alternatives, calendar projection, and accessible printable/CSV/calendar exports. All paths support keyboard, screen reader, zoom/high-DPI, non-color cues, and measured virtualization.
+Use purpose-built pattern editors and timetable grids, not a giant generic rule form. Imports provide templates, bounded streaming parsing, field mapping, preview, rejected-row reports, and transactional apply. Results provide status/score/evidence, filters, explanations, lock/repair, alternatives, calendar projection, and accessible portable/Share Result/print/CSV/calendar exports. The school pack supplies current/historical Portable Scenario and Share Result conversion/migration fixtures with stable IDs and unknown-semantic rejection. All paths support keyboard, screen reader, zoom/high-DPI, non-color cues, exact share privacy preview, offline one-file HTML/PDF, and measured virtualization.
 
 ### Acceptance scenarios
 
@@ -186,19 +193,26 @@ Every entity, required rule, preference, pattern, formulation, view, import, pro
 
 ## Branch B — Solver portfolio and alternatives
 
-Deliver CP-SAT parameter-profile portfolios, concurrent OR-Tools/Pumpkin for exactly compatible subsets, verified-incumbent sharing where safe, local resource-aware scheduling, benchmark-trained deterministic routing, and explicit diversity objectives.
+Deliver CP-SAT parameter-profile portfolios, concurrent OR-Tools/Pumpkin for exactly compatible subsets, verified-incumbent sharing where safe, local resource-aware scheduling, benchmark-trained deterministic routing, explicit diversity objectives, and evidence-backed acceleration:
 
-- Allocate one total wall-clock/CPU/thread/memory/log budget across children.
-- Project, score, and independently verify each candidate.
-- Compare authoritative lexicographic score vectors, never backend objective strings.
-- Preserve backend/version/profile/seed/budget provenance.
-- Cancel losers safely and account for cooperative cancellation delay.
-- Avoid multiple heavy solvers by default on battery-constrained systems.
-- Alternatives declare diversity metrics and remain required-rule feasible.
-- Opaque remote AI never selects safety-critical backend behavior.
-- Cross-solver decomposition of one connected component is separate research requiring proof of independence and merge equivalence.
-
-Pumpkin 0.5.0 needs actual support matrix, dedicated-thread ownership, cooperative cancellation/time-limit evidence, verifier/contracts, and benchmarks before automatic routing. OR-Tools retains all K.3 gates.
+- allocate one total wall-clock/CPU/thread/memory/log budget across children;
+- project, score, and independently verify each candidate;
+- compare authoritative lexicographic score vectors, never backend objective strings;
+- preserve backend/version/profile/seed/budget/cache/hint provenance;
+- cancel losers safely and account for cooperative cancellation delay;
+- avoid multiple heavy solvers by default on battery-constrained systems;
+- let **Optimize further** start a new explicit user operation after the first accepted result rather than silently extending the prior budget;
+- prefetch likely calendar-derived travel pairs and cache recurring transit alternatives only through explicit provider/freshness/licensing policy; background work commits immutable snapshots and never hides network inside solve;
+- model transportation uncertainty as explicit versioned ranges/policies with domain/verifier semantics and honest confidence wording, not as an unrecorded routing heuristic;
+- reuse a prior accepted result only as a revision-checked search hint after a domain semantic-diff policy proves which assignments/locks remain eligible;
+- cache or precompute only immutable validated compilation/geometry/provider-snapshot artifacts keyed by every semantic input/version/policy hash, with measured invalidation and cold-path parity;
+- comparison/“what changed?” solves may reuse prior model state only when a semantic diff proves unaffected structure and cold rebuild equivalence;
+- scenario-specific learned heuristics may influence deterministic recorded search ordering only; they never replace constraints, scoring or verification and must pass reproducibility/privacy/regression gates;
+- introduce incremental solving or domain-aware dominance pruning only after differential/verifier evidence proves semantic equivalence and benchmarks prove material benefit;
+- allow adaptive budget/profile recommendations only when visible, deterministic from recorded inputs, bounded by the user’s selected operation, and never auto-spending a larger budget;
+- require alternatives to declare diversity metrics and remain required-rule feasible;
+- keep opaque remote AI outside backend selection and resource policy; and
+- treat cross-solver decomposition of one connected component as separate research requiring proof of independence and merge equivalence.
 
 ## Branch C — Deeper explainability
 
@@ -274,7 +288,9 @@ Optional directory/HRIS import, calendar sync, school information systems, event
 
 ## Branch J — Additional official packs
 
-Candidates:
+Household transportation is planned in detail as [Phase 14 — Transportation Domain Pack](14-transportation-domain-pack.md). Phase 14 is a sibling post-MVP branch entered directly from completed Phase 12; completing this Phase-13 umbrella is not its entry gate. Its calendar, routing, and optional transit inputs require provider-neutral application/infrastructure adapters to fetch, validate, normalize, and persist bounded immutable local snapshots before network-free pack compilation and verification. Provider selection, authentication/scopes, licensing, caching, privacy, persistence/export, and offline/manual behavior remain explicit Phase-14 gates; no provider is selected or shipped here.
+
+Other candidates:
 
 - volunteer scheduling;
 - conference/session scheduling;
@@ -288,7 +304,7 @@ Candidates:
 - housing/roommate assignment;
 - election-worker scheduling with jurisdictional caution.
 
-Select on reusable primitives, domain maintainers, and clear UX—not modelability alone. Define privacy, rules/preferences, imports/exports, IR needs, verifier, explanations, accessibility, benchmark corpus, practitioner review, migration, ownership, and disclaimers before commitment.
+Select other packs on reusable primitives, domain maintainers, and clear UX—not modelability alone. Define privacy, rules/preferences, imports/exports, IR needs, verifier, explanations, accessibility, benchmark corpus, practitioner review, migration, ownership, and disclaimers before commitment.
 
 ## Branch K — AI and import improvements
 
@@ -317,6 +333,20 @@ Each completes the same one-install, worker, license/SBOM/provenance, signing, u
 
 Potential update/catalog hosting, shared projects, remote solves, and managed AI gateways remain optional and never gate open-source core/desktop. Separate open-source capabilities from paid services. Require independent governance, tenancy, security/privacy/compliance, auth, retention/deletion, audit, availability/recovery, abuse controls, compatibility, export/exit, incident response, and disclosure.
 
+## Branch O — Portable data, backup, and sharing enhancements
+
+Enter each enhancement independently; none is required to keep opening, exporting, restoring, printing, or reading public-MVP data locally.
+
+- **Selected multi-scenario portability:** export/import an explicit reviewed set, preserving stable identity and collision policy without exposing the full library.
+- **Encrypted portable bundles:** use a reviewed versioned authenticated-encryption envelope, explicit key/passphrase recovery and wrong-key/corruption behavior, memory/work-factor limits, no plaintext temp leakage, and interoperability fixtures. Encryption never replaces manifest/schema validation after authenticated decryption.
+- **Automatic rotating backups:** opt-in schedules, bounded retention, storage/permission/full-disk states, visible health/last-success, no overlap with migration/restore, atomic snapshots, restore drills, and user-controlled destinations. Failure is surfaced; it never silently deletes the last known-good backup.
+- **Authenticity and integrity:** optional signatures identify exactly what is signed, signer trust/revocation/expiry and unsigned behavior; they never imply domain correctness, legal compliance, or result optimality.
+- **Semantic merge:** only after pack-defined field/entity conflict semantics, three-way ancestry, preview, validation, atomic apply/undo, migration ordering, and exhaustive collision/reference tests. Until then users choose Create copy, Replace, or Skip.
+- **Richer offline reports:** additional coordinator/custom profiles, annotations, branding, richer diagrams/maps and organization privacy policies only through versioned Share Result fields, exact preview, inert rendering, accessible equivalents, licensing/provenance and zero-required-network behavior.
+- **Hosted sharing:** optional publish/revoke/expire/access-control/audit/download/export/delete flows over the same immutable Share Result artifact. Define authentication, authorization, tenancy, encryption, abuse, retention, region, incident response and billing/availability boundaries; hosted access can fail without affecting the local file.
+
+Every enhancement has version/migration/downgrade behavior, bounded resource and cancellation policy, threat/privacy/licensing review, desktop/CLI parity where applicable, permanent compatibility/security/recovery fixtures, docs, and an exit path back to the local open format. Provider or third-party content remains excluded unless its redistribution terms and user choice permit inclusion.
+
 ## Ordered work packages
 
 ### Immediate wave
@@ -337,15 +367,16 @@ Potential update/catalog hosting, shared projects, remote solves, and managed AI
 11. WASM SDK, manager/catalog, conformance kit.
 12. Authenticated service/collaboration design.
 13. Enterprise adapters.
-14. Selected official domains.
+14. Other selected official domains; transportation is ordered separately in its sibling [Phase-14 plan](14-transportation-domain-pack.md).
 15. AI/import improvements.
 16. Optional diagnostics.
 17. Additional targets/distribution.
 18. Optional hosted services.
+19. Individually gated portable-data, automatic/encrypted-backup, authenticity, richer-report, and hosted-sharing enhancements.
 
 ## Tests and acceptance
 
-Every branch inherits Phase-12 definitions of done and adds backward compatibility/migrations; typed unknown-newer rejection; independent verifier coverage; cancellation/crash/malformed/resource/failure tests; exact-artifact license/SBOM/notices/provenance; property/differential/metamorphic/fuzz/benchmark/E2E/accessibility/usability evidence; accurate capability/stability/privacy labels; docs/ADRs/ownership/recovery; and offline/local behavior when optional components fail.
+Every branch inherits Phase-12 definitions of done and adds backward compatibility/permanent migrations; typed unknown-newer rejection; independent verifier coverage; cancellation/crash/malformed/resource/failure tests; exact-artifact license/SBOM/notices/provenance; property/differential/metamorphic/fuzz/benchmark/E2E/accessibility/usability evidence; accurate capability/stability/privacy labels; docs/ADRs/ownership/recovery; exact portable/share preview and offline/local behavior when optional components fail.
 
 ## Risks and failure handling
 
@@ -361,6 +392,8 @@ Every branch inherits Phase-12 definitions of done and adds backward compatibili
 | Sandbox needs ambient authority | Redesign a narrow mediated capability with disclosure/tests; absent by default. |
 | Service reuses Tauri IPC | Reject; design separate authenticated/authorized/audited API. |
 | Hosted feature becomes local dependency | Restore local/offline parity or do not ship. |
+| Cache/warm start changes meaning or hides budget | Hash every semantic input, retain cold-path parity, verify every candidate, account one explicit operation budget, and require measured equivalence/regression evidence. |
+| Automated/encrypted/hosted portability traps or loses data | Preserve local current-format export, authenticated/versioned envelopes, visible backup health, restore drills, exact preview, revocation/deletion/export and documented exit. |
 | AI/import needs arbitrary file/shell | Redesign typed scoped tools. |
 | Telemetry contains identifiers | Block collection/release and redesign. |
 | Target lacks clean-machine evidence | Do not advertise it. |
@@ -368,7 +401,7 @@ Every branch inherits Phase-12 definitions of done and adds backward compatibili
 
 ## Exit gates
 
-The immediate milestone exits only when the complete school contract and nine scenarios pass; explanation/portfolio features preserve verification, certainty, and resource invariants; diversity is explicit and accurately scored; the Nuxt site is separate and accessible; formats migrate safely; and exact artifacts pass Phase-12 gates.
+The immediate milestone exits only when the complete school contract and nine scenarios pass; school Portable Scenario/Share Result migrations and offline reports meet Phase-12 contracts; explanation/portfolio features preserve verification, certainty, one-budget/resource and cache/hint provenance invariants; diversity is explicit and accurately scored; the Nuxt site is separate and accessible; formats migrate safely; and exact artifacts pass Phase-12 gates.
 
 A later branch exits only when its contract, tests, security/privacy/license review, migration/compatibility, accessibility/usability, packaging/operations, ownership/docs, and rollback/removal path are complete. One branch never makes another an implicit commitment.
 

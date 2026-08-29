@@ -8,12 +8,12 @@ The final project name and Rust/npm namespace are `eutheto`: Rust crates use `eu
 
 - working CLI executable name: `optimizer`;
 - reverse-domain desktop application identifiers, including distinct stable/beta identifiers;
-- portable project file extension (the working example `.optplan` is not final);
+- portable project file extension (`.eutheto` is the current proposal, but is not final until its ADR closes);
 - Git hosting organization and canonical repository URL;
 - governance and private security-reporting contacts;
 - code-signing/notarization identities, custody, rotation, protected environments, and release-signing/attestation choices.
 
-Until each gate closes, documents may use `optimizer` and `.optplan` only as explicitly labelled working examples. No public schema, installer, updater channel, shell integration, or file association may freeze them accidentally.
+Until each gate closes, documents may use `optimizer` only as an explicitly labelled working example and `.eutheto` only as a proposed extension. No public schema, installer, updater channel, shell integration, or file association may freeze them accidentally.
 
 The source-of-truth order is:
 
@@ -24,6 +24,8 @@ The source-of-truth order is:
 5. incidental code comments.
 
 Resolve conflicts by changing the authoritative source and its tests together. [assumptions.md](assumptions.md) records dated version/evidence decisions; it never replaces a requirement in a phase file.
+
+Cross-cutting roadmap contracts complement the numbered phase files: [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) defines provisional latency, budget, progress, and benchmark policy; [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md) defines implementation-independent bundle, import/restore, and privacy-filtered report boundaries. Each contract identifies the phase that owns implementation and release evidence.
 
 ## Product vision
 
@@ -38,10 +40,10 @@ The platform comprises:
 
 - a fast Rust core for scenario commands, validation, routing, solve orchestration, independent verification, explanations, persistence, import/export, a reusable library API, and a first-class CLI;
 - a Tauri 2 desktop client using Vue 3, TypeScript, and Vite;
-- domain packs that translate workforce scheduling, individual-seat event seating, school timetabling, and future problem families into a solver-neutral planning IR;
+- domain packs that translate workforce scheduling, individual-seat event seating, school timetabling, planned post-MVP household transportation, and future problem families into a solver-neutral planning IR;
 - an optional provider-neutral AI interface that can act only through typed, validated, reviewable, reversible application commands.
 
-The public MVP contains production workforce and event-seating packs, bundled OR-Tools CP-SAT workers for supported platforms, experimental Pumpkin only for proven-compatible subsets, local persistence/import/export/undo/redo/repair/comparison/explanations, optional BYOK/local AI with preview-and-apply changes, cross-platform artifacts, examples, notices, SBOMs, checksums, and signed update metadata. School timetabling is the first major post-MVP pack and influences foundation contracts without delaying the MVP.
+The public MVP contains production workforce and event-seating packs, bundled OR-Tools CP-SAT workers for supported platforms, experimental Pumpkin only for proven-compatible subsets, local persistence, proposed `.eutheto` editable scenario export/import and full-backup/add-or-replace restore, immutable privacy-filtered offline HTML/PDF result sharing, undo/redo/repair/comparison/explanations, optional BYOK/local AI with preview-and-apply changes, cross-platform artifacts, examples, notices, SBOMs, checksums, and signed update metadata. School timetabling is the first major post-MVP pack and influences foundation contracts without delaying the MVP. [Phase 14](14-transportation-domain-pack.md) is the detailed proposed post-MVP plan for household transportation; it is not current product behavior and selects no calendar, routing, or transit provider.
 
 ## Product principles
 
@@ -61,6 +63,7 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 - Equivalent optimization through the Rust library, working CLI, and desktop application.
 - Workforce scheduling with clinic/on-call coupling, eligibility, availability, coverage, overlap, rest, fixed/rolling hours, consecutive work, skill mix, travel, fairness, preferences, locks, and repair.
 - Individual-seat event seating with deterministic integer geometry, table/seat adjacency, orientation, physical proximity and distance, accessibility, same/different table, exclusions, and locks.
+- Planned post-MVP household transportation with calendar-derived commitments, vehicle/driver coordination, carpools, pickups, drop-offs, strict no-transit-first solving with per-person opt-in transit fallback, and independent verification.
 - Solver-neutral planning representation and stable routing to OR-Tools, Pumpkin, native algorithms, and future reviewed backends.
 - Independent verification and authoritative score recomputation for every accepted candidate.
 - Domain-language explanations for validation, infeasibility, assignment, trade-off, comparison, and repair changes.
@@ -91,13 +94,16 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 - Desktop forms, imports, CLI, and AI use the same transactional, revisioned command API and undo/redo journal.
 - Worker absence, mismatch, malformed output, crash, timeout, or cancellation cannot corrupt scenarios or crash the desktop process.
 - Unsupported backends are blocked by an exact compatibility report before solving.
-- Database, bundle, scenario, pack, and protocol migrations preserve every supported format.
+- Database, bundle, Portable Scenario, Result, Share Result, pack, and protocol migrations preserve every supported format and reject unknown required semantics safely.
+- Fresh-install full-backup restore, add/replace recovery, collision handling, malicious archive rejection, and atomic failure behavior pass permanent fixtures.
+- One-file HTML and direct PDF are built only from accepted immutable results and the exact privacy preview; core meaning works from `file://` with no network and accessible list/table parity.
 - Primary workforce and seating flows are keyboard-complete.
 - The application remains fully useful with AI disabled.
+- Representative warm and cold solves meet the calibrated [performance and solver UX targets](performance-and-solver-ux-targets.md), preserve UI responsiveness, and report limit/proof status accurately.
 
 ### Product
 
-A first-time user can create a workforce scenario, add/import people, define work and coverage, add required rules and preferences through plain-language guided controls, validate and optimize, understand whether requirements passed and why an assignment occurred, change a rule and repair, and export—without learning operations-research terminology.
+A first-time user can create a workforce scenario, add/import people, define work and coverage, add required rules and preferences through plain-language guided controls, validate and optimize, understand whether requirements passed and why an assignment occurred, change a rule and repair, distinguish editable export from full backup and immutable sharing, restore safely, and create a privacy-reviewed offline result report—without learning operations-research terminology.
 
 ## Approved architecture decisions
 
@@ -180,6 +186,9 @@ Protect these invariants in every phase:
 - Unknown/newer schemas and protocols fail safely; unknown extension data is preserved where practical; public data is never silently lost.
 - Secrets never enter Vue, logs, SQLite, exports, diagnostics, Nix derivations, repository files, or ordinary IPC responses.
 - Imported files and bundles are untrusted and bounded; parses/migrations finish before one atomic commit.
+- Portable data is a versioned implementation-independent schema, never a SQLite dump. Export writes the current schema; import migrates supported history and rejects unknown semantics before preview and one atomic commit.
+- Editable scenario export/full backup and immutable result sharing are distinct. A self-contained report is built only from a privacy-filtered Share Result Model tied to an accepted result; it never defaults to the source scenario or requires a network/server.
+- Every solve and nested fallback/diagnostic operation consumes one bounded parent budget; an unverified incumbent, provider call, AI response, or optimality proof never blocks access to an already verified result.
 - AI is optional and cannot exceed typed command/query permissions or skip preview/apply.
 - Official artifacts remain one-install and comply with the permissive license policy.
 - Accessibility has equivalent keyboard/list paths; canvas is never the only representation.
@@ -210,10 +219,13 @@ Pause work and write an ADR before continuing if a rule cannot be independently 
                                                                workforce and seating flows]
 
 00–10 all complete ──> 11 packaging/docs ──> 12 stabilization/release
-                                               └─> 13 post-MVP school/platform
+                                               ├─> 13 post-MVP school/platform
+                                               └─> 14 post-MVP transportation
 ```
 
 The arrows are phase-entry gates, not merely suggested sequencing: transitive prerequisites remain mandatory where a later node names only its immediate predecessor. Within an entered phase, genuinely independent work packages may proceed in parallel after the contracts they consume are stable, but parallel preparation never waives an entry gate or permits an integration/exit claim early.
+
+Phase 13 and Phase 14 are sibling post-MVP branches entered directly from completed Phase 12. Neither branch requires completion of the other.
 
 After contracts exist, prefer complete thin paths—one person, one shift, coverage → compile → solve → verify → display → edit → undo—over horizontal mock layers. Add each official rule with schema/migration analysis, command DTO/validation, plain-language editor, fast/full validation, planning compilation, backend capability/translation tests, independent verification, provenance/explanation, appropriate AI schema, CLI/document example, edge/infeasible fixtures, user limitations, and model/benchmark review. Solver formulation alone is never “done.”
 
@@ -244,7 +256,11 @@ Use trunk-based development, short-lived branches, protected `main`, and tags fr
 | Counterfactual | Temporary diagnostic solve forcing/forbidding a choice to measure feasibility or score effect. |
 | Domain command | Typed, validated, reversible scenario mutation. |
 | View model | Purpose-built UI/CLI response, not authoritative storage. |
-| Bundle | Portable archive using the unresolved public extension; `.optplan` is the working example. |
+| Bundle | Versioned, bounded portable archive of scenario meaning and permitted assets; `.eutheto` is the proposed public extension pending its identity ADR. |
+| Portable Scenario Model | Strict implementation-independent semantic representation used inside portable bundles; separately versioned from SQLite/internal persistence. |
+| Result Model | Immutable accepted output tied to one scenario revision, verification checksum, score, and reproducibility metadata. |
+| Share Result Model | Versioned privacy-filtered presentation representation built from an accepted Result Model, not the source Scenario Model. |
+| Restore | Consequential backup operation that adds to or atomically replaces portable library data under explicit preview, confirmation, and safety-backup policy. |
 | Model hash | Canonical digest of planning meaning, versions, compiler/adapter, and relevant options. |
 | Optimal | Backend proved no better result for its exact encoded objective under its proof semantics, and the candidate verified. |
 | Feasible | A verified required-rule-compliant solution exists, without a proof of optimality. |
@@ -260,6 +276,13 @@ A backend has approved license/distribution, visible pinned version, implemented
 A desktop flow includes normal, empty, loading, stale, error, and offline states; keyboard and accessible focus/name/announcement behavior; safe optimistic/transient state; conflict and undo/redo semantics; large-fixture profiling; representative usability evidence; and current screenshots/help.
 
 An AI capability has a deterministic non-AI equivalent, typed allowlisted risk-classified tools, preview/apply writes, stale-revision and injection/malformed-call tests, documented secret/data scope, state-safe provider failures, inspectable deterministic evidence, and a fake-provider CI path.
+
+## Cross-cutting roadmap specifications
+
+| Specification | Contract |
+|---|---|
+| [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) | Provisional end-to-end latency objectives, one-budget solve policy, responsive progress behavior, instrumentation, representative benchmark packs, and Phase-12 calibration. |
+| [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md) | Proposed `.eutheto` bundle/version/migration contract, bounded import and atomic restore, immutable privacy-filtered HTML/PDF result sharing, security evidence, and phase ownership. |
 
 ## Phase navigation
 
@@ -279,6 +302,7 @@ An AI capability has a deterministic non-AI equivalent, typed allowlisted risk-c
 | [11](11-public-mvp-packaging-and-documentation.md) | Public-MVP packaging, updater, supply-chain artifacts, and documentation. |
 | [12](12-stabilization-and-public-release-gate.md) | Correctness, usability, accessibility, security, performance, compliance, and public release gate. |
 | [13](13-post-mvp-roadmap.md) | School timetabling and explicitly gated platform expansion. |
+| [14](14-transportation-domain-pack.md) | Proposed post-MVP household transportation pack with provider-neutral immutable snapshots, verified planning, and gated calendar/routing/transit adapters. |
 
 ## Complete blueprint coverage matrix
 
@@ -291,21 +315,22 @@ Every numbered source section and appendix is assigned below. Shared sections ar
 | §3 Product vision | This index; phases 06, 07, 09, 10 for user-facing realization. |
 | §4 Goals/non-goals/success | This index; phase 12 final verification. |
 | §5 ADR-001–018 | This index; phase 00 creates ADR files; affected phases enforce them. |
-| §6 Delivery phases | This index and phases 00–13. |
+| §6 Delivery phases | This index and phases 00–14. |
 | §7 System architecture | This index; phases 01–04 enforce process/data/dependency boundaries. |
 | §8 Monorepo layout | Phase 00. |
 | §9 Core Rust architecture | Phase 01; solve/backend option contracts continue in phase 02. |
 | §10 Commands, undo/redo, audit | Phase 01; AI batch use in phase 10. |
-| §11 Persistence, files, migrations | Phase 01; domain migrations in phases 02/05/09/13 and release recovery in 12. |
-| §12 Domain-pack architecture | Phase 02; official packs in phases 05/09/13. |
-| §13 Domain model/planning IR | Phase 02; compiler implementations in 05/09/13. |
-| §14 Solver backend/routing | Phase 02 contracts; phases 03/08 implementations and 13 portfolio work. |
+| §11 Persistence, files, migrations | Phase 01; domain migrations in phases 02/05/09/13/14 and release recovery in 12. |
+| §12 Domain-pack architecture | Phase 02; official packs in phases 05/09/13/14. |
+| §13 Domain model/planning IR | Phase 02; compiler implementations in 05/09/13/14. |
+| §14 Solver backend/routing | Phase 02 contracts; phases 03/08 implementations, phase 13 portfolio work, and Phase 14's verified two-stage transportation solve. |
 | §15 OR-Tools worker | Phase 03; packaging in 11 and stabilization in 12. |
 | §16 Pumpkin/future backends | Phase 08; future backends in 13. |
-| §17 Verification/scoring/explanations | Phase 04; domain realizations in 05/07/09/13. |
+| §17 Verification/scoring/explanations | Phase 04; domain realizations in 05/07/09/13/14. |
 | §18 Workforce pack | Phases 05–07. |
 | §19 Seating pack | Phase 09. |
 | §20 School timetabling | Phase 13; foundation IR implications in phase 02. |
+| Transportation domain-pack blueprint (2026-08-29) | [Phase 14](14-transportation-domain-pack.md); assumptions and provider/integration gates in `assumptions.md` K.9. |
 | §21 Tauri/Vue architecture | Phase 06; shell/API foundation in 00–01; seating/AI surfaces in 09–10. |
 | §22 UX specification | Phases 06–07, 09–10; final usability gates in 12. |
 | §23 Optional AI | Phase 10; deterministic boundaries established in 01–02/04. |
@@ -316,18 +341,18 @@ Every numbered source section and appendix is assigned below. Shared sections ar
 | §28 Licensing/governance/contribution | Phase 00 foundation; phases 11–12 exact-artifact compliance; phase 13 future dependency review. |
 | §29 MVP implementation plan | Phases 00–12 respectively. |
 | §30 Post-MVP roadmap | Phase 13. |
-| §31 Sequencing/discipline/compatibility | This index and every phase; rule checklist primarily 05, 07, 09, 13. |
+| §31 Sequencing/discipline/compatibility | This index and every phase; rule checklist primarily 05, 07, 09, 13, and 14. |
 | §32 Risks/mitigations/stop conditions | This index and each phase risk section. |
 | §33 Definitions of done | This index; each phase exit gate; public release proof in phase 12. |
 | Appendix A Glossary | This index; phases 01–02 define serialized/API forms. |
 | Appendix B Dependencies | Phase 00 version/role matrix; adopting phases own exact feature and license validation. |
-| Appendix C CLI | Phase 01 base catalog; solve/solution/backend behavior in 02–09/13. |
+| Appendix C CLI | Phase 01 base catalog; solve/solution/backend behavior in 02–09/13/14. |
 | Appendix D Tauri API | Phase 01 base/generated boundary; domain/solve/solution/AI subsets in 06–10. |
 | Appendix E Worker protocol | Phase 03. |
 | Appendix F Workforce example | Phases 05–07. |
 | Appendix G Seating example | Phase 09. |
 | Appendix H Coding/architecture standards | Phase 00 configures enforcement; all phases comply. |
-| Appendix I Backlog map | Phases 00–13 map their named work packages to the corresponding epics. |
+| Appendix I Backlog map | Phases 00–14 map their named work packages to the corresponding epics. |
 | Appendix J Research references | Phase 00 evidence baseline; solver/desktop/AI/release owners re-verify current primary sources. |
 | Appendix K Implementation gates | `assumptions.md` ledger plus relevant phase assumption/version gates; phase 12 closes release-readiness gates. |
-| Appendix L Handoff | This index's dependency graph and phases 00–13. |
+| Appendix L Handoff | This index's dependency graph and phases 00–14. |

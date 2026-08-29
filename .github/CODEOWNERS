@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# The approved review principal for this repository is the maintainers team.
+
+# Default ownership.
+* @Eutheto/maintainers
+
+# Repository automation and dependency policy.
+/.github/ @Eutheto/maintainers
+/.github/dependabot.yml @Eutheto/maintainers
+/.githooks/ @Eutheto/maintainers
+/Justfile @Eutheto/maintainers
+/xtask/ @Eutheto/maintainers
+
+# Reproducible environments and immutable dependency inputs.
+/.cargo/ @Eutheto/maintainers
+/.envrc @Eutheto/maintainers
+/flake.nix @Eutheto/maintainers
+/flake.lock @Eutheto/maintainers
+/nix/ @Eutheto/maintainers
+/rust-toolchain.toml @Eutheto/maintainers
+/Cargo.toml @Eutheto/maintainers
+/Cargo.lock @Eutheto/maintainers
+/package.json @Eutheto/maintainers
+/pnpm-lock.yaml @Eutheto/maintainers
+/pnpm-workspace.yaml @Eutheto/maintainers
+
+# Schemas, public formats, migrations, generated contracts, and worker protocol.
+/protocol/ @Eutheto/maintainers
+/migrations/ @Eutheto/maintainers
+/crates/eutheto-protocol/ @Eutheto/maintainers
+/workers/ @Eutheto/maintainers
+/tests/protocol/ @Eutheto/maintainers
+/tests/migration/ @Eutheto/maintainers
+/docs/architecture/compatibility-policy.md @Eutheto/maintainers
+/docs/architecture/worker-protocol.md @Eutheto/maintainers
+/docs/architecture/generated-artifacts.md @Eutheto/maintainers
+
+# Parsers and other untrusted-input boundaries.
+/crates/eutheto-import/ @Eutheto/maintainers
+/crates/eutheto-export/ @Eutheto/maintainers
+/crates/eutheto-ai/ @Eutheto/maintainers
+/tests/security/ @Eutheto/maintainers
+/docs/threat-model.md @Eutheto/maintainers
+
+# Tauri command registration, capabilities, permissions, and application policy.
+/apps/desktop/src-tauri/build.rs @Eutheto/maintainers
+/apps/desktop/src-tauri/Cargo.toml @Eutheto/maintainers
+/apps/desktop/src-tauri/tauri.conf.json @Eutheto/maintainers
+/apps/desktop/src-tauri/src/ @Eutheto/maintainers
+/apps/desktop/src-tauri/capabilities/ @Eutheto/maintainers
+/apps/desktop/src-tauri/permissions/ @Eutheto/maintainers
+
+# Credentials, provider authentication, updater, signing, and release custody.
+/SECURITY.md @Eutheto/maintainers
+/GOVERNANCE.md @Eutheto/maintainers
+/docs/adr/010-local-state-and-credentials.md @Eutheto/maintainers
+/docs/adr/014-provider-authentication.md @Eutheto/maintainers
+/crates/eutheto-store/ @Eutheto/maintainers
+/docs/releases.md @Eutheto/maintainers
+/docs/adr/016-release-evidence.md @Eutheto/maintainers
+/docs/architecture/identity-gates.md @Eutheto/maintainers
+/.github/workflows/release.yml @Eutheto/maintainers
+/nix/release-shell.nix @Eutheto/maintainers
+/nix/release-tooling.nix @Eutheto/maintainers
+/xtask/src/release.rs @Eutheto/maintainers
+
+# License, notice, SBOM, and supply-chain policy and inputs.
+/LICENSE @Eutheto/maintainers
+/NOTICE @Eutheto/maintainers
+/THIRD_PARTY_LICENSES/ @Eutheto/maintainers
+/THIRD_PARTY_NOTICES.md @Eutheto/maintainers
+/REUSE.toml @Eutheto/maintainers
+/deny.toml @Eutheto/maintainers
+/about.toml @Eutheto/maintainers
+/xtask/supply-chain-inputs.json @Eutheto/maintainers
+/xtask/src/supply_chain.rs @Eutheto/maintainers

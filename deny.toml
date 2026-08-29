@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+
+[graph]
+all-features = true
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
+
+[advisories]
+ignore = [
+  # Reviewed 2026-08-29, owner @Eutheto/maintainers, expires 2026-11-30.
+  # Tauri 2.11.5's Linux runtime requires the unmaintained GTK3 bindings and
+  # urlpattern dependency family; no compatible maintained replacement exists.
+  { id = "RUSTSEC-2024-0411", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0412", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0413", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0414", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0415", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0416", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0417", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0418", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0419", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0420", reason = "Tauri 2.11.5 Linux GTK3 transitive; no safe compatible upgrade; review by 2026-11-30" },
+  { id = "RUSTSEC-2024-0370", reason = "Tauri GTK3 macro transitive; unmaintained without known vulnerability; review by 2026-11-30" },
+  { id = "RUSTSEC-2025-0075", reason = "Tauri urlpattern transitive; unmaintained without known vulnerability; review by 2026-11-30" },
+  { id = "RUSTSEC-2025-0080", reason = "Tauri urlpattern transitive; unmaintained without known vulnerability; review by 2026-11-30" },
+  { id = "RUSTSEC-2025-0081", reason = "Tauri urlpattern transitive; unmaintained without known vulnerability; review by 2026-11-30" },
+  { id = "RUSTSEC-2025-0098", reason = "Tauri urlpattern transitive; unmaintained without known vulnerability; review by 2026-11-30" },
+  { id = "RUSTSEC-2025-0100", reason = "Tauri urlpattern transitive; unmaintained without known vulnerability; review by 2026-11-30" },
+  # The locked graph contains no call to glib::VariantStrIter; glib 0.20 is
+  # incompatible with Tauri's GTK3 line. Re-review on any Tauri/lock change.
+  { id = "RUSTSEC-2024-0429", reason = "affected VariantStrIter path is unused in the locked graph; review by 2026-11-30" },
+]
+
+[licenses]
+# This is an acceptance policy, not a legal conclusion. Licenses that are not
+# listed here (including copyleft and unknown/custom terms) require an explicit,
+# package-scoped review before they may enter the lockfile.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "BSL-1.0",
+  "CC0-1.0",
+]
+confidence-threshold = 0.93
+# These exact MPL-2.0 crates are reviewed transitive Tauri implementation or
+# platform helpers. Acceptance is package/version scoped; file-level notices
+# and shipped-artifact obligations remain release review gates.
+exceptions = [
+  { allow = ["MPL-2.0"], crate = "cssparser@0.36.0" },
+  { allow = ["MPL-2.0"], crate = "cssparser-macros@0.6.1" },
+  { allow = ["MPL-2.0"], crate = "dtoa-short@0.3.5" },
+  { allow = ["MPL-2.0"], crate = "option-ext@0.2.0" },
+  { allow = ["MPL-2.0"], crate = "selectors@0.36.1" },
+]
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

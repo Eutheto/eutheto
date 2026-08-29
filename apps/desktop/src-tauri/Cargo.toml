@@ -1,0 +1,28 @@
+[package]
+name = "eutheto-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+# `dev.eutheto.phase00.desktop` is a non-public Phase-00 development identifier.
+# It is not the gated production reverse-domain application identifier.
+[package.metadata.eutheto]
+development-identifier = "dev.eutheto.phase00.desktop"
+
+[lints]
+workspace = true
+
+[lib]
+name = "eutheto_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+eutheto-core = { path = "../../../crates/eutheto-core" }
+eutheto-types = { path = "../../../crates/eutheto-types" }
+tauri = { version = "=2.11.5", features = [] }

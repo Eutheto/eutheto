@@ -4,14 +4,23 @@
 
 This dated ledger records implementation-time facts, corrections, unresolved gates, and evidence. It does **not** replace requirements in the phase roadmaps. Requirements remain in the applicable phase file; this ledger answers “what was verified, what value controls, who closes the gate, and from which evidence?”
 
-- **Blueprint:** `/home/zeb/Downloads/open-source-constraint-optimizer-development-mvp-post-mvp-blueprint.md`
+- **Blueprint source:** `open-source-constraint-optimizer-development-mvp-post-mvp-blueprint.md`
 - **Blueprint SHA-256:** `ed094402135dc8e7a1c66b640484b4a4643e631024439016e48b895def00d13e`
 - **Verification date:** 2026-08-29
+- **Transportation blueprint source:** `eutheto-transportation-domain-pack-mvp-post-mvp.md`
+- **Transportation blueprint SHA-256:** `9e269a173c217fcd6d08d4afaab9d82da3da43acda428b21c4c081cb353783e0`
+- **Transportation blueprint date:** 2026-08-29
+- **Performance/solver UX source:** `eutheto-performance-ux-targets.md`
+- **Performance/solver UX SHA-256:** `f5ad3479f76e22a16ca355abd8f3323add9f853003d9590c97d3080c2a3c389a`
+- **Performance/solver UX date:** 2026-08-29
+- **Export/import/backup/sharing source:** `eutheto-export-import-backup-sharing-spec.md`
+- **Export/import/backup/sharing SHA-256:** `679efcf2beb4c27a60ba36fae28870d51900d28180c34a17665c57dd0c7e8181`
+- **Export/import/backup/sharing date:** 2026-08-29
 - **Final project name:** `eutheto`
 - **Version policy:** use the latest stable supported version. If newest is incompatible or has a known blocker, use the newest compatible/safe stable and record the reason. Exact dependency/tool/action pins and integrity hashes are committed in Phase 0 lockfiles/toolchain files.
 - **Conflict rule:** direct npm registry, crates.io API, and GitHub releases API evidence recorded in the dated ledgers below controls over narrative agent reports. Conflicting values are not retained as alternatives.
 
-Related delivery files: [Phase 11 packaging/documentation](11-public-mvp-packaging-and-documentation.md), [Phase 12 stabilization/release](12-stabilization-and-public-release-gate.md), and [Phase 13 post-MVP](13-post-mvp-roadmap.md).
+Related delivery files: [Performance and Solver UX Targets](performance-and-solver-ux-targets.md), [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md), [Phase 11 packaging/documentation](11-public-mvp-packaging-and-documentation.md), [Phase 12 stabilization/release](12-stabilization-and-public-release-gate.md), [Phase 13 post-MVP](13-post-mvp-roadmap.md), and [Phase 14 transportation](14-transportation-domain-pack.md).
 
 ## Final and unresolved identity decisions
 
@@ -22,16 +31,28 @@ Related delivery files: [Phase 11 packaging/documentation](11-public-mvp-packagi
 | Working CLI name | **Unresolved: `optimizer` is provisional, not final** | K.1 / Phase 0; must close before stable CLI docs and service mode |
 | Crate/package namespace and prefixes | **Resolved: `eutheto` namespace prefix**; Rust crates use `eutheto-*` and npm packages use `@eutheto/*`. The exact crate/package inventory names remain Phase-0 initialization decisions. | K.1 / Phase 0 |
 | Reverse-domain application ID | **Unresolved** | K.1 / Phase 0 and Phase 11 signing/updater |
-| Project file extension | **Unresolved**; `.optplan` is a blueprint working example, not a final decision | K.1 / Phase 0 and persistence/import docs |
+| Portable file extension/media type/association | **Unresolved; `.eutheto` is the current proposal, not a public decision.** `.optplan` is no longer the working proposal. | Phase 11 identity ADR and Phase 12 cross-platform open/inspect/package evidence |
 | Git hosting organization | **Unresolved** | K.1 / Phase 0 and Phase 11 release URLs |
 | Governance/security contacts | **Unresolved**; do not fabricate addresses | K.1 / Phase 11 governance/security |
 | Stable/beta application identifiers | **Unresolved** | K.1 / Phase 11 updater/signing continuity |
 | Release signing/notarization/key custody | **Unresolved choices; required before release** | K.1/K.5/K.8 / Phase 11–12 |
 
+## Cross-cutting proposal decisions
+
+| Decision | Current status/value | Owner/gate |
+|---|---|---|
+| Performance targets | **Provisional engineering objectives, not public guarantees:** small warm <500 ms; typical warm target <1 s and usually <3 s cold; p95 normal <5 s; moderate majority <5 s and expected <10 s; bounded stress/pathological behavior. | [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); Phase 12 calibrates public-MVP corpus/reference machine and Phase 14 recalibrates transportation. |
+| Interactive solver budget | **Initial experiment:** approximately 2–3 s of CP-SAT within a 3–5 s end-to-end Balanced budget; Quick/Deep remain bounded and never imply proof. | Phases 02–08 implement one parent budget/status semantics; Phase 12 selects released defaults from evidence. |
+| Performance reference hardware | **Provisional class:** ordinary 4–8-core, 16 GiB consumer machine, no dedicated GPU requirement. | Phase 12 records the exact machine, power mode, runner image, sample/percentile policy, corpus, cache state, and regression thresholds. |
+| Portable compatibility policy | **MVP proposal:** internal SQLite/document storage is not interchange; current builds export only current canonical Portable Scenario/Result/Share Result schemas; released historical inputs migrate sequentially; unknown required semantics/newer versions fail before mutation; declared nonsemantic extensions preserve. | [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md); Phases 01–02 implement contracts, 05/07/09 specialize official packs, 11–12 freeze/release. |
+| MVP portable scope | **Scenario bundle plus full-library backup/restore:** stable IDs and canonical units; Create copy/Replace/Skip scenario collisions; Add/Replace full restore with attempted pre-restore safety backup; no semantic merge, encryption, automatic backup, signatures, or hosted service in MVP. | Phases 01/06 own services/UI; Phase 12 owns permanent migration, malicious-archive, atomicity, and fresh-install recovery evidence. |
+| MVP result sharing | **One privacy-filtered immutable Share Result Model:** one-file offline `file://` HTML is default; direct PDF is secondary but required; exact preview drives both; zero required network; accessible list/table parity; accepted-result provenance. | Phases 07/09 implement shared renderer and official-pack payloads; Phases 11–12 close browser, CSP, privacy, print/PDF, and release evidence. |
+
 ## Controlling recommendations
 
 | Item | Latest observed | Controlling recommendation | Reason and owner |
 |---|---:|---:|---|
+| nixpkgs | `nixos-unstable` snapshot identifies as 26.11 | **`nixos-25.11`** | The 26.11 unstable snapshot dropped `x86_64-darwin`, which Phase 00 still requires alongside the other three flake systems. `nixos-25.11` is the newest line verified compatible with that four-system evaluation contract, not a claim about the newest nixpkgs generally. Re-evaluate when a newer supported line restores `x86_64-darwin` or project support policy closes that target. |
 | Rust | 1.98.0 | **1.97.1** | Rust 1.98.0 has a P-critical trait-object vtable miscompilation; re-evaluate when 1.98.1 or newer fixed stable exists and passes Phase 0/12 target suites. [Rust releases](https://blog.rust-lang.org/releases/) and [issue #161441](https://github.com/rust-lang/rust/issues/161441). |
 | Node.js | 26.8.1 Current | **24.20.0 LTS** | Production uses current LTS; re-evaluate Node 26 when it becomes LTS. Phase 0 owns engines/Nix. [Node distributions](https://nodejs.org/dist/). |
 | pnpm | 11.24.0 | **11.24.0** | Direct registry current stable supports Node `>=22.13`; replaces blueprint/report pnpm-10 guidance. Phase 0 owns lock/integrity and Nix availability. [npm](https://www.npmjs.com/package/pnpm). |
@@ -40,15 +61,39 @@ Related delivery files: [Phase 11 packaging/documentation](11-public-mvp-packagi
 | OR-Tools | 9.15 | **9.15 after K.3 gates** | Platform build, benchmark, CMake, linkage, protocol, SBOM/license, callback, and assumption-core gates remain. Phase 3 owns pin; Phase 11/12 owns exact artifacts. [release](https://github.com/google/or-tools/releases/tag/v9.15). |
 | Pumpkin | 0.5.0 | **0.5.0 after K.4 gates** | Actual support matrix, dedicated-thread ownership, cooperative cancellation/time limits, verifier/contracts, and benchmarks precede auto-routing. Phase 8 owns. [crates.io](https://crates.io/crates/pumpkin-solver). |
 
+### Node 24.20.0 Nix provenance
+
+The locked `nixos-25.11` graph exposes Node 24.18.0, while `nixos-26.05`—the last release line exposing `x86_64-darwin`—exposes Node 24.19.0. Neither satisfies the exact Phase-00 Node 24.20.0 contract. Until nixpkgs catches up without dropping a supported system, `nix/tooling.nix` uses the official Node binary archives as fixed-output inputs and patches only the Linux ELF interpreter/runtime references through Nix.
+
+The controlling hashes are the entries in Node's official [`v24.20.0/SHASUMS256.txt`](https://nodejs.org/dist/v24.20.0/SHASUMS256.txt), verified on 2026-08-29:
+
+| Nix system | Official archive | SHA-256 |
+|---|---|---|
+| `x86_64-linux` | `node-v24.20.0-linux-x64.tar.xz` | `2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2` |
+| `aarch64-linux` | `node-v24.20.0-linux-arm64.tar.xz` | `5f4ddab610c1ab2016b3c227cebdbf6d9495161487e4739c7b90090595f465f7` |
+| `x86_64-darwin` | `node-v24.20.0-darwin-x64.tar.xz` | `26fc30891004603d094eed11de5efcd03bbd2efbc35c177fc72648d5d7a7701b` |
+| `aarch64-darwin` | `node-v24.20.0-darwin-arm64.tar.xz` | `b7bf7707070b950ba1ec5f1af3bb6de0f2b1962c5033973d94068ab021ef3014` |
+
+Re-verify the filename/hash pairs against that official manifest whenever the selected Node patch changes. Re-evaluate and remove the binary-archive derivation when the locked nixpkgs graph supplies the exact selected Node version on all four supported systems; do not accept an older patch merely because it is the newest package in a compatible nixpkgs line.
+
+### cargo-llvm-cov availability in locked nixpkgs
+
+The locked `nixos-25.11` graph resolves `pkgs.cargo-llvm-cov` to `cargo-llvm-cov-0.6.20` and marks that derivation broken on both `x86_64-darwin` and `aarch64-darwin`. Nix therefore refuses to evaluate either macOS shell containing it. [`nix/tooling.nix`](../../nix/tooling.nix) excludes only that package on Darwin; both Linux systems retain it, including the Linux full shell used by CI. The default shell is unchanged.
+
+The direct quality-tool selection remains `cargo-llvm-cov` 0.9.0. The portable CI matrix configures native locked-flake evaluation and default-shell realization for all four supported systems, with the macOS coverage omission above. Configuration alone does not prove exact-version parity, completed native macOS runners, or macOS coverage. Until the locked graph supplies the selected version on every supported system, this remains an explicit Phase-00 quality-tool exception rather than satisfying the exact 0.9.0 four-system tool contract. Linux CI is configured to run the canonical `just check` recipe, and macOS contributors can run coverage with the separately installed selected tool after completing the [native Xcode/SDK prerequisites](../contributors/macos.md#xcode-and-sdk-prerequisite).
+
+Remove the Darwin omission only when a newly locked nixpkgs graph provides a non-broken `cargo-llvm-cov` at the selected version on all four systems. Re-run the all-system flake evaluation plus native coverage on each affected target before closing the exception.
+
 ## Complete direct npm-registry ledger
 
-All values below are from `https://registry.npmjs.org/<package>/latest` on the verification date. “Use” means current candidate for exact Phase-0 lockfile pin unless the controlling recommendation above overrides it.
+All values below are from `https://registry.npmjs.org/<package>/latest` on the verification date unless a runtime-major-compatible line is explicitly recorded. “Use” means current candidate for exact Phase-0 lockfile pin unless the controlling recommendation above overrides it.
 
 | Package | Direct version | Compatibility/decision note | Owning phase |
 |---|---:|---|---|
 | [`pnpm`](https://www.npmjs.com/package/pnpm) | 11.24.0 | Node `>=22.13`; use | 0 |
 | [`corepack`](https://www.npmjs.com/package/corepack) | 0.36.0 | Node `^22.22.2 || ^24.15.0 || >=26`; separately pin if used | 0 |
 | [`typescript`](https://www.npmjs.com/package/typescript) | 7.0.2 | discovery latest; use **6.0.3** due typescript-eslint `<6.1` | 0/6 |
+| [`@types/node`](https://www.npmjs.com/package/@types/node) | 24.13.3 | newest Node-24 types line verified on 2026-08-29; compatible with and pinned to the Node 24 runtime; use | 0/6/12 |
 | [`vue`](https://www.npmjs.com/package/vue) | 3.5.42 | use | 0/6 |
 | [`@vue/compiler-sfc`](https://www.npmjs.com/package/@vue/compiler-sfc) | 3.5.42 | mandatory direct build pin; exact patch matches Vue | 0/6 |
 | [`vue-router`](https://www.npmjs.com/package/vue-router) | 5.3.0 | peers Vue `^3.5.34`, Vite 7/8, Pinia 3/4; use | 0/6 |
@@ -204,11 +249,12 @@ Every K item is represented below. “Version selected” does not mean the buil
 |---|---|---|
 | Final project name | **Closed: eutheto** | Phase 0 workspace/package/docs normalization |
 | Rust/npm namespaces and prefixes | **Closed: Rust `eutheto-*`; npm `@eutheto/*`** | Final project-wide namespace decision; Phase 0 normalizes workspace/package manifests |
-| CLI executable, reverse-domain app ID, file extension, exact crate/package inventory names | **Open** | Phase 0 committed names and migration/update compatibility |
+| CLI executable, reverse-domain app ID, exact crate/package inventory names, portable extension/media types/file associations | **Open; `.eutheto` is the portable extension proposal** | Phase 0 committed names where needed; Phase 11 identity ADR/installer/CLI/docs; Phase 12 cross-platform open/inspect and migration/update compatibility |
 | Hosting organization and governance contacts | **Open** | Phase 0/11 public repository, GOVERNANCE/SECURITY contacts |
-| Exact Rust | **Recommended 1.97.1; lock still Phase-0 action** | `rust-toolchain.toml`, target suite; revisit fixed stable |
-| Exact Node/pnpm | **Recommended Node 24.20.0 and pnpm 11.24.0; blueprint pnpm-10 text superseded** | package engines/packageManager integrity, Nix and CI smoke |
+| Exact Rust | **Selected and Nix-pinned: 1.97.1; four native CI default-shell assertions configured, run evidence pending** | `rust-toolchain.toml`, flake shell, and successful target-suite runs; revisit fixed stable |
+| Exact Node/pnpm | **Selected and Nix-pinned: Node 24.20.0 and pnpm 11.24.0; four native CI default-shell assertions configured, run evidence pending** | official fixed-output hashes/package-manager integrity, Nix shell, and successful CI smoke |
 | Tauri/Vue/Tailwind/shadcn/Reka/Lucide pins | **Current direct values recorded; lock open**, including mandatory direct `@pinia/colada` 1.4.2, `@vue/compiler-sfc` 3.5.42, `@vue/devtools-api` 8.2.1 and `@lucide/vue` 1.37.0 | Cargo/pnpm locks and desktop smoke |
+| RustSec exceptions in the locked Tauri Linux graph | **Accepted until 2026-11-30:** sixteen exact unmaintained advisories in Tauri 2.11.5's GTK3/urlpattern transitives have no compatible maintained replacement; `RUSTSEC-2024-0429` is accepted only because the locked dependency sources contain no call to the affected `glib::VariantStrIter` path | `@Eutheto/maintainers`; exact IDs, rationale, and a UTC fail-closed expiry guard in `deny.toml`/`just rust-advisories`; re-review on every Tauri/lock change, any relevant advisory, by the expiry, and before Phase 11/public release |
 | Stable/beta IDs | **Open** | Phase 11 updater/signing path continuity |
 | Signing/notarization plan and protected environments | **Open** | Phase 11 documented key custody/rotation and protected-workflow evidence |
 
@@ -216,10 +262,10 @@ Every K item is represented below. “Version selected” does not mean the buil
 
 | Gate | Status | Owner/closure evidence |
 |---|---|---|
-| Verify `webkitgtk_4_1`, `libsoup_3`, app indicator, pnpm 11/current package path, Node 24, Syft, Cosign, SLSA verifier against committed nixpkgs | **Open per locked revision**; common attributes verified generally; app indicator qualified obsolete; blueprint `pnpm_10` no longer controls | Phase 0 `flake.lock` evaluation and shells |
-| Darwin shell/Xcode tools | **Open** | Phase 0 macOS shell smoke |
-| nixfmt check invocation | **Partially resolved: use `pkgs.nixfmt`; invocation still test-gated** | Phase 0 flake check |
-| Binary-cache plan | **Open until public CI exists** | Phase 0/11 cache ownership/trust docs |
+| Verify `webkitgtk_4_1`, `libsoup_3`, app indicator, pnpm 11, exact Node 24.20.0, Syft, Cosign, and SLSA verifier | **Node/pnpm derivations and official Node hashes committed; native locked-flake/default-shell CI is configured for all four systems, with run evidence and remaining locked attributes still open**; app indicator qualified obsolete | Phase 0 `flake.lock`, native CI runs, and shells |
+| Darwin shell/Xcode tools | **Native Intel and Apple Silicon shell lanes configured; successful run evidence pending** | Phase 0 macOS shell smoke on `macos-15-intel` and `macos-15` |
+| nixfmt check invocation | **Configured: `nix flake check --no-update-lock-file` on every native Nix lane; successful run evidence pending** | Phase 0 portable workflow runs |
+| Binary-cache plan | **Configured for the public `cache.nixos.org` substituter only; no project cache is claimed and run evidence is pending** | Phase 0 portable workflow and later project-cache ownership/trust decision |
 | Fully packaged Linux desktop derivation vs dev/worker/CLI only | **Open** | Phase 0/11 artifact scope decision |
 
 ### K.3 — OR-Tools
@@ -251,8 +297,9 @@ Every K item is represented below. “Version selected” does not mean the buil
 | Windows WebView2 strategy | **Open/critical** | Bootstrap/runtime/offline/managed-host tests |
 | Wayland/X11 | **Open** | Phase 11/12 Linux manual/E2E |
 | AppImage/deb/rpm mix | **Open** | Clean-machine results control |
-| macOS x86_64 runner/support | **Open** | Runner availability and signed package smoke |
+| macOS x86_64 runner/support | **Native `macos-15-intel` Nix shell/source-build lane configured; successful run and signed-package smoke remain open** | Runner availability plus Phase 11/12 signed package smoke |
 | Updater endpoint/signing-key lifecycle | **Open** | Protected endpoint/key custody/rotation/revocation tests |
+| Standalone HTML supported browsers and PDF renderer | **Open**; one-file `file://`, zero-required-network, accessible interaction/list parity and controlled local PDF are required | Phase 07/09 implementation evidence; Phase 11 support statement; Phase 12 exact-candidate browser/platform/print/PDF gate |
 
 ### K.6 — AI adapters
 
@@ -284,6 +331,23 @@ Every K item is represented below. “Version selected” does not mean the buil
 | Manual accessibility audit | **Open** | Phase 12 automated + keyboard/screen-reader/manual report |
 | Clean-machine installer/update/uninstall | **Open** | Every declared target, exact digests |
 | Publish source, notices, SBOM, checksums, signatures/attestations, migration notes | **Open until authorized release** | Phase 11 staging; Phase 12 publication/post-publish verification |
+
+### K.9 — Transportation
+
+The proposed official pack ID `official.transportation` is reserved for planning only and is not registered or implemented. Phase 14 is entered from completed Phase 12 independently of Phase 13 completion. Pack compilation and verification remain network-free and provider-neutral; only reviewed Rust application/infrastructure adapters may produce bounded immutable local snapshots. No calendar, routing, traffic, or transit provider is selected by this ledger.
+
+| Gate | Status before Phase 14 implementation | Owner/closure evidence |
+|---|---|---|
+| ADRs for the external-data boundary, immutable snapshot schemas/versioning, network ownership, persistence/export semantics, and two-stage solve policy | **Open** | Phase 14 T0 approved ADRs and conformance contracts |
+| Reference calendar, routing, and transit adapters plus each provider's API, authentication, licensing, rate, caching, retention, persistence, export, redistribution, and attribution terms | **Open; no provider selected** | Phase 14 T0 policy gates and T2/T3/T5 exact-provider reviews with bounded recorded conformance fixtures before an adapter is enabled |
+| Least-privilege authentication/scopes, credential custody, revocation, account/tenant separation, and disclosed data access | **Open** | Phase 14 T0 threat model, authorization matrix, credential lifecycle tests, and consent UX |
+| Routing capability for historical day/time traffic rather than live-current traffic alone, including provenance, freshness, determinism, and honest fallback labels | **Open** | Phase 14 T3 capability evidence and fixed snapshot fixtures; unsupported estimates are not advertised |
+| Transit schedule/realtime data licensing, caching, redistribution, attribution, retention, and derived-snapshot rights | **Open** | Phase 14 T0/T5 exact-feed/provider legal review before transit support is enabled |
+| Privacy threat model for calendars, precise locations, movement patterns, household relationships, minors, retention, logs, diagnostics, redaction, deletion, and export | **Open** | Phase 14 T0 security/privacy review and data-flow inventory |
+| Proof that no-transit solve followed by opt-in transit fallback is bounded, cancellation-safe, never silently weakens required rules, and independently verifies every candidate accepted at either stage | **Open** | Phase 14 T5 deterministic orchestration tests, authoritative verifier evidence, and one shared budget |
+| Practitioner review of terminology, required/default semantics, scoring priorities, transit opt-in, accessibility, explanations, and privacy-safe defaults | **Open** | Phase 14 T1/T7 recorded household/user research and approved default matrix |
+| Candidate and benchmark limits for people, vehicles, commitments, locations, travel options, transit alternatives, horizon, solve stages, snapshot size/age, and global time/memory budget | **Open** | Phase 14 T0/T4/T7 published supported envelope, adversarial fixtures, and fixed-budget benchmark evidence |
+| Manual entry and offline/stale-snapshot fallback, including explicit freshness/provenance, usable no-account behavior, safe refresh failure, and user-controlled snapshot persistence/export/deletion | **Open** | Phase 14 T2/T3/T6/T7 offline and provider-failure scenarios; core planning remains usable without a provider |
 
 ## Additional current specifications and mutable contracts
 

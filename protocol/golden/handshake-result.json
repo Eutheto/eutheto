@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "requestId": "phase00-1",
+  "result": {
+    "handshake": {
+      "capabilities": [
+        "WORKER_CAPABILITY_HEALTH"
+      ],
+      "manifestSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "workerIdentity": "eutheto-ortools-worker",
+      "workerVersion": "0.0.0-phase00-golden"
+    }
+  }
+}

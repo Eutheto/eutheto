@@ -1,0 +1,194 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Fuzz
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 4 * * 3"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fuzz.yml"
+      - "fuzz/**"
+      - "crates/**"
+      - "domains/**"
+      - "protocol/**"
+      - "workers/**"
+      - "xtask/**"
+      - "nix/**"
+      - "flake.nix"
+      - "flake.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Justfile"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  SOURCE_DATE_EPOCH: "0"
+  EUTHETO_TEST_SEED: "0"
+  RAYON_NUM_THREADS: "1"
+  CARGO_INCREMENTAL: "0"
+  # cargo-fuzz/libFuzzer requires nightly language features. This dated manifest
+  # is retained until a reviewed fuzz-target change deliberately advances it.
+  FUZZ_TOOLCHAIN: nightly-2026-08-28
+
+jobs:
+  fuzz:
+    name: Discover and run approved fuzz targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the immutable source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Discover real fuzz targets and seed corpus files
+        id: discover
+        shell: bash
+        env:
+          TARGET_LIST: ${{ runner.temp }}/eutheto-fuzz-targets.txt
+        run: |
+          set -euo pipefail
+          : > "$TARGET_LIST"
+
+          target_count=0
+          if [[ -f fuzz/Cargo.toml && -d fuzz/fuzz_targets ]]; then
+            while IFS= read -r -d '' source; do
+              target=$(basename "$source" .rs)
+              if [[ ! "$target" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                echo "::error file=${source}::Fuzz target filenames must be valid Rust identifiers"
+                exit 1
+              fi
+              printf '%s\n' "$target" >> "$TARGET_LIST"
+              ((target_count += 1))
+            done < <(
+              find fuzz/fuzz_targets -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' -print0 | sort -z
+            )
+          fi
+
+          corpus_count=0
+          if [[ -d fuzz/corpus ]]; then
+            while IFS= read -r -d '' _seed; do
+              ((corpus_count += 1))
+            done < <(
+              find fuzz/corpus -type f \
+                ! -iname 'README.md' \
+                ! -iname 'LICENSE' \
+                ! -iname 'LICENSE.*' \
+                ! -name '.gitkeep' \
+                -print0 | sort -z
+            )
+          fi
+
+          printf 'target_count=%s\n' "$target_count" >> "$GITHUB_OUTPUT"
+          printf 'corpus_count=%s\n' "$corpus_count" >> "$GITHUB_OUTPUT"
+          if (( target_count > 0 )); then
+            printf 'ready=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'ready=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report unavailable fuzz evidence
+        if: steps.discover.outputs.ready != 'true'
+        shell: bash
+        env:
+          TARGET_COUNT: ${{ steps.discover.outputs.target_count }}
+          CORPUS_COUNT: ${{ steps.discover.outputs.corpus_count }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Fuzz evidence'
+            echo
+            echo 'No fuzz evidence was produced.'
+            echo
+            echo "Discovered fuzz targets: ${TARGET_COUNT}"
+            echo "Discovered seed corpus files: ${CORPUS_COUNT}"
+            echo
+            echo 'Phase 00 has no real fuzz package or target. A schedule without an executable target is not passing evidence.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install locked Nix
+        if: steps.discover.outputs.ready == 'true'
+        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
+        with:
+          github-token: ""
+          diagnostic-endpoint: ""
+
+      - name: Install the dated fuzz-only Rust nightly
+        if: steps.discover.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup set auto-self-update disable
+          rustup toolchain install "$FUZZ_TOOLCHAIN" \
+            --profile minimal \
+            --component llvm-tools-preview \
+            --no-self-update
+
+          fuzz_cargo=$(rustup which --toolchain "$FUZZ_TOOLCHAIN" cargo)
+          fuzz_rustc=$(rustup which --toolchain "$FUZZ_TOOLCHAIN" rustc)
+          fuzz_rustdoc=$(rustup which --toolchain "$FUZZ_TOOLCHAIN" rustdoc)
+          commit_date=$($fuzz_rustc --version --verbose | sed -n 's/^commit-date: //p')
+          [[ "$commit_date" == '2026-08-28' ]]
+
+          {
+            printf 'FUZZ_CARGO=%s\n' "$fuzz_cargo"
+            printf 'FUZZ_RUSTC=%s\n' "$fuzz_rustc"
+            printf 'FUZZ_RUSTDOC=%s\n' "$fuzz_rustdoc"
+          } >> "$GITHUB_ENV"
+
+      - name: Run each discovered fuzz target with fixed bounds
+        if: steps.discover.outputs.ready == 'true'
+        shell: bash
+        env:
+          TARGET_LIST: ${{ runner.temp }}/eutheto-fuzz-targets.txt
+          TMPDIR: ${{ runner.temp }}/eutheto-fuzz/tmp
+          FUZZ_ARTIFACTS: ${{ runner.temp }}/eutheto-fuzz/artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMPDIR" "$FUZZ_ARTIFACTS"
+
+          while IFS= read -r target; do
+            artifact_dir="$FUZZ_ARTIFACTS/$target"
+            mkdir -p "$artifact_dir"
+            nix develop --no-update-lock-file .#full --command env \
+              RUSTC="$FUZZ_RUSTC" \
+              RUSTDOC="$FUZZ_RUSTDOC" \
+              "$FUZZ_CARGO" fuzz run "$target" -- \
+              -max_total_time=300 \
+              -timeout=30 \
+              -rss_limit_mb=4096 \
+              -seed=0 \
+              -jobs=1 \
+              -workers=1 \
+              -artifact_prefix="$artifact_dir/"
+          done < "$TARGET_LIST"
+
+      - name: Record fuzz evidence status
+        if: steps.discover.outputs.ready == 'true' && success()
+        shell: bash
+        env:
+          TARGET_COUNT: ${{ steps.discover.outputs.target_count }}
+          CORPUS_COUNT: ${{ steps.discover.outputs.corpus_count }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Fuzz evidence'
+            echo
+            echo "Completed bounded fuzz runs for ${TARGET_COUNT} discovered target(s) with ${CORPUS_COUNT} discovered seed corpus file(s)."
+            echo
+            echo "Fuzz compiler: ${FUZZ_TOOLCHAIN}; fixed libFuzzer seed: 0; one worker per target."
+            echo 'Only this completed execution is evidence. Crash artifacts are deliberately not uploaded until a reviewed sanitization contract exists.'
+          } >> "$GITHUB_STEP_SUMMARY"

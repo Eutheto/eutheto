@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "documentName": "eutheto Phase-00 workspace dependency inventory",
+  "documentNamespace": "urn:eutheto:spdx:phase-00-workspace:0.1.0",
+  "created": "2026-08-29T00:00:00Z",
+  "workspacePackages": [
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-cli",
+      "version": "0.1.0",
+      "path": "crates/eutheto-cli",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-core",
+      "version": "0.1.0",
+      "path": "crates/eutheto-core",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-desktop",
+      "version": "0.1.0",
+      "path": "apps/desktop/src-tauri",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-types",
+      "version": "0.1.0",
+      "path": "crates/eutheto-types",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "xtask",
+      "version": "0.1.0",
+      "path": "xtask",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@eutheto/desktop",
+      "version": "0.1.0",
+      "path": "apps/desktop",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "eutheto-workspace",
+      "version": "0.1.0",
+      "path": ".",
+      "license": "Apache-2.0"
+    }
+  ],
+  "licenseConclusions": []
+}
