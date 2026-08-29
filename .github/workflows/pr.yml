@@ -1,0 +1,117 @@
+name: PR
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  RUST_TEST_THREADS: "1"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  canonical-linux:
+    name: Canonical Linux / locked Nix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install pinned Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
+        with:
+          github-token: ""
+          extra-conf: |
+            substituters = https://cache.nixos.org/
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbSOg9B2WgX072S1D/UsD08Q=
+
+      - name: Evaluate the locked flake
+        id: flake
+        run: nix flake check --no-update-lock-file
+
+      - name: Install locked workspace dependencies
+        id: install
+        run: nix develop --no-update-lock-file --command just install
+
+      - name: Exercise repository DCO checker samples
+        if: github.event_name == 'workflow_dispatch'
+        run: nix develop --no-update-lock-file --command just dco-self-test
+
+      - name: Verify every introduced commit DCO sign-off
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        env:
+          DCO_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          DCO_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
+        run: |
+          trusted_checker="${RUNNER_TEMP}/check_dco.py"
+          trusted_fixtures="${RUNNER_TEMP}/dco_cases.json"
+          if git cat-file -e "${DCO_BASE_SHA}:scripts/check_dco.py" 2>/dev/null &&
+             git cat-file -e "${DCO_BASE_SHA}:tests/security/fixtures/dco_cases.json" 2>/dev/null; then
+            git show "${DCO_BASE_SHA}:scripts/check_dco.py" > "$trusted_checker"
+            git show "${DCO_BASE_SHA}:tests/security/fixtures/dco_cases.json" > "$trusted_fixtures"
+          else
+            if git cat-file -e "${DCO_BASE_SHA}:.github/workflows/pr.yml" 2>/dev/null; then
+              echo "The trusted base revision contains PR automation but no complete DCO checker." >&2
+              exit 1
+            fi
+            cp scripts/check_dco.py "$trusted_checker"
+            cp tests/security/fixtures/dco_cases.json "$trusted_fixtures"
+          fi
+          EUTHETO_DCO_REPOSITORY="$GITHUB_WORKSPACE" \
+          EUTHETO_DCO_FIXTURES="$trusted_fixtures" \
+            nix develop --no-update-lock-file --command \
+              python3 "$trusted_checker" --self-test
+          EUTHETO_DCO_REPOSITORY="$GITHUB_WORKSPACE" \
+          EUTHETO_DCO_FIXTURES="$trusted_fixtures" \
+            nix develop --no-update-lock-file --command \
+              python3 "$trusted_checker" "$DCO_BASE_SHA" "$DCO_HEAD_SHA"
+
+      - name: Run the non-mutating canonical check
+        id: check
+        run: |
+          nix develop --no-update-lock-file --command just check
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Write sanitized check report
+        if: always()
+        env:
+          FLAKE_OUTCOME: ${{ steps.flake.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+        run: |
+          report_dir="$RUNNER_TEMP/eutheto-pr-report"
+          mkdir -p "$report_dir"
+          printf '%s\n' \
+            'workflow=pr' \
+            "flake_check=$FLAKE_OUTCOME" \
+            "locked_install=$INSTALL_OUTCOME" \
+            "non_mutating_check=$CHECK_OUTCOME" \
+            > "$report_dir/status.txt"
+
+      - name: Upload sanitized check report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr-check-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/eutheto-pr-report/status.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          include-hidden-files: false

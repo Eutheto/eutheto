@@ -1,0 +1,748 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Dependency update
+
+on:
+  pull_request:
+  pull_request_review:
+    types:
+      - submitted
+      - dismissed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: dependency-update-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  TZ: UTC
+  RUST_BACKTRACE: "0"
+  RUST_TEST_THREADS: "1"
+  EUTHETO_TEST_SEED: "0"
+
+jobs:
+  classify:
+    name: Classify and isolate update
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      dependency_update: ${{ steps.policy.outputs.dependency_update }}
+      worker_required: ${{ steps.policy.outputs.worker_required }}
+      benchmark_required: ${{ steps.policy.outputs.benchmark_required }}
+      sensitive: ${{ steps.policy.outputs.sensitive }}
+      major_families: ${{ steps.policy.outputs.major_families }}
+    steps:
+      - name: Check out the pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enforce immutable actions and migration isolation
+        id: policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import tomllib
+          from pathlib import Path, PurePosixPath
+
+          def git(*args, check=True):
+              result = subprocess.run(
+                  ['git', *args], text=True, stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE, check=check
+              )
+              return result.stdout
+
+          head = git('rev-parse', 'HEAD').strip()
+          base = os.environ.get('BASE_SHA', '').strip()
+          if not base or subprocess.run(
+              ['git', 'cat-file', '-e', f'{base}^{{commit}}'],
+              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+          ).returncode != 0:
+              base = git('rev-parse', 'HEAD^').strip()
+
+          changed = sorted(filter(None, git('diff', '--name-only', base, head).splitlines()))
+          changed_set = set(changed)
+          dependency_names = {
+              'Cargo.toml', 'Cargo.lock', 'package.json', 'pnpm-lock.yaml',
+              'pnpm-workspace.yaml', 'rust-toolchain.toml', 'flake.nix',
+              'flake.lock', 'deny.toml', 'about.toml', '.github/dependabot.yml'
+          }
+          dependency_update = any(
+              path in dependency_names
+              or path.endswith('/Cargo.toml')
+              or path.endswith('/package.json')
+              or path.startswith('.github/workflows/')
+              or path.startswith('nix/')
+              or path.startswith('workers/ortools/')
+              or path.startswith('protocol/')
+              for path in changed
+          )
+
+          workflows = sorted([
+              *Path('.github/workflows').glob('*.yml'),
+              *Path('.github/workflows').glob('*.yaml'),
+          ])
+          for workflow in workflows:
+              for number, line in enumerate(workflow.read_text().splitlines(), 1):
+                  match = re.search(
+                      r'^\s*(?:-\s*)?uses:\s*([^\s#]+)(?:\s+#\s*(\S+))?\s*$', line
+                  )
+                  if not match:
+                      if re.search(r'^\s*(?:-\s*)?uses:', line):
+                          raise SystemExit(f'{workflow}:{number}: malformed or dynamic action reference')
+                      continue
+                  reference, stable_tag = match.groups()
+                  if reference.startswith('./'):
+                      continue
+                  if reference.startswith('docker://'):
+                      if not re.fullmatch(r'docker://[^@\s]+@sha256:[0-9a-f]{64}', reference):
+                          raise SystemExit(f'{workflow}:{number}: Docker action is not pinned to a sha256 digest')
+                  else:
+                      action = re.fullmatch(r'[^@\s]+@([0-9a-f]{40})', reference)
+                      if not action:
+                          raise SystemExit(f'{workflow}:{number}: external action is not pinned to a full commit SHA')
+                  if not stable_tag or not re.fullmatch(r'v?\d+(?:\.\d+){0,2}', stable_tag):
+                      raise SystemExit(f'{workflow}:{number}: immutable action pin lacks its verified stable tag comment')
+
+          def old_bytes(path):
+              result = subprocess.run(
+                  ['git', 'show', f'{base}:{path}'], stdout=subprocess.PIPE,
+                  stderr=subprocess.DEVNULL
+              )
+              return result.stdout if result.returncode == 0 else None
+
+          def major(value):
+              if not isinstance(value, str):
+                  return None
+              match = re.search(r'(?<!\d)(\d+)', value)
+              return int(match.group(1)) if match else None
+
+          def json_at(path, old=False):
+              try:
+                  raw = old_bytes(path) if old else Path(path).read_bytes()
+                  return json.loads(raw) if raw is not None else {}
+              except (OSError, ValueError):
+                  return {}
+
+          def toml_at(path, old=False):
+              try:
+                  raw = old_bytes(path) if old else Path(path).read_bytes()
+                  return tomllib.loads(raw.decode()) if raw is not None else {}
+              except (OSError, ValueError, UnicodeDecodeError):
+                  return {}
+
+          def lock_bytes(path, old=False):
+              raw = old_bytes(path) if old else (
+                  Path(path).read_bytes() if Path(path).is_file() else None
+              )
+              return raw
+
+          def cargo_lock_identities(old=False):
+              data = toml_at('Cargo.lock', old)
+              identities = set()
+              for package in data.get('package', []):
+                  if not isinstance(package, dict):
+                      continue
+                  name = package.get('name')
+                  version_major = major(package.get('version'))
+                  if isinstance(name, str) and version_major is not None:
+                      identities.add((name, version_major))
+              return identities
+
+          def yaml_key(value):
+              value = value.strip()
+              if len(value) >= 2 and value[0] == value[-1] == "'":
+                  return value[1:-1].replace("''", "'")
+              if len(value) >= 2 and value[0] == value[-1] == '"':
+                  try:
+                      return json.loads(value)
+                  except ValueError:
+                      return None
+              return value
+
+          def pnpm_lock_identities(old=False):
+              raw = lock_bytes('pnpm-lock.yaml', old)
+              if raw is None:
+                  return set()
+              try:
+                  lines = raw.decode().splitlines()
+              except UnicodeDecodeError:
+                  return set()
+              identities = set()
+              in_packages = False
+              for line in lines:
+                  if line == 'packages:':
+                      in_packages = True
+                      continue
+                  if in_packages and line and not line.startswith((' ', '\t')):
+                      break
+                  match = re.match(r'^  (.+):(?:\s+\{\})?\s*$', line) if in_packages else None
+                  if not match:
+                      continue
+                  key = yaml_key(match.group(1))
+                  if not key:
+                      continue
+                  key = key.lstrip('/')
+                  if '/' in key and re.match(r'^v?\d', key.rsplit('/', 1)[1]):
+                      name, version = key.rsplit('/', 1)
+                  elif '@' in key:
+                      name, version = key.rsplit('@', 1)
+                  else:
+                      continue
+                  version = version.split('(', 1)[0]
+                  version_match = re.match(r'^v?(\d+)(?:\.|$)', version)
+                  if name and version_match:
+                      identities.add((name, int(version_match.group(1))))
+              return identities
+
+          def lock_families(before, after, tauri_family, other_family):
+              def majors_by_name(identities):
+                  result = {}
+                  for name, version_major in identities:
+                      result.setdefault(name, set()).add(version_major)
+                  return result
+
+              before_by_name = majors_by_name(before)
+              after_by_name = majors_by_name(after)
+              detected = set()
+              for name in before_by_name.keys() & after_by_name.keys():
+                  if before_by_name[name] != after_by_name[name]:
+                      detected.add(tauri_family if 'tauri' in name.lower() else other_family)
+              return detected
+
+          if lock_families({('root', 1)}, {('root', 1), ('transitive', 1)}, 'tauri', 'other'):
+              raise SystemExit('lock-family classifier mistakes transitive churn for a major update')
+          if lock_families({('root', 1)}, {('root', 2)}, 'tauri', 'other') != {'other'}:
+              raise SystemExit('lock-family classifier missed a major-version crossing')
+
+          families = set()
+          package_manifests = [p for p in changed if PurePosixPath(p).name == 'package.json']
+          for path in package_manifests:
+              before, after = json_at(path, True), json_at(path)
+              for field in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'):
+                  names = set(before.get(field, {})) | set(after.get(field, {}))
+                  for name in names:
+                      old_major = major(before.get(field, {}).get(name))
+                      new_major = major(after.get(field, {}).get(name))
+                      if old_major is not None and new_major is not None and old_major != new_major:
+                          families.add('tauri-major' if 'tauri' in name.lower() else 'node-major')
+              for field in ('packageManager',):
+                  if major(before.get(field)) != major(after.get(field)):
+                      families.add('node-toolchain-major')
+              for engine in ('node', 'pnpm'):
+                  if major(before.get('engines', {}).get(engine)) != major(after.get('engines', {}).get(engine)):
+                      families.add('node-toolchain-major')
+
+          def cargo_dependencies(value, result=None):
+              result = {} if result is None else result
+              if not isinstance(value, dict):
+                  return result
+              for key, child in value.items():
+                  if key in {'dependencies', 'dev-dependencies', 'build-dependencies'} and isinstance(child, dict):
+                      for name, spec in child.items():
+                          result[name] = spec.get('version') if isinstance(spec, dict) else spec
+                  elif isinstance(child, dict):
+                      cargo_dependencies(child, result)
+              return result
+
+          for path in [p for p in changed if PurePosixPath(p).name == 'Cargo.toml']:
+              before = cargo_dependencies(toml_at(path, True))
+              after = cargo_dependencies(toml_at(path))
+              for name in set(before) | set(after):
+                  old_major, new_major = major(before.get(name)), major(after.get(name))
+                  if old_major is not None and new_major is not None and old_major != new_major:
+                      families.add('tauri-major' if name.startswith('tauri') else 'rust-major')
+
+          if 'Cargo.lock' in changed_set:
+              families.update(lock_families(
+                  cargo_lock_identities(True), cargo_lock_identities(False),
+                  'tauri-major', 'rust-major'
+              ))
+          if 'pnpm-lock.yaml' in changed_set:
+              families.update(lock_families(
+                  pnpm_lock_identities(True), pnpm_lock_identities(False),
+                  'tauri-major', 'node-major'
+              ))
+
+          if 'rust-toolchain.toml' in changed_set:
+              before = toml_at('rust-toolchain.toml', True).get('toolchain', {}).get('channel')
+              after = toml_at('rust-toolchain.toml').get('toolchain', {}).get('channel')
+              if major(before) != major(after):
+                  families.add('rust-toolchain-major')
+          if any(path == 'flake.lock' or path.startswith('nix/') for path in changed):
+              families.add('nix-input-migration')
+          if any(path.startswith('workers/ortools/') for path in changed):
+              families.add('ortools-migration')
+          if any(
+              path.endswith('.proto')
+              or path == 'protocol/version.json'
+              or (
+                  '/gen/schemas/' in path
+                  and not path.startswith('apps/desktop/src-tauri/gen/schemas/')
+              )
+              for path in changed
+          ):
+              families.add('schema-migration')
+          def collapse_supporting_nix(changed_families):
+              toolchain = changed_families & {
+                  'rust-toolchain-major', 'node-toolchain-major'
+              }
+              if (
+                  'nix-input-migration' in changed_families
+                  and len(toolchain) == 1
+                  and changed_families <= toolchain | {'nix-input-migration'}
+              ):
+                  return changed_families - {'nix-input-migration'}
+              return changed_families
+
+          if collapse_supporting_nix(
+              {'rust-toolchain-major', 'nix-input-migration'}
+          ) != {'rust-toolchain-major'}:
+              raise SystemExit('migration classifier cannot pair one toolchain with supporting Nix changes')
+          if len(collapse_supporting_nix({
+              'rust-toolchain-major', 'node-toolchain-major', 'nix-input-migration'
+          })) != 2:
+              raise SystemExit('migration classifier collapsed unrelated toolchain majors')
+          families = collapse_supporting_nix(families)
+          bootstrap_change = old_bytes('.github/workflows/dependency-update.yml') is None
+          if len(families) > 1 and not bootstrap_change:
+              raise SystemExit(
+                  'Dependency update combines independently reviewed major families/migrations: '
+                  + ', '.join(sorted(families))
+              )
+
+          relevant_diff = git(
+              'diff', '--unified=0', base, head, '--', 'Cargo.toml', 'Cargo.lock',
+              'package.json', 'pnpm-lock.yaml', 'flake.nix', 'flake.lock', 'nix',
+              'workers/ortools', 'protocol'
+          )
+          worker_relevant = any(
+              path.startswith('workers/ortools/') or path.startswith('protocol/')
+              for path in changed
+          )
+          worker_relevant = worker_relevant or bool(re.search(
+              r'(?i)(ortools|or-tools|protobuf|protoc|prost(?:-build)?)', relevant_diff
+          ))
+          benchmark_relevant = worker_relevant or any(
+              path.startswith('benchmarks/')
+              or re.search(r'(solver|planning-ir|compiler)', path, re.I)
+              for path in changed
+          )
+
+          def tree_has_file(revision, path):
+              return subprocess.run(
+                  ['git', 'cat-file', '-e', f'{revision}:{path}'],
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+              ).returncode == 0
+
+          def tree_has_benchmark_evidence(revision):
+              files = git('ls-tree', '-r', '--name-only', revision, '--', 'benchmarks').splitlines()
+              return any(
+                  path.startswith(('benchmarks/corpus/', 'benchmarks/expected/'))
+                  and not path.endswith('/README.md')
+                  for path in files
+              )
+
+          worker_gate_exists = (
+              tree_has_file(base, 'workers/ortools/source-contract.json')
+              or tree_has_file(head, 'workers/ortools/source-contract.json')
+          )
+          benchmark_gate_exists = (
+              tree_has_benchmark_evidence(base) or tree_has_benchmark_evidence(head)
+          )
+          worker_required = worker_relevant and worker_gate_exists
+          benchmark_required = benchmark_relevant and benchmark_gate_exists
+          sensitive_input_names = {
+              '.github/CODEOWNERS', '.github/dependabot.yml', 'deny.toml',
+              'about.toml', 'Justfile', 'flake.nix', 'flake.lock',
+          }
+          sensitive_manifest_names = {
+              'Cargo.toml', 'Cargo.lock', 'package.json', 'package-lock.json',
+              'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml',
+              'yarn.lock', 'rust-toolchain.toml', 'rust-toolchain',
+          }
+          sensitive = any(
+              path in sensitive_input_names
+              or PurePosixPath(path).name in sensitive_manifest_names
+              or path.startswith('.github/workflows/')
+              or path.startswith('nix/')
+              or path.startswith('xtask/')
+              or path.startswith('protocol/')
+              or path.startswith('workers/ortools/')
+              or '/capabilities/' in path
+              or '/permissions/' in path
+              for path in changed
+          ) or bool(re.search(
+              r'(?i)(crypto|ring|rustls|openssl|parser|serde|zip|url|reqwest|keyring|credential|updater|sign|tauri|protobuf|prost)',
+              relevant_diff
+          ))
+
+          if git('status', '--porcelain', '--untracked-files=all').strip():
+              raise SystemExit('classification mutated the checked-out source tree')
+
+          outputs = {
+              'dependency_update': str(dependency_update).lower(),
+              'worker_required': str(worker_required).lower(),
+              'benchmark_required': str(benchmark_required).lower(),
+              'sensitive': str(sensitive).lower(),
+              'major_families': ','.join(sorted(families)) or 'none',
+          }
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              for key, value in outputs.items():
+                  output.write(f'{key}={value}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('## Dependency update classification\n\n')
+              summary.write(f'- dependency update: `{outputs["dependency_update"]}`\n')
+              summary.write(f'- worker gate required: `{outputs["worker_required"]}`\n')
+              summary.write(f'- benchmark gate required: `{outputs["benchmark_required"]}`\n')
+              summary.write(f'- sensitive CODEOWNERS review: `{outputs["sensitive"]}`\n')
+              summary.write(f'- isolated major family/migration: `{outputs["major_families"]}`\n')
+          PY
+
+  codeowners:
+    name: Sensitive approval precondition
+    needs: classify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify sensitive ownership and approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENSITIVE: ${{ needs.classify.outputs.sensitive }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.event.repository.full_name }}
+        run: |
+          if [ "${SENSITIVE}" != "true" ]; then
+            echo "No sensitive dependency boundary changed; CODEOWNERS approval gate is not applicable."
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = [
+              line.split('#', 1)[0].split()
+              for line in Path('.github/CODEOWNERS').read_text().splitlines()
+          ]
+          if not any(parts and parts[0] == '*' and '@Eutheto/maintainers' in parts[1:] for parts in lines):
+              raise SystemExit('CODEOWNERS must assign the repository-wide fallback to @Eutheto/maintainers')
+          PY
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "Sensitive dependency changes require a pull request and @Eutheto/maintainers CODEOWNER approval." >&2
+            exit 1
+          fi
+          if [[ ! "${REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "Cannot verify approvals for an invalid event repository identity." >&2
+            exit 1
+          fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          # GraphQL variable references in the query are intentionally literal.
+          # shellcheck disable=SC2016
+          gh api graphql \
+            -f repositoryOwner="${repository_owner}" \
+            -f repositoryName="${repository_name}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($repositoryOwner:String!,$repositoryName:String!,$number:Int!){repository(owner:$repositoryOwner,name:$repositoryName){pullRequest(number:$number){reviewDecision reviews(last:100){pageInfo{hasPreviousPage hasNextPage} nodes{state author{login} commit{oid}}}}}}' \
+            > "${RUNNER_TEMP}/codeowner-review.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          head_sha = os.environ['HEAD_SHA'].strip()
+          if not re.fullmatch(r'[0-9a-f]{40}', head_sha):
+              raise SystemExit('cannot bind sensitive approval to a valid pull-request head SHA')
+          data = json.loads(Path(os.environ['RUNNER_TEMP'], 'codeowner-review.json').read_text())['data']
+          pull_request = data['repository']['pullRequest']
+          if pull_request is None:
+              raise SystemExit('cannot verify approval for the pull request')
+          reviews = pull_request['reviews']
+          if reviews['pageInfo']['hasPreviousPage'] or reviews['pageInfo']['hasNextPage']:
+              raise SystemExit('cannot verify current-head approval: review history exceeds the fetched window')
+          effective_states = {'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'}
+          latest_effective = {}
+          for review in reviews['nodes']:
+              author = review.get('author')
+              if not author or review['state'] not in effective_states:
+                  continue
+              latest_effective[author['login'].casefold()] = review
+          current_head_approved = any(
+              review['state'] == 'APPROVED'
+              and (review.get('commit') or {}).get('oid') == head_sha
+              for review in latest_effective.values()
+          )
+          if pull_request.get('reviewDecision') != 'APPROVED' or not current_head_approved:
+              raise SystemExit(
+                  'sensitive dependency changes require an active approval for the exact '
+                  'pull-request head; protected-branch CODEOWNERS review remains mandatory'
+              )
+          PY
+
+  security-gates:
+    name: Security and supply-chain gates
+    needs: classify
+    if: needs.classify.outputs.dependency_update == 'true'
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+
+  nix-and-tests:
+    name: Locked Nix, Rust, and JavaScript suite
+    needs: classify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Report non-dependency change
+        if: needs.classify.outputs.dependency_update != 'true'
+        run: echo "No dependency input changed; locked suite gate is not applicable."
+
+      - name: Check out the pull-request head
+        if: needs.classify.outputs.dependency_update == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install locked Nix
+        if: needs.classify.outputs.dependency_update == 'true'
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Restore lock-keyed dependency caches
+        if: needs.classify.outputs.dependency_update == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/cargo/registry
+            .cache/cargo/git
+            .cache/pnpm/store
+          key: dependency-tests-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml', 'Cargo.lock', 'package.json', 'pnpm-lock.yaml') }}
+
+      - name: Evaluate the frozen flake
+        if: needs.classify.outputs.dependency_update == 'true'
+        run: nix flake check --no-update-lock-file
+
+      - name: Install locked dependencies without lifecycle scripts
+        if: needs.classify.outputs.dependency_update == 'true'
+        run: |
+          nix develop --no-update-lock-file .#full --command cargo fetch --locked
+          nix develop --no-update-lock-file .#full --command pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run the full Rust and JavaScript suites
+        if: needs.classify.outputs.dependency_update == 'true'
+        run: nix develop --no-update-lock-file .#full --command just lint typecheck test-rust-nextest test-doc test-ui
+
+      - name: Reject source or lock mutation
+        if: needs.classify.outputs.dependency_update == 'true'
+        run: |
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+
+  generation-drift:
+    name: Deterministic generation drift
+    needs: classify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Report non-dependency change
+        if: needs.classify.outputs.dependency_update != 'true'
+        run: echo "No dependency input changed; generation gate is not applicable."
+
+      - name: Check out the pull-request head
+        if: needs.classify.outputs.dependency_update == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install locked Nix
+        if: needs.classify.outputs.dependency_update == 'true'
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Regenerate twice and reject every drift
+        if: needs.classify.outputs.dependency_update == 'true'
+        run: |
+          nix develop --no-update-lock-file .#full --command cargo fetch --locked
+          nix develop --no-update-lock-file .#full --command pnpm install --frozen-lockfile --ignore-scripts
+          nix develop --no-update-lock-file .#full --command just generate
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          nix develop --no-update-lock-file .#full --command just generate
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          nix develop --no-update-lock-file .#full --command just generate-check protocol-check fixtures-check
+
+  worker-gate:
+    name: Applicable real worker build and smoke
+    needs: classify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Report unavailable gate as not applicable
+        if: needs.classify.outputs.worker_required != 'true'
+        run: echo "No worker/protobuf/source input changed; the deferred Phase-03 worker gate is not applicable, not passing evidence."
+
+      - name: Check out the pull-request head
+        if: needs.classify.outputs.worker_required == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Require an approved exact worker source contract
+        if: needs.classify.outputs.worker_required == 'true'
+        run: |
+          python3 <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          contract = Path('workers/ortools/source-contract.json')
+          if not contract.is_file():
+              raise SystemExit('worker-relevant update is blocked: Phase 03 has not committed an approved source-contract.json')
+          data = json.loads(contract.read_text())
+          approval = data.get('approval', {})
+          if approval.get('status') != 'approved' or approval.get('phase') != 3:
+              raise SystemExit('worker-relevant update is blocked: exact source contract is not approved')
+          if approval.get('record') in {None, '', 'UNRESOLVED'}:
+              raise SystemExit('worker-relevant update is blocked: approval record is unresolved')
+
+          def required_text(section, field):
+              value = data.get(section, {}).get(field)
+              if not isinstance(value, str) or not value or value == 'UNRESOLVED':
+                  raise SystemExit(
+                      f'worker-relevant update is blocked: {section}.{field} is not pinned'
+                  )
+              return value
+
+          for section, fields in {
+              'ortools': ('version',),
+              'protobuf': ('source_version', 'protoc_version', 'cpp_runtime_version'),
+              'worker': ('version',),
+          }.items():
+              for field in fields:
+                  required_text(section, field)
+          for section in ('ortools', 'protobuf'):
+              if not required_text(section, 'source_url').startswith('https://'):
+                  raise SystemExit(
+                      f'worker-relevant update is blocked: {section}.source_url is not HTTPS'
+                  )
+              if not re.fullmatch(r'[0-9a-f]{64}', required_text(section, 'sha256')):
+                  raise SystemExit(
+                      f'worker-relevant update is blocked: {section}.sha256 is not an exact pin'
+                  )
+          if not re.fullmatch(
+              r'[0-9a-f]{64}', required_text('protocol', 'schema_sha256')
+          ):
+              raise SystemExit(
+                  'worker-relevant update is blocked: protocol.schema_sha256 is not an exact pin'
+              )
+          PY
+
+      - name: Install locked Nix
+        if: needs.classify.outputs.worker_required == 'true'
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Build and smoke the real approved worker
+        if: needs.classify.outputs.worker_required == 'true'
+        run: |
+          nix develop --no-update-lock-file .#full --command just worker-build-nix
+          nix develop --no-update-lock-file .#full --command just worker-build-native
+          nix develop --no-update-lock-file .#full --command just worker-smoke
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+
+  benchmark-gate:
+    name: Applicable official benchmark thresholds
+    needs: classify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Report unavailable gate as not applicable
+        if: needs.classify.outputs.benchmark_required != 'true'
+        run: echo "No solver/compiler/protocol performance input changed; the deferred benchmark gate is not applicable, not passing evidence."
+
+      - name: Check out the pull-request head
+        if: needs.classify.outputs.benchmark_required == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Require official corpus and thresholds
+        if: needs.classify.outputs.benchmark_required == 'true'
+        run: |
+          python3 <<'PY'
+          import subprocess
+          files = subprocess.check_output(['git', 'ls-files', 'benchmarks'], text=True).splitlines()
+          corpus = [path for path in files if path.startswith('benchmarks/corpus/') and not path.endswith('README.md')]
+          expected = [path for path in files if path.startswith('benchmarks/expected/') and not path.endswith('README.md')]
+          if not corpus or not expected:
+              raise SystemExit('benchmark-relevant update is blocked: Phase 03 has not committed the official corpus and threshold evidence')
+          PY
+
+      - name: Install locked Nix
+        if: needs.classify.outputs.benchmark_required == 'true'
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Enforce official regression thresholds
+        if: needs.classify.outputs.benchmark_required == 'true'
+        run: |
+          nix develop --no-update-lock-file .#full --command just bench
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+
+  required:
+    name: Dependency update required gate
+    if: always()
+    needs:
+      - classify
+      - codeowners
+      - security-gates
+      - nix-and-tests
+      - generation-drift
+      - worker-gate
+      - benchmark-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every applicable gate
+        env:
+          DEPENDENCY_UPDATE: ${{ needs.classify.outputs.dependency_update }}
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          CODEOWNERS_RESULT: ${{ needs.codeowners.result }}
+          SECURITY_RESULT: ${{ needs.security-gates.result }}
+          TESTS_RESULT: ${{ needs.nix-and-tests.result }}
+          GENERATION_RESULT: ${{ needs.generation-drift.result }}
+          WORKER_RESULT: ${{ needs.worker-gate.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark-gate.result }}
+        run: |
+          test "${CLASSIFY_RESULT}" = success
+          test "${CODEOWNERS_RESULT}" = success
+          test "${TESTS_RESULT}" = success
+          test "${GENERATION_RESULT}" = success
+          test "${WORKER_RESULT}" = success
+          test "${BENCHMARK_RESULT}" = success
+          if [ "${DEPENDENCY_UPDATE}" = true ]; then
+            test "${SECURITY_RESULT}" = success
+          else
+            test "${SECURITY_RESULT}" = skipped
+            echo "No dependency input changed; all dependency-only gates were explicitly not applicable."
+          fi

@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Benchmark
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+  push:
+    paths:
+      - ".github/workflows/benchmark.yml"
+      - "benchmarks/**"
+      - "crates/**"
+      - "domains/**"
+      - "protocol/**"
+      - "workers/**"
+      - "xtask/**"
+      - "nix/**"
+      - "flake.nix"
+      - "flake.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Justfile"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  SOURCE_DATE_EPOCH: "0"
+  EUTHETO_TEST_SEED: "0"
+  RAYON_NUM_THREADS: "1"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  benchmark:
+    name: Discover and run approved benchmarks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the immutable source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Discover real corpus cases and runner sources
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          mapfile -d '' cases < <(
+            find benchmarks/corpus -type f \
+              ! -iname 'README.md' \
+              ! -iname 'LICENSE' \
+              ! -iname 'LICENSE.*' \
+              ! -name '.gitkeep' \
+              -print0 | sort -z
+          )
+          mapfile -d '' runner_sources < <(
+            find benchmarks/runner -type f \
+              ! -iname 'README.md' \
+              ! -iname 'LICENSE' \
+              ! -iname 'LICENSE.*' \
+              ! -name '.gitkeep' \
+              -print0 | sort -z
+          )
+
+          case_count=${#cases[@]}
+          runner_count=${#runner_sources[@]}
+          printf 'case_count=%s\n' "$case_count" >> "$GITHUB_OUTPUT"
+          printf 'runner_count=%s\n' "$runner_count" >> "$GITHUB_OUTPUT"
+
+          if (( case_count > 0 && runner_count > 0 )); then
+            printf 'ready=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'ready=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report unavailable benchmark evidence
+        if: steps.discover.outputs.ready != 'true'
+        shell: bash
+        env:
+          CASE_COUNT: ${{ steps.discover.outputs.case_count }}
+          RUNNER_COUNT: ${{ steps.discover.outputs.runner_count }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Benchmark evidence'
+            echo
+            echo 'No benchmark evidence was produced.'
+            echo
+            echo "Discovered real corpus cases: ${CASE_COUNT}"
+            echo "Discovered runner source files: ${RUNNER_COUNT}"
+            echo
+            echo 'Phase 00 reserves these directories but does not provide a solver benchmark corpus or runner. Directory placeholders are not passing evidence.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install locked Nix
+        if: steps.discover.outputs.ready == 'true'
+        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
+        with:
+          github-token: ""
+          diagnostic-endpoint: ""
+
+      - name: Run the canonical benchmark command
+        if: steps.discover.outputs.ready == 'true'
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}/eutheto-benchmark
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMPDIR"
+          nix develop --no-update-lock-file .#full --command just bench
+
+      - name: Record benchmark evidence status
+        if: steps.discover.outputs.ready == 'true' && success()
+        shell: bash
+        env:
+          CASE_COUNT: ${{ steps.discover.outputs.case_count }}
+          RUNNER_COUNT: ${{ steps.discover.outputs.runner_count }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Benchmark evidence'
+            echo
+            echo 'The canonical benchmark command completed.'
+            echo
+            echo "Discovered real corpus cases: ${CASE_COUNT}"
+            echo "Discovered runner source files: ${RUNNER_COUNT}"
+            echo
+            echo 'Only the runner output from this execution is evidence; scheduling or directory presence alone is not.'
+          } >> "$GITHUB_STEP_SUMMARY"

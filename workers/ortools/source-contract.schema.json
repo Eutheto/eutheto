@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "approval": {
+            "properties": {
+              "status": {
+                "const": "approved"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "approval": {
+            "properties": {
+              "record": {
+                "not": {
+                  "const": "UNRESOLVED"
+                }
+              }
+            }
+          },
+          "cmake": {
+            "properties": {
+              "cache_entries": {
+                "type": "object"
+              }
+            }
+          },
+          "ortools": {
+            "properties": {
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "source_url": {
+                "pattern": "^https://"
+              },
+              "version": {
+                "not": {
+                  "const": "UNRESOLVED"
+                }
+              }
+            }
+          },
+          "protobuf": {
+            "properties": {
+              "cpp_runtime_version": {
+                "not": {
+                  "const": "UNRESOLVED"
+                }
+              },
+              "protoc_version": {
+                "not": {
+                  "const": "UNRESOLVED"
+                }
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "source_url": {
+                "pattern": "^https://"
+              },
+              "source_version": {
+                "not": {
+                  "const": "UNRESOLVED"
+                }
+              }
+            }
+          },
+          "protocol": {
+            "properties": {
+              "schema_sha256": {
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "worker": {
+            "properties": {
+              "version": {
+                "not": {
+                  "const": "UNRESOLVED"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "approval": {
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "const": 3
+        },
+        "record": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "unapproved-example",
+            "approved"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "record",
+        "status"
+      ],
+      "type": "object"
+    },
+    "cmake": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_entries": {
+          "anyOf": [
+            {
+              "const": "UNRESOLVED"
+            },
+            {
+              "additionalProperties": {
+                "type": [
+                  "boolean",
+                  "integer",
+                  "string"
+                ]
+              },
+              "maxProperties": 128,
+              "minProperties": 1,
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cache_entries"
+      ],
+      "type": "object"
+    },
+    "ortools": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "anyOf": [
+            {
+              "const": "UNRESOLVED"
+            },
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          ]
+        },
+        "source_url": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "source_url",
+        "version"
+      ],
+      "type": "object"
+    },
+    "protobuf": {
+      "additionalProperties": false,
+      "properties": {
+        "cpp_runtime_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "protoc_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "const": "UNRESOLVED"
+            },
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          ]
+        },
+        "source_url": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "cpp_runtime_version",
+        "protoc_version",
+        "sha256",
+        "source_url",
+        "source_version"
+      ],
+      "type": "object"
+    },
+    "protocol": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_sha256": {
+          "anyOf": [
+            {
+              "const": "UNRESOLVED"
+            },
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          ]
+        },
+        "wire_version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "schema_sha256",
+        "wire_version"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "worker": {
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "const": "eutheto-ortools-worker"
+        },
+        "version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "approval",
+    "cmake",
+    "ortools",
+    "protobuf",
+    "protocol",
+    "schema_version",
+    "worker"
+  ],
+  "title": "Eutheto OR-Tools Phase-03 source contract",
+  "type": "object"
+}

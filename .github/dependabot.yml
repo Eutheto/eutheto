@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    reviewers:
+      - Eutheto/maintainers
+    labels:
+      - dependencies
+      - rust
+    groups:
+      rust-tauri-compatible:
+        patterns:
+          - tauri
+          - tauri-*
+        update-types:
+          - minor
+          - patch
+      rust-schema-compatible:
+        patterns:
+          - prost
+          - prost-*
+          - schemars
+          - serde
+          - serde_derive
+          - serde_json
+          - ts-rs
+        update-types:
+          - minor
+          - patch
+      rust-compatible:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - tauri
+          - tauri-*
+          - prost
+          - prost-*
+          - schemars
+          - serde
+          - serde_derive
+          - serde_json
+          - ts-rs
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "04:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    versioning-strategy: increase-if-necessary
+    reviewers:
+      - Eutheto/maintainers
+    labels:
+      - dependencies
+      - javascript
+    groups:
+      node-tauri-compatible:
+        patterns:
+          - "@tauri-apps/*"
+          - "@wdio/*"
+          - "@wdio/tauri-service"
+        update-types:
+          - minor
+          - patch
+      node-schema-compatible:
+        patterns:
+          - typescript
+          - typescript-eslint
+          - "@typescript-eslint/*"
+          - "@types/*"
+        update-types:
+          - minor
+          - patch
+      node-compatible:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@tauri-apps/*"
+          - "@wdio/*"
+          - "@wdio/tauri-service"
+          - typescript
+          - typescript-eslint
+          - "@typescript-eslint/*"
+          - "@types/*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    reviewers:
+      - Eutheto/maintainers
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      actions-compatible:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

@@ -4,7 +4,7 @@
 
 Turn the immutable Phase-11 release candidates into a public release only after correctness, data integrity, usability, accessibility, security/privacy, packaging, licensing, performance, migration/recovery, documentation, and operational evidence all pass. Publish defensible benchmark baselines and triage release-candidate feedback. Isolate or remove any experimental feature that cannot meet its advertised stability contract. “No known release blocker” means no unresolved severity accepted implicitly: every issue is fixed, explicitly downgraded with evidence and maintainer sign-off, or the affected feature/target is removed from the release.
 
-Candidate construction and artifact contracts are defined in [Phase 11](11-public-mvp-packaging-and-documentation.md). Version and unresolved-decision evidence is in [the assumptions ledger](assumptions.md). Work that is intentionally not a public-MVP requirement belongs to [Phase 13](13-post-mvp-roadmap.md).
+Candidate construction and artifact contracts are defined in [Phase 11](11-public-mvp-packaging-and-documentation.md). Version and unresolved-decision evidence is in [the assumptions ledger](assumptions.md). Work intentionally outside the public MVP enters the applicable post-MVP branch: the platform and school roadmap in [Phase 13](13-post-mvp-roadmap.md) or the proposed household-transportation pack in [Phase 14](14-transportation-domain-pack.md).
 
 ## Source coverage
 

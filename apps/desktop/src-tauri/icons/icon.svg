@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Oh My Pi — Phase-00 development-shell placeholder icon.
+    Deterministic geometric monochrome mark. NOT a final logo or trademark.
+    SPDX-License-Identifier: Apache-2.0
+  -->
+  <metadata>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+             xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <rdf:Description>
+        <dc:title>Oh My Pi — Phase-00 Dev Shell Icon</dc:title>
+        <dc:description>Placeholder geometric mark for local development builds. Not for distribution or public use.</dc:description>
+        <dc:license rdf:resource="https://www.apache.org/licenses/LICENSE-2.0"/>
+      </rdf:Description>
+    </rdf:RDF>
+  </metadata>
+
+  <!-- Background: rounded square -->
+  <rect x="0" y="0" width="512" height="512" rx="96" ry="96" fill="#1a1a1a"/>
+
+  <!-- Outer ring -->
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#e0e0e0" stroke-width="20"/>
+
+  <!-- Center diamond -->
+  <polygon points="256,176 296,256 256,336 216,256" fill="#e0e0e0"/>
+</svg>

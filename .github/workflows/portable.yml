@@ -1,0 +1,218 @@
+name: Portable
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/portable.yml"
+      - ".envrc"
+      - ".cargo/**"
+      - "apps/desktop/**"
+      - "crates/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "Justfile"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/portable.yml"
+      - ".cargo/**"
+      - ".envrc"
+      - "apps/desktop/**"
+      - "crates/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "Justfile"
+      - "rust-toolchain.toml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  TZ: UTC
+  LANG: C
+  LC_ALL: C
+  RUST_TEST_THREADS: "1"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  native-build-test:
+    name: ${{ matrix.name }} / native source build and test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu x86_64
+            os: ubuntu-24.04
+            nix-native: true
+            nix-system: x86_64-linux
+            native-arch: x86_64
+            phase-check: full
+          - name: Ubuntu arm64
+            os: ubuntu-24.04-arm
+            nix-native: true
+            nix-system: aarch64-linux
+            native-arch: aarch64
+            phase-check: full
+          - name: macOS x86_64
+            os: macos-15-intel
+            nix-native: true
+            nix-system: x86_64-darwin
+            native-arch: x86_64
+            phase-check: narrow
+          - name: macOS arm64
+            os: macos-15
+            nix-native: true
+            nix-system: aarch64-darwin
+            native-arch: arm64
+            phase-check: narrow
+          - name: Windows x86_64
+            os: windows-2025
+            nix-native: false
+            nix-system: ""
+            native-arch: ""
+            phase-check: windows
+          - name: Windows arm64
+            os: windows-11-arm
+            nix-native: false
+            nix-system: ""
+            native-arch: ""
+            phase-check: windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Determinate Nix
+        if: matrix.nix-native
+        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
+        with:
+          github-token: ""
+          diagnostic-endpoint: ""
+          extra-conf: |
+            substituters = https://cache.nixos.org/
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbSOg9B2WgX072S1D/UsD08Q=
+
+      - name: Verify the native Nix system
+        if: matrix.nix-native
+        shell: bash
+        run: |
+          test "$(uname -m)" = "${{ matrix.native-arch }}"
+          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "${{ matrix.nix-system }}"
+
+      - name: Evaluate the locked flake natively
+        if: matrix.nix-native
+        run: nix flake check --no-update-lock-file
+
+      - name: Verify exact default-shell tool pins
+        if: matrix.nix-native
+        shell: bash
+        run: |
+          set -o pipefail
+          test "$(nix develop --no-update-lock-file --command rustc --version | tail -n 1 | cut -d ' ' -f 2)" = "1.97.1"
+          test "$(nix develop --no-update-lock-file --command node --version | tail -n 1)" = "v24.20.0"
+          test "$(nix develop --no-update-lock-file --command pnpm --version | tail -n 1)" = "11.24.0"
+
+      - name: Install locked dependencies in the default Nix shell
+        if: matrix.nix-native
+        run: nix develop --no-update-lock-file --command just install
+
+      - name: Run the complete Phase-00 check in the default Nix shell
+        if: matrix.nix-native && matrix.phase-check == 'full'
+        run: nix develop --no-update-lock-file --command just check
+
+      - name: Run the narrow native contract check in the default Nix shell
+        if: matrix.nix-native && matrix.phase-check == 'narrow'
+        run: nix develop --no-update-lock-file --command just generate-check
+
+      - name: Select exact native Windows Node.js
+        if: runner.os == 'Windows'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          check-latest: false
+
+      - name: Activate native Windows toolchain pins
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          rustup show active-toolchain
+          test "$(rustc --version | cut -d ' ' -f 2)" = "1.97.1"
+          corepack enable
+          corepack install
+          test "$(node --version)" = "v24.20.0"
+          test "$(pnpm --version)" = "11.24.0"
+
+      - name: Install locked native Windows dependencies
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo fetch --locked
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Test the real core and CLI in the default Nix shell
+        if: matrix.nix-native
+        run: |
+          nix develop --no-update-lock-file --command cargo test --locked --all-targets --package eutheto-core --package eutheto-cli
+          nix develop --no-update-lock-file --command cargo run --locked --package eutheto-cli -- status
+
+      - name: Test the real core and CLI on native Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo test --locked --all-targets --package eutheto-core --package eutheto-cli
+          cargo run --locked --package eutheto-cli -- status
+
+      - name: Test and build the desktop shell in the default Nix shell
+        if: matrix.nix-native
+        run: |
+          nix develop --no-update-lock-file --command pnpm --filter @eutheto/desktop run test
+          nix develop --no-update-lock-file --command pnpm --filter @eutheto/desktop run tauri build --no-bundle
+
+      - name: Test and build the desktop shell on native Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pnpm --filter @eutheto/desktop run test
+          pnpm --filter @eutheto/desktop run tauri build --no-bundle
+
+      - name: Record the evidence boundary
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo
+            if [ "${{ matrix.nix-native }}" = "true" ]; then
+              echo "This completed job proves native ${{ matrix.nix-system }} locked-flake evaluation, default-shell realization, exact Rust/Node/pnpm pins, the ${{ matrix.phase-check }} Phase-00 check lane, and native source build/test evidence."
+            else
+              echo "This completed job proves a locked native Windows source build and the Phase-00 core, CLI, UI, and desktop-shell checks only."
+            fi
+            echo "It does not prove installer or packaged-product behavior, WebView2 deployment/support, signing, notarization, or production identifiers."
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              echo "Windows execution here is source build/test evidence only; WebView2 and installer deployment remain outside this workflow."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

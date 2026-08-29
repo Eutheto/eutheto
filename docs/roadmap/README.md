@@ -38,10 +38,10 @@ The platform comprises:
 
 - a fast Rust core for scenario commands, validation, routing, solve orchestration, independent verification, explanations, persistence, import/export, a reusable library API, and a first-class CLI;
 - a Tauri 2 desktop client using Vue 3, TypeScript, and Vite;
-- domain packs that translate workforce scheduling, individual-seat event seating, school timetabling, and future problem families into a solver-neutral planning IR;
+- domain packs that translate workforce scheduling, individual-seat event seating, school timetabling, planned post-MVP household transportation, and future problem families into a solver-neutral planning IR;
 - an optional provider-neutral AI interface that can act only through typed, validated, reviewable, reversible application commands.
 
-The public MVP contains production workforce and event-seating packs, bundled OR-Tools CP-SAT workers for supported platforms, experimental Pumpkin only for proven-compatible subsets, local persistence/import/export/undo/redo/repair/comparison/explanations, optional BYOK/local AI with preview-and-apply changes, cross-platform artifacts, examples, notices, SBOMs, checksums, and signed update metadata. School timetabling is the first major post-MVP pack and influences foundation contracts without delaying the MVP.
+The public MVP contains production workforce and event-seating packs, bundled OR-Tools CP-SAT workers for supported platforms, experimental Pumpkin only for proven-compatible subsets, local persistence/import/export/undo/redo/repair/comparison/explanations, optional BYOK/local AI with preview-and-apply changes, cross-platform artifacts, examples, notices, SBOMs, checksums, and signed update metadata. School timetabling is the first major post-MVP pack and influences foundation contracts without delaying the MVP. [Phase 14](14-transportation-domain-pack.md) is the detailed proposed post-MVP plan for household transportation; it is not current product behavior and selects no calendar, routing, or transit provider.
 
 ## Product principles
 
@@ -61,6 +61,7 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 - Equivalent optimization through the Rust library, working CLI, and desktop application.
 - Workforce scheduling with clinic/on-call coupling, eligibility, availability, coverage, overlap, rest, fixed/rolling hours, consecutive work, skill mix, travel, fairness, preferences, locks, and repair.
 - Individual-seat event seating with deterministic integer geometry, table/seat adjacency, orientation, physical proximity and distance, accessibility, same/different table, exclusions, and locks.
+- Planned post-MVP household transportation with calendar-derived commitments, vehicle/driver coordination, carpools, pickups, drop-offs, strict no-transit-first solving with per-person opt-in transit fallback, and independent verification.
 - Solver-neutral planning representation and stable routing to OR-Tools, Pumpkin, native algorithms, and future reviewed backends.
 - Independent verification and authoritative score recomputation for every accepted candidate.
 - Domain-language explanations for validation, infeasibility, assignment, trade-off, comparison, and repair changes.
@@ -210,10 +211,13 @@ Pause work and write an ADR before continuing if a rule cannot be independently 
                                                                workforce and seating flows]
 
 00–10 all complete ──> 11 packaging/docs ──> 12 stabilization/release
-                                               └─> 13 post-MVP school/platform
+                                               ├─> 13 post-MVP school/platform
+                                               └─> 14 post-MVP transportation
 ```
 
 The arrows are phase-entry gates, not merely suggested sequencing: transitive prerequisites remain mandatory where a later node names only its immediate predecessor. Within an entered phase, genuinely independent work packages may proceed in parallel after the contracts they consume are stable, but parallel preparation never waives an entry gate or permits an integration/exit claim early.
+
+Phase 13 and Phase 14 are sibling post-MVP branches entered directly from completed Phase 12. Neither branch requires completion of the other.
 
 After contracts exist, prefer complete thin paths—one person, one shift, coverage → compile → solve → verify → display → edit → undo—over horizontal mock layers. Add each official rule with schema/migration analysis, command DTO/validation, plain-language editor, fast/full validation, planning compilation, backend capability/translation tests, independent verification, provenance/explanation, appropriate AI schema, CLI/document example, edge/infeasible fixtures, user limitations, and model/benchmark review. Solver formulation alone is never “done.”
 
@@ -279,6 +283,7 @@ An AI capability has a deterministic non-AI equivalent, typed allowlisted risk-c
 | [11](11-public-mvp-packaging-and-documentation.md) | Public-MVP packaging, updater, supply-chain artifacts, and documentation. |
 | [12](12-stabilization-and-public-release-gate.md) | Correctness, usability, accessibility, security, performance, compliance, and public release gate. |
 | [13](13-post-mvp-roadmap.md) | School timetabling and explicitly gated platform expansion. |
+| [14](14-transportation-domain-pack.md) | Proposed post-MVP household transportation pack with provider-neutral immutable snapshots, verified planning, and gated calendar/routing/transit adapters. |
 
 ## Complete blueprint coverage matrix
 
@@ -291,21 +296,22 @@ Every numbered source section and appendix is assigned below. Shared sections ar
 | §3 Product vision | This index; phases 06, 07, 09, 10 for user-facing realization. |
 | §4 Goals/non-goals/success | This index; phase 12 final verification. |
 | §5 ADR-001–018 | This index; phase 00 creates ADR files; affected phases enforce them. |
-| §6 Delivery phases | This index and phases 00–13. |
+| §6 Delivery phases | This index and phases 00–14. |
 | §7 System architecture | This index; phases 01–04 enforce process/data/dependency boundaries. |
 | §8 Monorepo layout | Phase 00. |
 | §9 Core Rust architecture | Phase 01; solve/backend option contracts continue in phase 02. |
 | §10 Commands, undo/redo, audit | Phase 01; AI batch use in phase 10. |
-| §11 Persistence, files, migrations | Phase 01; domain migrations in phases 02/05/09/13 and release recovery in 12. |
-| §12 Domain-pack architecture | Phase 02; official packs in phases 05/09/13. |
-| §13 Domain model/planning IR | Phase 02; compiler implementations in 05/09/13. |
-| §14 Solver backend/routing | Phase 02 contracts; phases 03/08 implementations and 13 portfolio work. |
+| §11 Persistence, files, migrations | Phase 01; domain migrations in phases 02/05/09/13/14 and release recovery in 12. |
+| §12 Domain-pack architecture | Phase 02; official packs in phases 05/09/13/14. |
+| §13 Domain model/planning IR | Phase 02; compiler implementations in 05/09/13/14. |
+| §14 Solver backend/routing | Phase 02 contracts; phases 03/08 implementations, phase 13 portfolio work, and Phase 14's verified two-stage transportation solve. |
 | §15 OR-Tools worker | Phase 03; packaging in 11 and stabilization in 12. |
 | §16 Pumpkin/future backends | Phase 08; future backends in 13. |
-| §17 Verification/scoring/explanations | Phase 04; domain realizations in 05/07/09/13. |
+| §17 Verification/scoring/explanations | Phase 04; domain realizations in 05/07/09/13/14. |
 | §18 Workforce pack | Phases 05–07. |
 | §19 Seating pack | Phase 09. |
 | §20 School timetabling | Phase 13; foundation IR implications in phase 02. |
+| Transportation domain-pack blueprint (2026-08-29) | [Phase 14](14-transportation-domain-pack.md); assumptions and provider/integration gates in `assumptions.md` K.9. |
 | §21 Tauri/Vue architecture | Phase 06; shell/API foundation in 00–01; seating/AI surfaces in 09–10. |
 | §22 UX specification | Phases 06–07, 09–10; final usability gates in 12. |
 | §23 Optional AI | Phase 10; deterministic boundaries established in 01–02/04. |
@@ -316,18 +322,18 @@ Every numbered source section and appendix is assigned below. Shared sections ar
 | §28 Licensing/governance/contribution | Phase 00 foundation; phases 11–12 exact-artifact compliance; phase 13 future dependency review. |
 | §29 MVP implementation plan | Phases 00–12 respectively. |
 | §30 Post-MVP roadmap | Phase 13. |
-| §31 Sequencing/discipline/compatibility | This index and every phase; rule checklist primarily 05, 07, 09, 13. |
+| §31 Sequencing/discipline/compatibility | This index and every phase; rule checklist primarily 05, 07, 09, 13, and 14. |
 | §32 Risks/mitigations/stop conditions | This index and each phase risk section. |
 | §33 Definitions of done | This index; each phase exit gate; public release proof in phase 12. |
 | Appendix A Glossary | This index; phases 01–02 define serialized/API forms. |
 | Appendix B Dependencies | Phase 00 version/role matrix; adopting phases own exact feature and license validation. |
-| Appendix C CLI | Phase 01 base catalog; solve/solution/backend behavior in 02–09/13. |
+| Appendix C CLI | Phase 01 base catalog; solve/solution/backend behavior in 02–09/13/14. |
 | Appendix D Tauri API | Phase 01 base/generated boundary; domain/solve/solution/AI subsets in 06–10. |
 | Appendix E Worker protocol | Phase 03. |
 | Appendix F Workforce example | Phases 05–07. |
 | Appendix G Seating example | Phase 09. |
 | Appendix H Coding/architecture standards | Phase 00 configures enforcement; all phases comply. |
-| Appendix I Backlog map | Phases 00–13 map their named work packages to the corresponding epics. |
+| Appendix I Backlog map | Phases 00–14 map their named work packages to the corresponding epics. |
 | Appendix J Research references | Phase 00 evidence baseline; solver/desktop/AI/release owners re-verify current primary sources. |
 | Appendix K Implementation gates | `assumptions.md` ledger plus relevant phase assumption/version gates; phase 12 closes release-readiness gates. |
-| Appendix L Handoff | This index's dependency graph and phases 00–13. |
+| Appendix L Handoff | This index's dependency graph and phases 00–14. |

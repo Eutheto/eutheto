@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Feature proposal
+description: Propose a scoped outcome for the active roadmap phase.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals must fit the dependency-gated roadmap. A later phase may inform a contract, but its production behavior does not move earlier. Do not include vulnerability details; use the Security policy link instead.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the roadmap and existing issues for this outcome.
+          required: true
+        - label: This proposal contains no suspected vulnerability or other sensitive disclosure.
+          required: true
+        - label: This proposal does not present a mock, placeholder, or deferred capability as implemented behavior.
+          required: true
+
+  - type: input
+    id: phase-or-issue
+    attributes:
+      label: Phase or issue ID
+      description: Identify the active phase, work-package ID, acceptance criterion, or issue that authorizes the work.
+      placeholder: "Phase 00 / FOUND-003 / #123"
+    validations:
+      required: true
+
+  - type: textarea
+    id: need
+    attributes:
+      label: User or contributor need
+      description: Describe the concrete problem, who encounters it, and why the current behavior is insufficient.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed outcome
+      description: Describe observable behavior and boundaries, not an implementation scaffold.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: List objective acceptance criteria and the command, test, or exercised scenario that would prove each one. Mark genuinely unavailable gates as unavailable, not passing.
+      placeholder: |
+        - [ ] Behavior ...; proved by ...
+        - [ ] Boundary ...; proved by ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+      description: State prerequisites, work kept out of this proposal, compatibility constraints, and any active gates that remain closed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Explain the smallest viable alternative and why the proposed outcome is preferable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Cross-cutting impact
+      description: Address each applicable area and write "Not applicable — reason" for the rest.
+      placeholder: |
+        Security/privacy and trust boundaries:
+        Accessibility and keyboard/screen-reader behavior:
+        Schema/protocol/migration compatibility:
+        Generated artifacts and drift:
+        Dependencies, install scripts, licenses, notices, and SBOM:
+        Performance and benchmark evidence:
+        Native platform, packaging, updater, signing, or release gates:
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Link governing roadmap sections, ADRs, schemas, prior issues, or primary-source evidence. Do not invent project identities or contacts.

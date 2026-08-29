@@ -1,0 +1,9 @@
+[alias]
+xtask = "run --package xtask --"
+
+[net]
+git-fetch-with-cli = true
+retry = 2
+
+[term]
+color = "auto"

@@ -1,0 +1,31 @@
+{
+  "approval": {
+    "phase": 3,
+    "record": "UNRESOLVED",
+    "status": "unapproved-example"
+  },
+  "cmake": {
+    "cache_entries": "UNRESOLVED"
+  },
+  "ortools": {
+    "sha256": "UNRESOLVED",
+    "source_url": "UNRESOLVED",
+    "version": "UNRESOLVED"
+  },
+  "protobuf": {
+    "cpp_runtime_version": "UNRESOLVED",
+    "protoc_version": "UNRESOLVED",
+    "sha256": "UNRESOLVED",
+    "source_url": "UNRESOLVED",
+    "source_version": "UNRESOLVED"
+  },
+  "protocol": {
+    "schema_sha256": "UNRESOLVED",
+    "wire_version": 1
+  },
+  "schema_version": 1,
+  "worker": {
+    "identity": "eutheto-ortools-worker",
+    "version": "UNRESOLVED"
+  }
+}

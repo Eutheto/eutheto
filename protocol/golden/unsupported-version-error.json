@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "WORKER_ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION",
+    "message": "unsupported protocol version",
+    "rejectedProtocolVersion": 2
+  },
+  "protocolVersion": 1
+}

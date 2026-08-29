@@ -1,0 +1,189 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase_11_ready:
+        description: "Phase 11 exit evidence and every release identity/manifest gate are closed"
+        required: true
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  SOURCE_DATE_EPOCH: "0"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release-readiness:
+    name: Require a manually selected immutable release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce the manual Phase-11 and tag gates
+        shell: bash
+        env:
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          PHASE_11_READY: ${{ inputs.phase_11_ready }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_TYPE" != 'tag' ]]; then
+            echo '::error::Release may only be dispatched with an immutable tag selected as the workflow ref.'
+            exit 1
+          fi
+          if [[ ! "$REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag does not use the required semantic-version form: $REF"
+            exit 1
+          fi
+          if [[ "$PHASE_11_READY" != 'true' ]]; then
+            echo '::error::Phase 11 readiness was not explicitly confirmed.'
+            exit 1
+          fi
+
+  release-build:
+    name: Build gate and unsigned digest handoff
+    needs: release-readiness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      artifact_digest: ${{ steps.upload.outputs['artifact-digest'] }}
+    steps:
+      - name: Check out the selected tag without retained credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the tag resolves to the dispatched revision
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse 'HEAD^{commit}')
+          [[ "$actual_sha" == "$EXPECTED_SHA" ]]
+          tag_sha=$(git rev-parse "${GITHUB_REF}^{commit}")
+          [[ "$tag_sha" == "$EXPECTED_SHA" ]]
+
+      - name: Install locked Nix
+        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3.22.2
+        with:
+          github-token: ""
+          diagnostic-endpoint: ""
+
+      - name: Run the canonical release readiness check
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}/eutheto-release-preflight
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMPDIR"
+          nix develop --no-update-lock-file .#release --command just release-preflight
+
+      # This step is unreachable in Phase 00 because assemble-manifest fails
+      # until Phase 11 supplies real target artifacts and closes identity gates.
+      - name: Assemble the unsigned source-evidence handoff
+        shell: bash
+        env:
+          HANDOFF: ${{ runner.temp }}/eutheto-release-handoff
+        run: |
+          set -euo pipefail
+          mkdir -p "$HANDOFF"
+          git archive --format=tar --prefix=eutheto-source/ HEAD > "$HANDOFF/source.tar"
+          {
+            printf 'source-sha=%s\n' "$GITHUB_SHA"
+            printf 'source-ref=%s\n' "$GITHUB_REF"
+            printf 'workflow=%s\n' "$GITHUB_WORKFLOW"
+            printf 'run-id=%s\n' "$GITHUB_RUN_ID"
+            printf 'run-attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'status=unsigned-source-evidence-only\n'
+          } > "$HANDOFF/metadata.txt"
+          (
+            cd "$HANDOFF"
+            sha256sum metadata.txt source.tar > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+
+      - name: Upload the unsigned handoff
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-handoff-${{ github.sha }}
+          path: ${{ runner.temp }}/eutheto-release-handoff
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Record the artifact-service digest
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs['artifact-digest'] }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo '## Unsigned release handoff'
+            echo
+            echo "Artifact-service digest: \`${ARTIFACT_DIGEST}\`"
+            echo
+            echo 'This is source evidence only. It is not a release candidate, signature, or publication authorization.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release-signing:
+    name: Verify digest and keep signing closed
+    needs: release-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-signing
+    permissions:
+      actions: read
+    steps:
+      - name: Download the exact unsigned handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-handoff-${{ github.sha }}
+          path: ${{ runner.temp }}/eutheto-release-handoff
+          digest-mismatch: error
+
+      - name: Verify every handed-off SHA-256 digest
+        shell: bash
+        env:
+          HANDOFF: ${{ runner.temp }}/eutheto-release-handoff
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.release-build.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          (
+            cd "$HANDOFF"
+            sha256sum -c SHA256SUMS
+          )
+          grep -Fqx "source-sha=${GITHUB_SHA}" "$HANDOFF/metadata.txt"
+          grep -Fqx "source-ref=${GITHUB_REF}" "$HANDOFF/metadata.txt"
+          grep -Fqx 'status=unsigned-source-evidence-only' "$HANDOFF/metadata.txt"
+          {
+            echo '## Protected signing boundary'
+            echo
+            echo "Artifact-service digest recorded by the build job: \`${EXPECTED_ARTIFACT_DIGEST}\`"
+            echo 'The downloaded handoff checksums match. No signing operation was attempted.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Block signing and publication while gates remain unresolved
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '::error::Signing, notarization, updater identity, final artifact manifests, and publication remain disabled until their Phase 11 and Phase 12 gates are implemented and approved.'
+          exit 1

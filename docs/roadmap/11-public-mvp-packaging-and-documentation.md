@@ -326,7 +326,7 @@ Phase completion does not authorize public publication; Phase 12 does.
 - No mandatory account, hosted service, remote solve, or telemetry; local/offline operation is first-class.
 - No claim of bit-for-bit reproducible signed/notarized platform bundles when timestamps/platform services prevent it.
 - No “legally compliant,” certified, guaranteed optimal, or minimal-conflict claim unless separately proven.
-- Post-MVP telemetry, sandboxed packs, additional solvers, collaboration, server mode, hosted services, and new targets belong to [Phase 13](13-post-mvp-roadmap.md).
+- Post-MVP telemetry, sandboxed packs, additional solvers, collaboration, server mode, hosted services, and new targets belong to [Phase 13](13-post-mvp-roadmap.md); the proposed household-transportation pack has its separate sibling plan in [Phase 14](14-transportation-domain-pack.md).
 
 ## Assumption and version gates
 

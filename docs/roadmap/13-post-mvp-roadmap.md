@@ -53,6 +53,7 @@ Every branch delivered at or after 1.0 must:
 - native specialized algorithms;
 - optional HiGHS, SCIP, MiniZinc, commercial-solver, and routing adapters;
 - collaboration/server and enterprise integrations;
+- the proposed [Transportation domain-pack plan](14-transportation-domain-pack.md), independently entered from completed Phase 12;
 - additional official domain packs;
 - richer imports and structured import assistance;
 - AI/local-provider improvements;
@@ -274,7 +275,9 @@ Optional directory/HRIS import, calendar sync, school information systems, event
 
 ## Branch J — Additional official packs
 
-Candidates:
+Household transportation is planned in detail as [Phase 14 — Transportation Domain Pack](14-transportation-domain-pack.md). Phase 14 is a sibling post-MVP branch entered directly from completed Phase 12; completing this Phase-13 umbrella is not its entry gate. Its calendar, routing, and optional transit inputs require provider-neutral application/infrastructure adapters to fetch, validate, normalize, and persist bounded immutable local snapshots before network-free pack compilation and verification. Provider selection, authentication/scopes, licensing, caching, privacy, persistence/export, and offline/manual behavior remain explicit Phase-14 gates; no provider is selected or shipped here.
+
+Other candidates:
 
 - volunteer scheduling;
 - conference/session scheduling;
@@ -288,7 +291,7 @@ Candidates:
 - housing/roommate assignment;
 - election-worker scheduling with jurisdictional caution.
 
-Select on reusable primitives, domain maintainers, and clear UX—not modelability alone. Define privacy, rules/preferences, imports/exports, IR needs, verifier, explanations, accessibility, benchmark corpus, practitioner review, migration, ownership, and disclaimers before commitment.
+Select other packs on reusable primitives, domain maintainers, and clear UX—not modelability alone. Define privacy, rules/preferences, imports/exports, IR needs, verifier, explanations, accessibility, benchmark corpus, practitioner review, migration, ownership, and disclaimers before commitment.
 
 ## Branch K — AI and import improvements
 
@@ -337,7 +340,7 @@ Potential update/catalog hosting, shared projects, remote solves, and managed AI
 11. WASM SDK, manager/catalog, conformance kit.
 12. Authenticated service/collaboration design.
 13. Enterprise adapters.
-14. Selected official domains.
+14. Other selected official domains; transportation is ordered separately in its sibling [Phase-14 plan](14-transportation-domain-pack.md).
 15. AI/import improvements.
 16. Optional diagnostics.
 17. Additional targets/distribution.

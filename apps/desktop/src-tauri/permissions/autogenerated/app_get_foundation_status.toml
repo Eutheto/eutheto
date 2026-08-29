@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-get-foundation-status"
+description = "Enables the app_get_foundation_status command without any pre-configured scope."
+commands.allow = ["app_get_foundation_status"]
+
+[[permission]]
+identifier = "deny-app-get-foundation-status"
+description = "Denies the app_get_foundation_status command without any pre-configured scope."
+commands.deny = ["app_get_foundation_status"]
