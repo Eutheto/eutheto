@@ -8,7 +8,7 @@ Official packs register behind a stable internal contract; a trivial pack can cr
 
 ## Source coverage
 
-Blueprint §§12–14 and §29 Phase 2; relevant §§7, 9.6, 17, 20 foundation constraints, 24, 26, 31–33; Appendices A–D contract intersections, H, I (`PACK-001`, `IR-001`, `IR-002`, `SOLVER-001`, foundation of `VERIFY-001`), J.3, K.3–K.4/K.7, L. This file defines contracts consumed by phases [03](03-ortools-worker-vertical-slice.md), [04](04-independent-verifier-and-explanations.md), [05](05-workforce-core-vertical-slice.md), [08](08-pumpkin-backend-and-router.md), [09](09-seating-domain-and-venue-experience.md), and [13](13-post-mvp-roadmap.md).
+Blueprint §§12–14 and §29 Phase 2; relevant §§7, 9.6, 17, 20 foundation constraints, 24, 26, 31–33; Appendices A–D contract intersections, H, I (`PACK-001`, `IR-001`, `IR-002`, `SOLVER-001`, foundation of `VERIFY-001`), J.3, K.3–K.4/K.7, L; the cross-cutting [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and the pack-owned contracts in [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). This file defines contracts consumed by phases [03](03-ortools-worker-vertical-slice.md), [04](04-independent-verifier-and-explanations.md), [05](05-workforce-core-vertical-slice.md), [08](08-pumpkin-backend-and-router.md), [09](09-seating-domain-and-venue-experience.md), and [13](13-post-mvp-roadmap.md).
 
 ## Dependencies
 
@@ -27,6 +27,8 @@ Phase 01 supplies IDs, units, errors, document envelope/migrations, revisioned c
 - Capability compatibility is exact and user-explainable before solve. An unsupported override is disabled/rejected rather than failing mid-solve.
 - Router policy is deterministic code, never AI. One connected MVP model goes to one backend; splitting requires mathematical and domain-semantic proof.
 - Canonical generation uses stable IDs/order and checked `i64` arithmetic. Compiler output depends only on revision plus explicit context/options—never wall clock, machine locale/core count, hash-map order, or ambient environment.
+- `SolveOptions` carries one explicit end-to-end deadline/resource budget. Compilation, backend translation/execution, fallback, projection, verification, explanation, and nested diagnostics consume the remaining parent budget rather than resetting independent limits.
+- A fast raw incumbent is not a product result. Only projection plus independent verification establishes `first_verified_feasible`; proof search never withholds an already verified incumbent.
 
 ## Domain-pack architecture
 
@@ -42,13 +44,15 @@ Each pack supplies, without abbreviating any responsibility:
 - independent verification of normalized solutions;
 - authoritative score interpretation;
 - explanation vocabulary and evidence rendering;
-- import/export adapters;
+- current-domain ↔ portable-domain conversion, portable schema/capability metadata, historical portable migrations, and domain-owned Share Result payload builders;
 - purpose-built view-model builders;
 - typed AI tool definitions and examples where appropriate;
 - UI metadata and optional official Vue components;
 - sample scenarios, boundary/infeasible fixtures, and benchmark cases.
 
 It must not call OR-Tools/Pumpkin, access database or credentials, network during migrate/validate/compile/verify, mutate outside application transaction, or return pre-rendered untrusted HTML.
+
+Pack portable conversion and migration operate on strict typed portable representations, are pure/offline/deterministic, and never inspect SQLite or archive paths. Pack Share Result builders accept only an accepted immutable result plus explicit privacy options and return typed inert data/view payloads; they do not render HTML, choose filesystem paths, or bypass provider redistribution policy.
 
 ### Official registry and descriptor
 
@@ -69,6 +73,9 @@ pub struct DomainPackDescriptor {
     pub latest_schema_version: u32,
     pub icon_id: String,
     pub capabilities: DomainCapabilities,
+    pub portable_schema_version: u32,
+    pub portable_capabilities: BTreeSet<PortableCapabilityId>,
+    pub share_result_schema_version: u32,
     pub documentation_url: Option<Url>,
     pub license: LicenseMetadata,
 }
@@ -119,6 +126,26 @@ pub trait DomainPack: Send + Sync {
     fn command_catalog(&self) -> &DomainCommandCatalog;
     fn ai_tool_catalog(&self) -> &AiToolCatalog;
     fn ui_manifest(&self) -> &DomainUiManifest;
+    fn export_portable(
+        &self,
+        document: &DomainDocument,
+        context: &PortableExportContext,
+    ) -> Result<PortableDomainDocument, PortableError>;
+    fn migrate_portable(
+        &self,
+        document: HistoricalPortableDomainDocument,
+    ) -> Result<PortableMigrationOutput, MigrationError>;
+    fn import_portable(
+        &self,
+        document: &PortableDomainDocument,
+        context: &PortableImportContext,
+    ) -> Result<DomainDocument, PortableError>;
+    fn build_share_result(
+        &self,
+        document: &DomainDocument,
+        accepted: &AcceptedResult,
+        options: &ShareResultOptions,
+    ) -> Result<DomainShareResult, ShareResultError>;
 }
 ```
 
@@ -156,7 +183,7 @@ It powers navigation, rule picker, consistent forms, AI documentation, and disco
 
 ### Pack compatibility
 
-Open only if pack ID exists; schema is supported or migratable; required capabilities enabled; every extension understood or explicitly ignorable. When pack is unavailable, show safe envelope metadata and allow byte-preserving export of unopened bundle; never discard unknown data or pretend validation succeeded.
+Open only if pack ID exists; current and portable schemas are supported or migratable; required capabilities are enabled; and every extension is understood or explicitly declared nonsemantic/ignorable. Unknown semantic capabilities block import before commit. When a pack is unavailable, show safe envelope metadata and allow byte-preserving re-export of the unopened original bundle only when that can preserve the exact archive safely; never reconstruct, down-convert, discard unknown data, or pretend validation succeeded.
 
 ## Planning IR contract
 
@@ -300,6 +327,8 @@ Every pack performs exactly:
 
 Compilation is pure for scenario revision plus `CompileContext`; “today,” horizon, locale, seed and limits are explicit.
 
+Before Planning IR construction, packs deterministically remove candidates that are provably impossible under availability, eligibility, horizon, location/travel, resource, and other required-rule facts. They record pre/post counts and model-size estimates. Pruning must preserve the feasible set and authoritative score possibilities; exhaustive bounded fixtures compare pruned and unpruned semantics.
+
 ### IR validation
 
 Reject before routing:
@@ -396,6 +425,14 @@ pub enum SolveProgressEvent {
 
 Map backend “unknown” to the most accurate state based on verified incumbent and termination reason. Progress to Vue is throttled/coalesced; safe log lines are bounded/redacted. “Deep” never means optimal.
 
+### Budget, timing, and quality evidence
+
+The backend-neutral result and progress records preserve end-to-end deadline, remaining budget at dispatch, backend limit, seed/worker count, model-size summary, termination reason, first-incumbent time, first independently verified feasible time, backend objective/bound, and authoritative score reference. Phase spans use the stable taxonomy in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); backend-specific details remain bounded diagnostic extensions.
+
+`percent` is populated only when a phase has a real measurable denominator. The application maps detailed events to truthful coarse user phases and applies the 300–500 ms display threshold in Phase 06. Callback counts, diagnostic lines, objective/bound updates, and progress events are bounded and coalesced before crossing process or Tauri boundaries.
+
+Quick/Balanced/Deep are versioned policy profiles, not proof promises. The initial Balanced hypothesis places approximately 2–3 seconds of backend time inside a 3–5 second end-to-end interactive budget; Phase 12 calibrates final defaults from representative whole-pipeline benchmarks. `Deep` remains bounded and never means `Optimal`.
+
 ### Deterministic MVP router
 
 1. Honor explicit override only when compatible.
@@ -445,14 +482,14 @@ A rule is never complete when only formulation works. Before 1.0, schema/bundle 
 
 ## Ordered work packages
 
-1. **PACK-001 — Registry/descriptors.** Duplicate/incompatibility checks, official compiled-in registration seam, pack availability behavior, descriptor/catalog/UI manifest schemas.
-2. **PACK-002 — Erased/typed contract.** Domain document, migrate/new/apply/fast/full/compile/verify/view/explain seams, cancellation and pure-context boundaries, test pack.
-3. **PACK-003 — Generated catalogs.** Command/result JSON Schema, TS DTOs, AI metadata, examples, risk/reversibility, setup/entity/rule/view/import/export descriptors.
+1. **PACK-001 — Registry/descriptors.** Duplicate/incompatibility checks, official compiled-in registration seam, pack availability behavior, descriptor/catalog/UI manifest schemas, portable/share schema versions and capability declarations.
+2. **PACK-002 — Erased/typed contract.** Domain document; internal and portable migration/conversion; new/apply/fast/full/compile/verify/view/explain; accepted-result→Share Result contribution; cancellation and pure-context boundaries; test pack.
+3. **PACK-003 — Generated catalogs.** Command/result/portable/share JSON Schema, TS DTOs, AI metadata, examples, risk/reversibility, setup/entity/rule/view/import/export descriptors.
 4. **IR-001 — Values/builders.** Typed IDs/literals/expressions/domains/Boolean/integer/interval variables and an exhaustive enum with shape-safe builders for every unconditional primitive and any primitive enabled after its gate.
 5. **IR-002 — Objectives/provenance/projection.** Score levels/categories/directions/bounds, assumptions, provenance index, normalized solution/projection, stable diagnostic serialization.
 6. **IR-003 — Validation/summary/hash.** All validation failures, checked arithmetic, capability extraction, size/cost summary, canonical BLAKE3 and deterministic ordering.
-7. **SOLVER-001 — Backend contract.** Descriptor/distribution/license/stability, compatibility report, result/evidence, normalized status, progress, cancellation/resource semantics and fake backends.
-8. **SOLVER-002 — Router/components/fallback.** Deterministic policy, override, hypergraph plus domain merge proof, decision record and total-budget fallback.
+7. **SOLVER-001 — Backend contract.** Descriptor/distribution/license/stability, compatibility report, result/evidence, normalized status, truthful progress, cancellation/resource semantics, first-incumbent/termination timing, bounded diagnostics and fake backends.
+8. **SOLVER-002 — Router/components/fallback.** Deterministic policy, override, hypergraph plus domain merge proof, decision record, versioned Quick/Balanced/Deep policy and one total-budget fallback.
 9. **SOLVER-003 — Matrix/generation.** Machine source, generated docs/runtime table, descriptor consistency and fixtures for every unconditional or enabled primitive.
 10. **Vertical contract fixture.** Trivial pack with Boolean/integer/optional interval, required constraint, bounded preference, projection/provenance, compatible fake exact backend and independent fake verifier path; expose through working CLI/Tauri metadata.
 11. **School-timetabling foundation fixtures.** Encode one bounded miniature timetable through both the pre-enumerated pattern-choice and occurrence-variable formulations, including explicit meeting-to-room links, projection/provenance and valid/infeasible variants; this proves IR expressiveness without implementing the school pack or UI.
@@ -464,10 +501,11 @@ A rule is never complete when only formulation works. Before 1.0, schema/bundle 
 - Pure unit tests for literal/domain normalization, every builder invalid shape, checked coefficient/bounds, score comparison/bounds, provenance graph, projection and compatibility.
 - Property tests: normalized domain represents exactly values; serialization/hash invariant to insertion/entity ordering; score comparison transitive; builder output validates; proven-independent split/merge equals whole semantics; changing compiler/adapter/options changes hash as specified.
 - Golden tests serialize stable semantic IDs/normalized expressions, not debug formatting; reviewer confirms meaning of changes.
-- Pack contract tests for descriptor/catalog consistency, schema validation, migration, command/inverse seam, fast/full reports, compile purity, unavailable pack preservation.
+- Pack contract tests for descriptor/catalog consistency; current/internal and current/historical portable schema validation/migration; semantic capability and extension handling; portable round-trip; Share Result data minimization/accepted-result gate; command/inverse seam; fast/full reports; compile purity; unavailable-pack exact preservation.
 - Backend contract fixtures run against every claimed matrix cell; unsupported feature must fail compatibility without invoking solve.
 - Metamorphic fixtures: rename display metadata leaves hash/meaning; add irrelevant inactive entity does not change feasible set; tightening minimum cannot expand set; preference→required cannot create assignments.
 - Fuzz/property targets for IR parser/validator, domains, expressions, projection, component graph and malicious extension nodes.
+- Budget/timing contract tests prove nested fallback and diagnostics receive only remaining time, raw incumbents never become accepted results, callback/progress volume is bounded, and every normalized termination has exact feasible/proof wording.
 - Architecture tests enforce no domain→backend/Tauri/SQLite/provider and no backend→official-domain dependencies.
 
 ### Acceptance fixtures
@@ -482,8 +520,8 @@ A rule is never complete when only formulation works. Before 1.0, schema/bundle 
 8. **Unsupported fake backend:** exact unsupported list/warnings shown in working CLI/Tauri backend metadata; override rejected without solve.
 9. **Connected components:** truly independent model splits/merges identically; a shared fairness objective, projection relationship and domain merge invariant each prevent split.
 10. **Fallback:** unavailable permits budgeted fallback; invalid model/infeasible do not; verification failure is quarantined and recorded; timeout respects one total budget.
-11. **Pack unavailable/newer:** metadata visible, document unmodified/exportable, no validation/compile claim.
-12. **Generated contracts:** official pack commands produce matching JSON Schema, TypeScript types and AI tool metadata; clean regeneration has no drift.
+11. **Pack unavailable/newer:** metadata visible; original bundle remains unmodified and exactly re-exportable only under the safe byte-preservation path; unknown semantic capability/newer schema cannot import or be reconstructed; no validation/compile claim.
+12. **Portable/share contracts:** test pack current export/import is semantically equivalent; historical migration is deterministic; current-only export has no down-conversion; unknown semantic extension fails while declared nonsemantic extension preserves; Share Result excludes source-only fields and rejects an unaccepted result.
 13. **Architecture graph:** automated dependency test proves no forbidden crate edges.
 
 ### Exact exit criteria
@@ -499,6 +537,8 @@ A rule is never complete when only formulation works. Before 1.0, schema/bundle 
 - compatibility/router/component/fallback fixtures prove no known unsupported solve starts;
 - normalized solution/projection and provenance retain stable domain identities without trusting backend claims;
 - score scalarization rejects any priority/overflow uncertainty.
+- one-parent-budget, termination, first-incumbent/first-verified-feasible timing, and bounded-progress fixtures agree across fake backends and expose no fabricated completion percentage;
+- pack portable schema/capability declarations, sequential migration hooks, current export/import, semantic-extension rejection, nonsemantic preservation, and accepted-only Share Result payload pass the synthetic conformance kit;
 
 ## Risks and failure handling
 

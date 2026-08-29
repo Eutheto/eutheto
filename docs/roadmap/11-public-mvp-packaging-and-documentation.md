@@ -8,7 +8,7 @@ This phase prepares artifacts and documentation. [Phase 12](12-stabilization-and
 
 ## Source coverage
 
-This phase is the implementation source of truth for blueprint Sections 24 and 27–28; the release, security, quality, and documentation portions of Section 26; Phase 11; the release/documentation slices of Appendices B, H, I, J, and K; and the public-MVP contents in Section 6.3. It owns backlog items `SEC-001`, `REL-001`, `REL-002`, and `DOC-001`, and supplies the exact-artifact inputs to `QA-001` and `MVP-001`. It does not take full ownership of Appendices B, H, or L: the complete dependency baseline/roles, Nix/Just/xtask and coding/architecture standards, and foundational developer handoff remain owned by [Phase 00's source-coverage contract](00-repository-and-reproducible-tooling.md#source-coverage), [version baseline](00-repository-and-reproducible-tooling.md#current-verified-version-baseline-2026-08-29), [Nix and native environment contract](00-repository-and-reproducible-tooling.md#nix-and-native-environment-contract), and [human command and generation contract](00-repository-and-reproducible-tooling.md#human-command-and-generation-contract). The [roadmap dependency graph and delivery strategy](README.md#dependency-graph-and-delivery-strategy) owns the cross-phase implementation sequence.
+This phase is the implementation source of truth for blueprint Sections 24 and 27–28; the release, security, quality, and documentation portions of Section 26; Phase 11; the release/documentation slices of Appendices B, H, I, J, and K; the public-MVP contents in Section 6.3; candidate documentation/evidence for [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and public format/identity/documentation closure for [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). It owns backlog items `SEC-001`, `REL-001`, `REL-002`, and `DOC-001`, and supplies the exact-artifact inputs to `QA-001` and `MVP-001`. It does not take full ownership of Appendices B, H, or L: the complete dependency baseline/toolchain still belongs to Phase 00, complete standards to [README.md](README.md), and the dependency graph to the roadmap index.
 
 ## Dependencies
 
@@ -24,9 +24,9 @@ This phase is the implementation source of truth for blueprint Sections 24 and 2
 
 - The project name is final: `eutheto`.
 - Apache-2.0 and Developer Certificate of Origin sign-off are approved and must not be reopened by this phase.
-- The working CLI name `optimizer` remains provisional. The final CLI name, crate namespace/prefix, reverse-domain application ID, project file extension, Git hosting organization, governance/security contacts, stable/beta application identifiers, updater endpoint, and signing/key-custody choices are explicit release gates in [the assumptions ledger](assumptions.md); no package may silently invent them.
+- The working CLI name `optimizer` remains provisional. `.eutheto` is the current portable-file extension proposal, not a public decision. The final CLI name, crate namespace/prefix, reverse-domain application ID, portable extension/media type/file association, Git hosting organization, governance/security contacts, stable/beta application identifiers, updater endpoint, and signing/key-custody choices are explicit release gates in [the assumptions ledger](assumptions.md); no package may silently invent them.
 - Overall releases use semantic versioning: patch for compatible bug/security fixes, minor for backward-compatible features/rules/backends/packs, and major for incompatible public CLI/API/document changes.
-- The application release manifest records the application, core API, scenario envelope, every domain schema, planning IR, worker protocol, OR-Tools, backend-adapter, and AI policy/tool-catalog versions together even where they are independently versioned.
+- The application release manifest records the application, core API, scenario envelope, every domain schema, planning IR, worker protocol, OR-Tools, backend-adapter, AI policy/tool-catalog, benchmark-corpus, performance-policy, and report/portable-format versions together even where they are independently versioned.
 - Channels are stable, beta, and nightly/development. Stable is signed and fully tested; beta is explicit opt-in with schema compatibility tested; nightly artifacts are not automatically trusted for production. Stable never moves to beta without explicit user action.
 
 ### Trust boundaries and data authority
@@ -46,7 +46,7 @@ External AI provider
 
 Rust application/core
     ↕ strict parsers
-Imported files and project bundles
+Imported files, portable bundles, and standalone report data
 ```
 
 - Rust remains authoritative for scenario data. The webview never receives credentials and never directly performs provider HTTP calls.
@@ -123,7 +123,7 @@ Each candidate/release publishes or stages all of the following for every applic
 8. source archive and immutable source tag;
 9. migration notes, release notes, known limitations, and supported schema/version matrix;
 10. provenance statement with source commit, workflow identity, lockfiles/Nix inputs, toolchains, flags, and artifact digest;
-11. benchmark summary whenever compiler, verifier, router, backend, solver build, or performance-sensitive rule behavior changes;
+11. whole-pipeline benchmark summary whenever compiler, verifier, router, backend, solver build, renderer, or performance-sensitive rule behavior changes, including exact corpus/reference environment, warm/cold state, total budget, first verified feasible, authoritative quality, phase timing, and UI responsiveness rather than solver time alone;
 12. signed updater metadata for each enabled channel.
 
 Reproducibility records include exact source commit, `Cargo.lock`, `pnpm-lock.yaml`, `flake.lock`, pinned toolchain files, build flags, artifact digests, and `SOURCE_DATE_EPOCH` where supported. Claims must distinguish reproducible core/CLI/worker builds from platform bundles altered by timestamps, signing, or notarization.
@@ -221,7 +221,15 @@ Default eligible contents are bounded application/version/platform metadata, rel
 
 Redaction is structural at production time, not a post-hoc regular expression alone. Export writes to a fresh staging directory, uses safe generated filenames, rejects symlinks/traversal, enforces per-file and total limits, emits a manifest/checksums, and cleans temporary data on success/failure. The preview and final manifest must agree. A regression fixture plants representative secrets and personally identifying fields and proves they do not appear in the archive. Logs rotate and remain storage-bounded even if export is never used.
 
-### 8. Documentation contract
+### 8. Portable data and standalone report release contract
+
+Before candidate creation, freeze and document the MVP Portable Scenario Model, immutable Result Model, privacy-filtered Share Result Model, bundle manifest/checksum layout, current export versions, historical migration matrix, supported import range, and size/security limits from the cross-cutting specification. The release identity ADR closes the proposed `.eutheto` extension, media types, OS file association, icon, and CLI/desktop ownership together; installer associations and public examples cannot precede that decision.
+
+Release evidence proves scenario export/import, full-backup creation, add restore, replace restore with attempted pre-restore safety backup, collision choices, integration reconnection, and fresh-install recovery across every supported target. Current versions export only current canonical portable schemas; every supported historical version migrates sequentially; unknown required semantics or newer versions fail without mutation. Bundles never contain SQLite files, credentials, device-specific paths, disposable caches, or provider content whose terms prohibit redistribution.
+
+One-file HTML and direct PDF are public MVP result outputs. HTML must open from `file://`, require zero server/account/storage and zero network request for core meaning, preserve keyboard/screen-reader/list-table access, render user strings inertly under the restrictive standalone-report policy, print cleanly, and remain an immutable snapshot after source edits. PDF uses the same exact previewed Share Result payload and controlled local renderer. Exact privacy-preview equality, accepted-result provenance, generated-file versions, supported browsers, print/PDF limitations, and sensitive-field defaults are release-visible contracts—not implementation detail.
+
+### 9. Documentation contract
 
 All public claims are checked against the exact candidate. Documentation includes:
 
@@ -232,11 +240,13 @@ All public claims are checked against the exact candidate. Documentation include
 - seating guide and exhaustive rule/geometry reference with canvas and accessible list workflows, proximity classifications, overlays, keyboard operation, examples, limits, repair, and export;
 - locks, repair, comparison, alternatives, explanations, sufficient-versus-minimal conflict wording, counterfactual limitations, and accurate feasible/optimal/unknown status language;
 - AI/privacy/provider guide covering opt-in configuration, credential handling, provider/local-endpoint data boundaries, typed tools, preview/apply/undo, capability warnings, deterministic non-AI equivalents, and AI-disabled operation;
-- import/export/project-bundle limits, rejected-row/error behavior, backup/restore, update/migration, failure recovery, data-folder/export-all/delete-local-data, and portable CLI recovery inspection subject to schema compatibility;
+- intent-led portable-data guide that distinguishes **Export editable scenario**, **Back up everything**, and **Share Result**; documents proposed/final extension status, manifest/current-export/historical-import policy, stable identity, exclusions, bounded inspection, migrations, Create copy/Replace/Skip, integration reconnection, add/replace restore, pre-restore safety backup, atomicity, fresh-install recovery, CLI inspection, limits, and failure handling;
+- standalone-result guide covering accepted-result provenance, exact privacy preview/defaults, immutable snapshots, one-file offline `file://` HTML, direct PDF/print behavior, accessibility/list alternatives, no-network guarantee, safe external-link behavior, supported browsers, status/version metadata, and limitations;
 - installer/update/uninstall/offline behavior by platform, supported OS/architecture matrix, WebView2 requirements, Gatekeeper/SmartScreen guidance, and checksum/signature verification;
 - security/privacy statement, no-required-telemetry statement, threat model summary, data locations/retention, support-bundle contents/redaction/preview, security reporting path, and update trust model;
 - limitations/non-certification statement: presets are starting points and verified output only proves configured rules;
 - example workforce and seating projects with expected status/invariants, license/source, anonymized data, and walkthroughs.
+- performance and solver UX guidance explaining provisional versus calibrated expectations, Quick/Balanced/Deep budgets, first verified feasible versus proof, exact status/limit wording, truthful progress/cancellation behavior, reference-machine scope, supported model envelope, and how to read benchmark evidence without treating it as a universal guarantee.
 
 #### CLI documentation
 
@@ -245,7 +255,7 @@ The published CLI reference must reproduce the complete [Phase-01 working CLI co
 #### Developer/contributor/architecture documentation
 
 - native Nix and Windows setup, exact pinned toolchains, generation/lockfile workflow, worker build, Tauri prerequisites, tests, benchmarks, fuzzing, packaging, signing boundaries, and common failures;
-- headless Rust authority, package/crate boundaries, typed Tauri API, persistence/command journal, scenario envelope/migrations, domain-pack and Planning-IR contracts, solver routing/worker protocol, independent verifier, explanations, optional AI trust boundary, and release flow;
+- headless Rust authority, package/crate boundaries, typed Tauri API, persistence/command journal, scenario envelope/database migrations, separate Portable Scenario/Result/Share Result models and migrations, canonical bundle/checksum/import/restore staging contracts, domain-pack and Planning-IR contracts, solver routing/worker protocol, independent verifier, standalone report trust boundary, explanations, optional AI trust boundary, and release flow;
 - all approved ADRs under `docs/adr`, each containing context, decision, alternatives, consequences, status, and supersession links:
   `0001-headless-rust-core.md`, `0002-vue-vite-tauri.md`, `0003-ortools-worker-boundary.md`, `0004-domain-and-planning-ir.md`, `0005-independent-verifier.md`, `0006-sqlite-document-persistence.md`, `0007-ai-tool-approval-model.md`, `0008-apache-license-and-dco.md`, and `0009-nix-development-environment.md`;
 - public API and non-obvious invariants in code; generated DTOs/protobufs are not hand-edited; schema/protocol changes include compatibility/migration notes; solver changes include benchmark impact; material UI-flow changes include accessibility/usability evidence; dependency additions state purpose and license;
@@ -259,16 +269,16 @@ The published CLI reference must reproduce the complete [Phase-01 working CLI co
 
 ## Ordered work packages
 
-1. **REL-IDENTITY — close release identity gates.** Record final CLI/crate namespace, reverse-domain ID, project extension, hosting organization, governance/security contacts, stable/beta IDs, supported OS minimums, artifact mix, updater endpoint, key custody/rotation, and platform signing approach in the assumptions ledger and release configuration.
-2. **SEC-BOUNDARIES — harden desktop/import/worker boundaries.** Review Tauri capability manifests, `build.rs` command allowlisting, CSP, rich-text rendering, Rust-only network path, parser/archive/image limits, worker location/manifest/protocol verification, logging redaction, and no-telemetry default.
+1. **REL-IDENTITY — close release identity gates.** Record final CLI/crate namespace, reverse-domain ID, proposed `.eutheto` decision, media types/file associations/icon, hosting organization, governance/security contacts, stable/beta IDs, supported OS minimums, artifact mix, updater endpoint, key custody/rotation, and platform signing approach in the assumptions ledger, ADR, release configuration, installers, CLI, and docs.
+2. **SEC-BOUNDARIES — harden desktop/import/report/worker boundaries.** Review Tauri capability manifests, `build.rs` command allowlisting, app/report CSPs, inert standalone rendering, zero-required-network evidence, Rust-only provider network path, parser/archive/decompression/image limits, worker location/manifest/protocol verification, logging redaction, and no-telemetry default.
 3. **SEC-SUPPORT — implement diagnostics and support bundle.** Add bounded structured logging, diagnostic opt-in, itemized preview, structural redaction, safe staging/archive, checksums, cleanup, and planted-secret regression fixtures.
 4. **REL-WORKERS — produce target workers.** Build OR-Tools 9.15 only after its platform/build/benchmark/assumption-core gates, match protobuf/protoc to the pinned OR-Tools contract, disable GLPK/wrappers/examples/unrelated/proprietary integrations, inspect dependencies, produce manifest/SBOM/license payload, and test target-triple resolution.
-5. **REL-BUNDLES — assemble one-install packages.** Embed web assets, worker, manifests, migrations, presets, examples, keys, notices, and licenses; prove no external runtime or `PATH` solver lookup.
+5. **REL-BUNDLES — assemble one-install packages and freeze public data formats.** Embed web assets, worker, manifests, portable/report schemas and migration fixtures, presets, examples, keys, notices, and licenses; register only the decided file association; prove no external runtime or `PATH` solver lookup.
 6. **REL-SIGN — establish protected signing.** Separate build/sign jobs, digest transfers, macOS Developer ID/notarization/stapling, Windows Authenticode/timestamping, Linux signatures/attestations, key protection, and verification.
 7. **REL-UPDATE — implement stable/beta updater.** Configure signed metadata, channel separation, defer/skip/configurable checks, active-operation exclusion, offline behavior, pre-migration backup, and endpoint/key lifecycle.
 8. **LEGAL — complete compliance/governance corpus.** Generate and review exact-artifact notices/SBOMs, apply allow/review/block policy, verify asset/font/data provenance, add legal/governance/security/trademark/DCO files, and expose solver metadata.
-9. **DOC-USER — author and fixture-check user materials.** Complete quick start, workforce/seating/rules, status/explanation, AI/privacy, platform, recovery, support, examples, and non-certification content.
-10. **DOC-DEV — author contributor and architecture materials.** Complete Nix/native Windows, build/test/release, contracts, ADRs, governance, security response, CLI, schema compatibility, and generated-code policies.
+9. **DOC-USER — author and fixture-check user materials.** Complete quick start, workforce/seating/rules, status/explanation, solver budgets/performance limitations, portable import/export/full-backup/add-or-replace restore/recovery, Share Result privacy/offline HTML/PDF, AI/privacy, platform, support, examples, and non-certification content.
+10. **DOC-DEV — author contributor and architecture materials.** Complete Nix/native Windows, build/test/release, portable/result/share schemas and migration/renderer trust boundaries, contracts, ADRs, governance, security response, CLI, compatibility matrices, and generated-code policies.
 11. **REL-DRAFT — stage immutable candidates.** Run protected build/sign/assembly steps, draft complete releases/updater metadata, and hand exact digests plus evidence to Phase 12.
 
 ## Tests and acceptance evidence
@@ -282,8 +292,11 @@ Phase 11 supplies candidate-level evidence; Phase 12 repeats/expands release-gat
 - Updates preserve data; uninstall does not silently delete projects; open-data-folder, export-all-projects, delete-local-data, backup/restore, and CLI recovery paths match documentation.
 - Exact-artifact license/SBOM checks pass; generated notice diffs are reviewed; no blocked solver/dependency is linked or bundled; every asset/font/example has recorded source/license.
 - Support-bundle tests prove itemized preview equals final manifest, planted credentials/personal content are excluded, logs are bounded, archive/path limits hold, and failed exports clean staging data.
+- Portable-data fixtures prove canonical current export, semantic current/historical round trip for every official pack, unknown semantic/newer-version rejection without mutation, nonsemantic extension preservation, malicious ZIP/path/decompression/checksum rejection, Create copy/Replace/Skip, cancellation/stale-preview behavior, no SQLite/secrets/restricted caches, full-backup fresh-install restore, add/replace semantics, safety-backup reporting, atomic failure recovery, and cross-platform/CLI-desktop compatibility.
+- Standalone-report fixtures prove accepted-result and exact privacy-preview gates, default sensitive-field exclusion, inert malicious text, immutable source snapshots, one-file `file://` operation with zero required network requests, supported-browser/keyboard/screen-reader/list-table behavior, deterministic schematic/data agreement, print/PDF provenance/readability, atomic cleanup, and large-report responsiveness.
 - Security review proves minimum capabilities, restrictive CSP, Rust-only provider network path, safe rendering, strict parser limits, worker integrity validation, credential non-disclosure, structured redaction, and no required telemetry.
 - Documentation walkthroughs are executed against the candidate: quick start, workforce, seating, required/preference distinction, infeasibility wording, lock/repair, export, offline, update, backup/recovery, checksum/signature verification, support bundle, and AI-disabled operation.
+- candidate benchmark summaries identify exact corpus/build/reference environment, warm/cold state, full operation boundary and provisional status; public copy never turns a backend microbenchmark or one best run into a universal latency guarantee.
 - Migrations and backups from every previous beta build fixture pass.
 - Public text accurately states supported targets, experimental features, feasible/optimal/unknown meaning, explanation limits, privacy boundaries, and non-certification.
 
@@ -299,6 +312,8 @@ Phase 11 supplies candidate-level evidence; Phase 12 repeats/expands release-gat
 | License is outside policy or artifact inventory is uncertain | Stop bundling, obtain review, or remove the component; process separation is not an automatic exemption. |
 | Support bundle leaks sensitive data or preview disagrees | Disable export and block release until structural redaction and fixtures pass. |
 | Update/migration can lose projects | Block updater/release; preserve transactional migration, backup, rollback/recovery behavior. |
+| Bundle migration/restore loses meaning or mutates on failure | Block candidate; preserve source/backup, fix authoritative schema/migration/staging code, and rerun permanent historical/malicious/fresh-restore fixtures. |
+| Share preview differs from output, sensitive fields leak, or report needs network | Disable result export and block candidate until exact payload, inert rendering, privacy and offline browser evidence pass. |
 | Documentation contradicts behavior | Treat as release-blocking, correct docs or implementation, and repeat walkthrough. |
 | Users could read “verified” as legal/optimal certainty | Correct UI/docs before release; never weaken the configured-rules/non-certification and feasible/optimal language. |
 | Maintainer/security contact is not staffed | Do not fabricate it; resolve governance/contact gate before public reporting instructions are published. |
@@ -309,9 +324,11 @@ Phase 11 exits only when:
 
 - all declared target-specific, one-install, exact-artifact, signing, update, license, SBOM, notices, provenance, migration, offline, and support-bundle contracts above have evidence;
 - clean-machine install/open/solve/verify/export/update/uninstall smokes pass per target and no external runtime is required;
+- current/historical portable fixtures, scenario/full-backup import, add/replace restore, safety backup, atomic recovery, CLI/desktop parity, extension/media type/file association, and malicious-archive gates pass on every declared target;
+- one-file offline HTML and direct PDF pass exact privacy-preview, accepted-result provenance, inert-data/CSP, zero-required-network, supported-browser, accessibility/list-table, print, immutability, atomic-cleanup, and large-report gates;
 - exact artifacts contain no blocked dependency/solver and their notices/SBOMs/licenses/checksums/signatures/provenance are complete;
-- documentation is complete, walkthrough-tested, and accurate about limitations, status, privacy, security, experimental features, and non-certification;
-- previous-beta migration/backups pass;
+- documentation is complete, walkthrough-tested, and accurate about portability/recovery/share privacy, limitations, performance scope, solver budgets, first-verified-feasible/proof status, security, experimental features, and non-certification;
+- every supported historical database and portable version plus previous-beta backup/restore fixture passes;
 - every unresolved identity, target, updater, governance, and signing gate has a recorded decision rather than an implicit default;
 - immutable candidate digests and evidence are handed to [Phase 12](12-stabilization-and-public-release-gate.md).
 

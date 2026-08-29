@@ -8,7 +8,7 @@ Phase 04 is the trust boundary between [the OR-Tools worker](03-ortools-worker-v
 
 ## Source coverage
 
-This phase incorporates blueprint Section 17; provenance, score, assumptions, projection, validation, hashing, and compilation requirements from Sections 13–15; Phase 4; explanation/result UX from Sections 21–22; related CLI and Tauri APIs from Appendices C and D; and verification/explanation standards, tests, backlog, and definitions of done from Sections 26, 31, 33 and Appendices H–I.
+This phase incorporates blueprint Section 17; provenance, score, assumptions, projection, validation, hashing, and compilation requirements from Sections 13–15; Phase 4; explanation/result UX from Sections 21–22; related CLI and Tauri APIs from Appendices C and D; verification/explanation standards, tests, backlog, and definitions of done from Sections 26, 31, 33 and Appendices H–I; and the verified-result boundary in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md).
 
 ## Dependencies
 
@@ -35,6 +35,8 @@ backend values
 ```
 
 The verifier evaluates the exact scenario revision for which the model was compiled. A changed scenario makes the candidate stale; re-verification against the new revision is a separate operation, not an implicit update.
+
+Record projection, structural validation, required-rule verification, score recomputation, evidence persistence, and first-verified-feasible timings separately. A backend incumbent timestamp is never substituted for `first_verified_feasible`. Once a candidate verifies, deterministic result availability does not wait for optional explanation enrichment, infeasibility shrinking, counterfactual work, or AI paraphrase.
 
 If projection, structural validation, any required-rule evaluation, or score integrity fails:
 
@@ -246,6 +248,9 @@ solution_unlock_assignment
 solution_create_repair_request
 solution_export_preview
 solution_export
+solution_share_preview
+solution_share_create
+solution_export_cancel
 ```
 
 The explanation foundation also consumes `scenario_validate`, `solve_get_job`, `solve_get_diagnostics_summary`, and stable events:
@@ -275,7 +280,7 @@ Build and integrate application-owned `ValidationSummary`, `ConflictCard`, `Solu
 
 ## Ordered work packages
 
-1. **VERIFY-001 — normalized solution and verifier interface:** define projection/structural validation, report/evaluation/metric/checksum DTOs, revision/hash binding, and accept/quarantine transaction boundary.
+1. **VERIFY-001 — normalized solution and verifier interface:** define projection/structural validation, report/evaluation/metric/checksum DTOs, revision/hash binding, phase timing and first-verified-feasible evidence, and accept/quarantine transaction boundary.
 2. **Authoritative score engine:** implement lexicographic comparison, category contribution records, feasibility invariant, finite arithmetic/overflow checks, and backend-objective reconciliation diagnostics without trusting backend values.
 3. **IR-002 completion — provenance index:** make source→IR→backend→evidence mappings canonical, complete, versioned, and localizable; fail on missing user-relevant provenance.
 4. **Assumption grouping:** compile explainable required-rule groups, exclude foundational invariants, validate returned literal maps, and integrate the 9.15 issue gate.
@@ -298,6 +303,7 @@ Build and integrate application-owned `ValidationSummary`, `ConflictCard`, `Solu
 - counterfactual outcomes: proven impossible, verified worse by categories, equivalent/undistinguished, timeout without proof, stale revision, backend failure, and invalid candidate;
 - comparison covers assignment deltas, required-rule state, score/fairness/preference deltas, affected entities, locks, and proof status;
 - compact evidence round-trips while full logs remain absent by default.
+- timing fixtures distinguish raw incumbent, projection, verification, first verified feasible, score/evidence persistence, and optional explanation work; the accepted result remains available when later explanation work is slow, cancelled, or unavailable.
 
 ### Independence and differential tests
 
@@ -320,7 +326,7 @@ Build and integrate application-owned `ValidationSummary`, `ConflictCard`, `Solu
 
 ### Phase exit gate
 
-Phase 04 exits only when the synthetic pack-integration harness rejects and quarantines a deliberately invalid candidate; compiler/verifier differential enumeration passes for reviewed synthetic small models and is proven mutation-sensitive; valid assumption evidence maps to synthetic domain rule IDs while invalid evidence is rejected; authoritative score/category breakdown is independent of backend objective variables; no UI/API calls an unverified candidate ready; and solver status/proof wording is exact. No workforce projection, verifier, score, evidence renderer, fixture, or other Phase 05 deliverable is required for this gate.
+Phase 04 exits only when the synthetic pack-integration harness rejects and quarantines a deliberately invalid candidate; compiler/verifier differential enumeration passes for reviewed synthetic small models and is proven mutation-sensitive; valid assumption evidence maps to synthetic domain rule IDs while invalid evidence is rejected; authoritative score/category breakdown is independent of backend objective variables; first-verified-feasible timing occurs only after the full acceptance pipeline; an accepted result is not withheld by optional explanation work; no UI/API calls an unverified candidate ready; and solver status/proof wording is exact. No workforce projection, verifier, score, evidence renderer, fixture, or other Phase 05 deliverable is required for this gate.
 
 A core feature is done only with typed errors, cancellation/budgets where relevant, unit/property/integration coverage, migration/schema/protocol compatibility as applicable, documentation of invariants, accessibility/API impact review, and benchmark evidence when the path is performance-sensitive. An explanation capability is not done until all certainty labels, stale/error/cancel paths, deterministic evidence, and accessibility behavior pass.
 

@@ -10,11 +10,17 @@ This dated ledger records implementation-time facts, corrections, unresolved gat
 - **Transportation blueprint source:** `eutheto-transportation-domain-pack-mvp-post-mvp.md`
 - **Transportation blueprint SHA-256:** `9e269a173c217fcd6d08d4afaab9d82da3da43acda428b21c4c081cb353783e0`
 - **Transportation blueprint date:** 2026-08-29
+- **Performance/solver UX source:** `eutheto-performance-ux-targets.md`
+- **Performance/solver UX SHA-256:** `f5ad3479f76e22a16ca355abd8f3323add9f853003d9590c97d3080c2a3c389a`
+- **Performance/solver UX date:** 2026-08-29
+- **Export/import/backup/sharing source:** `eutheto-export-import-backup-sharing-spec.md`
+- **Export/import/backup/sharing SHA-256:** `679efcf2beb4c27a60ba36fae28870d51900d28180c34a17665c57dd0c7e8181`
+- **Export/import/backup/sharing date:** 2026-08-29
 - **Final project name:** `eutheto`
 - **Version policy:** use the latest stable supported version. If newest is incompatible or has a known blocker, use the newest compatible/safe stable and record the reason. Exact dependency/tool/action pins and integrity hashes are committed in Phase 0 lockfiles/toolchain files.
 - **Conflict rule:** direct npm registry, crates.io API, and GitHub releases API evidence recorded in the dated ledgers below controls over narrative agent reports. Conflicting values are not retained as alternatives.
 
-Related delivery files: [Phase 11 packaging/documentation](11-public-mvp-packaging-and-documentation.md), [Phase 12 stabilization/release](12-stabilization-and-public-release-gate.md), [Phase 13 post-MVP](13-post-mvp-roadmap.md), and [Phase 14 transportation](14-transportation-domain-pack.md).
+Related delivery files: [Performance and Solver UX Targets](performance-and-solver-ux-targets.md), [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md), [Phase 11 packaging/documentation](11-public-mvp-packaging-and-documentation.md), [Phase 12 stabilization/release](12-stabilization-and-public-release-gate.md), [Phase 13 post-MVP](13-post-mvp-roadmap.md), and [Phase 14 transportation](14-transportation-domain-pack.md).
 
 ## Final and unresolved identity decisions
 
@@ -25,11 +31,22 @@ Related delivery files: [Phase 11 packaging/documentation](11-public-mvp-packagi
 | Working CLI name | **Unresolved: `optimizer` is provisional, not final** | K.1 / Phase 0; must close before stable CLI docs and service mode |
 | Crate/package namespace and prefixes | **Resolved: `eutheto` namespace prefix**; Rust crates use `eutheto-*` and npm packages use `@eutheto/*`. The exact crate/package inventory names remain Phase-0 initialization decisions. | K.1 / Phase 0 |
 | Reverse-domain application ID | **Unresolved** | K.1 / Phase 0 and Phase 11 signing/updater |
-| Project file extension | **Unresolved**; `.optplan` is a blueprint working example, not a final decision | K.1 / Phase 0 and persistence/import docs |
+| Portable file extension/media type/association | **Unresolved; `.eutheto` is the current proposal, not a public decision.** `.optplan` is no longer the working proposal. | Phase 11 identity ADR and Phase 12 cross-platform open/inspect/package evidence |
 | Git hosting organization | **Unresolved** | K.1 / Phase 0 and Phase 11 release URLs |
 | Governance/security contacts | **Unresolved**; do not fabricate addresses | K.1 / Phase 11 governance/security |
 | Stable/beta application identifiers | **Unresolved** | K.1 / Phase 11 updater/signing continuity |
 | Release signing/notarization/key custody | **Unresolved choices; required before release** | K.1/K.5/K.8 / Phase 11–12 |
+
+## Cross-cutting proposal decisions
+
+| Decision | Current status/value | Owner/gate |
+|---|---|---|
+| Performance targets | **Provisional engineering objectives, not public guarantees:** small warm <500 ms; typical warm target <1 s and usually <3 s cold; p95 normal <5 s; moderate majority <5 s and expected <10 s; bounded stress/pathological behavior. | [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); Phase 12 calibrates public-MVP corpus/reference machine and Phase 14 recalibrates transportation. |
+| Interactive solver budget | **Initial experiment:** approximately 2–3 s of CP-SAT within a 3–5 s end-to-end Balanced budget; Quick/Deep remain bounded and never imply proof. | Phases 02–08 implement one parent budget/status semantics; Phase 12 selects released defaults from evidence. |
+| Performance reference hardware | **Provisional class:** ordinary 4–8-core, 16 GiB consumer machine, no dedicated GPU requirement. | Phase 12 records the exact machine, power mode, runner image, sample/percentile policy, corpus, cache state, and regression thresholds. |
+| Portable compatibility policy | **MVP proposal:** internal SQLite/document storage is not interchange; current builds export only current canonical Portable Scenario/Result/Share Result schemas; released historical inputs migrate sequentially; unknown required semantics/newer versions fail before mutation; declared nonsemantic extensions preserve. | [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md); Phases 01–02 implement contracts, 05/07/09 specialize official packs, 11–12 freeze/release. |
+| MVP portable scope | **Scenario bundle plus full-library backup/restore:** stable IDs and canonical units; Create copy/Replace/Skip scenario collisions; Add/Replace full restore with attempted pre-restore safety backup; no semantic merge, encryption, automatic backup, signatures, or hosted service in MVP. | Phases 01/06 own services/UI; Phase 12 owns permanent migration, malicious-archive, atomicity, and fresh-install recovery evidence. |
+| MVP result sharing | **One privacy-filtered immutable Share Result Model:** one-file offline `file://` HTML is default; direct PDF is secondary but required; exact preview drives both; zero required network; accessible list/table parity; accepted-result provenance. | Phases 07/09 implement shared renderer and official-pack payloads; Phases 11–12 close browser, CSP, privacy, print/PDF, and release evidence. |
 
 ## Controlling recommendations
 
@@ -232,7 +249,7 @@ Every K item is represented below. “Version selected” does not mean the buil
 |---|---|---|
 | Final project name | **Closed: eutheto** | Phase 0 workspace/package/docs normalization |
 | Rust/npm namespaces and prefixes | **Closed: Rust `eutheto-*`; npm `@eutheto/*`** | Final project-wide namespace decision; Phase 0 normalizes workspace/package manifests |
-| CLI executable, reverse-domain app ID, file extension, exact crate/package inventory names | **Open** | Phase 0 committed names and migration/update compatibility |
+| CLI executable, reverse-domain app ID, exact crate/package inventory names, portable extension/media types/file associations | **Open; `.eutheto` is the portable extension proposal** | Phase 0 committed names where needed; Phase 11 identity ADR/installer/CLI/docs; Phase 12 cross-platform open/inspect and migration/update compatibility |
 | Hosting organization and governance contacts | **Open** | Phase 0/11 public repository, GOVERNANCE/SECURITY contacts |
 | Exact Rust | **Selected and Nix-pinned: 1.97.1; four native CI default-shell assertions configured, run evidence pending** | `rust-toolchain.toml`, flake shell, and successful target-suite runs; revisit fixed stable |
 | Exact Node/pnpm | **Selected and Nix-pinned: Node 24.20.0 and pnpm 11.24.0; four native CI default-shell assertions configured, run evidence pending** | official fixed-output hashes/package-manager integrity, Nix shell, and successful CI smoke |
@@ -282,6 +299,7 @@ Every K item is represented below. “Version selected” does not mean the buil
 | AppImage/deb/rpm mix | **Open** | Clean-machine results control |
 | macOS x86_64 runner/support | **Native `macos-15-intel` Nix shell/source-build lane configured; successful run and signed-package smoke remain open** | Runner availability plus Phase 11/12 signed package smoke |
 | Updater endpoint/signing-key lifecycle | **Open** | Protected endpoint/key custody/rotation/revocation tests |
+| Standalone HTML supported browsers and PDF renderer | **Open**; one-file `file://`, zero-required-network, accessible interaction/list parity and controlled local PDF are required | Phase 07/09 implementation evidence; Phase 11 support statement; Phase 12 exact-candidate browser/platform/print/PDF gate |
 
 ### K.6 — AI adapters
 

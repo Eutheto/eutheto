@@ -8,7 +8,7 @@ Candidate construction and artifact contracts are defined in [Phase 11](11-publi
 
 ## Source coverage
 
-This phase is the implementation source of truth for blueprint Sections 22.18, 26, 32, and 33; Phase 12; Appendix K.8; the public-MVP scope in Section 6.3; and the release-gate portions of Sections 24, 27, and 28. It closes `QA-001` and `MVP-001` against the exact `SEC-001`, `REL-001`, `REL-002`, and `DOC-001` outputs from Phase 11.
+This phase is the implementation source of truth for blueprint Sections 22.18, 26, 32, and 33; Phase 12; Appendix K.8; the public-MVP scope in Section 6.3; the release-gate portions of Sections 24, 27, and 28; calibration/release approval of [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and final release evidence for [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). It closes `QA-001` and `MVP-001` against the exact `SEC-001`, `REL-001`, `REL-002`, and `DOC-001` outputs from Phase 11.
 
 ## Dependencies
 
@@ -31,6 +31,8 @@ This phase is the implementation source of truth for blueprint Sections 22.18, 2
 8. Accessibility, security, data integrity, licensing, and documentation accuracy are release requirements, not optional polish.
 9. A time-limited feasible result is never called optimal. A sufficient conflict is never called minimal unless minimality is proven.
 10. Tests never depend on current time/date, host time zone/locale, nondeterministic entropy, machine core count, or a live provider. They receive fixed clocks, explicit IANA zones, fixed seeds, temporary directories, and credential/provider fakes.
+11. Portable import/restore never commits until archive, checksums, versions, migrations, domain validation, collisions, reconnections, capacity, and destination are fully staged and reviewed. Current builds export only current canonical portable schemas.
+12. The exact privacy-preview Share Result payload is the only data accepted by HTML/PDF renderers. A report requiring a network request for core meaning is release-blocking.
 
 ### Highest-risk failures
 
@@ -42,6 +44,8 @@ Testing effort is weighted toward these failures:
 - an infeasibility explanation overstates certainty;
 - a packaged worker differs from the tested worker;
 - a large model freezes the UI or exhausts memory/log/process limits;
+- a portable import/restore drops meaning, imports device state/secrets, or partially mutates on failure;
+- a share preview omits a disclosed field, output leaks excluded data, or offline report rendering executes untrusted content;
 - an AI tool mutates authoritative state without explicit user approval.
 
 ## Exhaustive scope and technical details
@@ -151,7 +155,9 @@ Execute a versioned script against every exact candidate covering:
 - large representative workforce and seating scenarios;
 - first launch and normal use with no network;
 - OS credential-store integration, replacement/deletion, absent-store error UX, and no secret disclosure;
-- checksum/signature verification, About/solver license metadata, and support-bundle redaction/preview.
+- checksum/signature verification, About/solver license metadata, and support-bundle redaction/preview;
+- proposed/final `.eutheto` scenario import/export, full backup, add/replace restore, attempted safety-backup failure, collision/reconnection review, cancellation, and fresh-install recovery;
+- exact privacy-preview one-file HTML opened from `file://`, direct PDF/print, no-network evidence, malicious-text inertness, immutable snapshot behavior, and accessible list/table alternatives.
 
 ### 2. Usability research gate
 
@@ -163,9 +169,9 @@ Recruit representative people who have not used constraint solvers. Each partici
 4. understand an infeasible result without mistaking a sufficient conflict for a proven minimal conflict;
 5. lock an assignment and repair the schedule;
 6. create a seating separation rule based on physical proximity;
-7. export the result.
-
-Record completion, time, mistakes, assistance, terminology leakage, required-versus-preference comprehension, status/optimality comprehension, and points of hesitation. Repeated confusion in these workflows blocks release. Fix the workflow or language, repeat the affected tasks with fresh representative users, and retain anonymized findings and resolution evidence. Do not collect unnecessary personal data.
+7. choose the correct action among Export editable scenario, Back up everything, and Share Result;
+8. inspect privacy choices and share an immutable one-file HTML/PDF result offline; and
+9. restore a full backup on a fresh installation, distinguishing Add from Replace and understanding the safety-backup outcome.
 
 ### 3. Fuzzing and sanitizers
 
@@ -173,11 +179,13 @@ Create and maintain `cargo-fuzz` 0.13.2 / `libfuzzer-sys` 0.4.13 targets for:
 
 - scenario JSON envelope;
 - every domain-document parser;
-- project-bundle manifest and path normalization;
+- project-bundle manifest, ZIP path normalization, entry/aggregate/decompression limits, and checksums;
+- every Portable Scenario/Result/Share Result schema and sequential migration;
+- standalone-report Share Result decoder and inert-data boundary;
 - CSV import mapping;
 - worker frame decoder;
 - normalized-solution parser;
-- migrations;
+- database and portable migrations;
 - custom endpoint URL validation.
 
 Run bounded scheduled CI campaigns plus sanitizer builds; run longer campaigns before major/public releases. Store minimized regression inputs under `fuzz/regressions`, classify crashes/timeouts/OOMs, and add deterministic regression coverage. Fuzzing's nightly Rust toolchain is separately pinned; it does not change the release compiler.
@@ -210,22 +218,28 @@ benchmarks/
 └── expected-invariants/
 ```
 
-School fixtures may exist before the school UI, but do not imply Phase-13 delivery. Every manifest records fixture hash and generator seed, scenario/domain schema versions, size metrics, expected status when known, required-rule and score invariants, permitted backends, benchmark time budget, and historical baseline ranges. Real donated scenarios require permission and de-identification; personally identifying data is never committed.
+School fixtures may exist before the school UI, but do not imply Phase-13 delivery. Every manifest records fixture hash and generator seed, scenario/domain schema/compiler/backend versions, scenario and model-size metrics, candidate counts before/after pruning, warm/cold and cache/enrichment preconditions, expected status when known, required-rule and authoritative-score invariants, permitted backends, total and backend budgets, thread policy, and historical baseline ranges. Real donated scenarios require permission and de-identification; personally identifying data is never committed.
 
 Measure separately:
 
 - scenario load and migration;
 - validation;
+- candidate generation and deterministic pruning;
 - domain normalization;
+- local transportation/snapshot lookup and separately disclosed network enrichment;
 - Planning-IR compilation;
 - backend translation;
 - worker startup;
-- time to first independently verified feasible candidate;
+- raw backend first incumbent;
+- first independently verified feasible candidate;
 - best authoritative score vector within fixed budgets;
-- verification;
+- backend solve and termination/proof/bound;
+- projection and verification;
 - explanation shrinking/counterfactual;
+- result post-processing;
 - UI initial render and interaction latency;
 - memory high-water mark;
+- cache hit/miss and fallback/transit stage; and
 - model size.
 
 Use a fixed runner image/machine class, fixed clocks/seeds/budgets, explicit thread/core policy, and recorded toolchain/backend versions. Keep raw results as artifacts and publish the reviewed baseline/summary. A solver with fast search but slow compilation is not presented as universally faster.
@@ -240,6 +254,16 @@ Performance gates require:
 - no unbounded worker logs or memory growth.
 
 Threshold values/tolerances and interaction budgets must be defined from Phase-12 baseline evidence, committed with rationale, and applied consistently; an undefined “reviewed percentage” cannot authorize release.
+
+### Initial target calibration
+
+Begin with the cross-cutting hypotheses rather than inventing a different release metric: <500 ms end to end for approved small warm fixtures; target <1 second warm and usually <3 seconds cold for approved typical fixtures; p95 <5 seconds over the defined normal corpus; <5 seconds for the large majority of moderately complex cases and <10 seconds expected ceiling; and bounded, accurately labelled outcomes for stress/pathological cases. The initial Balanced profile tests approximately 2–3 seconds of CP-SAT time inside a 3–5 second end-to-end interactive budget.
+
+Calibrate on an exact ordinary consumer machine class approximating 4–8 CPU cores and 16 GiB RAM, with no dedicated GPU requirement, then record the concrete machine. A target becomes a release gate only after the corpus, cache state, operation boundary, sample count, percentile method, variance policy, power mode, and regression tolerance are committed. If evidence requires changing a target, record the measured reason and update the cross-cutting document, product copy, and baseline together; never silently redefine the denominator or publish a universal hardware promise.
+
+Map the corpus to four reviewed classes: Pack A small; Pack B common workforce/household/group-equivalent load; Pack C moderately complex with significant preferences/transportation dependencies where applicable; and Pack D difficult/stress. Transportation Phase 14 adds manual, warm-snapshot, cold-enrichment, traffic-bucket, and transit-fallback variants after MVP without changing the public-MVP corpus retroactively.
+
+Performance acceptance also requires no webview freeze or unbounded long task; progress appears only after approximately 300–500 ms and only from real phases; cancellation/focus/screen-reader behavior remains responsive; raw incumbents are never announced as valid; and an accepted result is not withheld by optimality proof, optional explanation, or AI provider work.
 
 ### 6. CI workflow and required checks
 
@@ -349,6 +373,14 @@ A backend is done only when license/distribution are approved; exact version is 
 
 A desktop flow is done only when normal, empty, loading, stale, error, and offline states are designed; the keyboard path works; labels/focus/announcements pass automated and manual checks; transient/optimistic state cannot corrupt Rust authority; revision conflicts are handled; undo/redo is defined; a large fixture is profiled; representative users complete the task; and screenshots/docs match the candidate.
 
+### Portable data and restore flow
+
+A portable-data flow is done only when internal storage is not the interchange schema; current export is canonical; every supported historical migration is permanent and sequential; IDs/references/units/extensions obey the public contract; bounds/checksums/archive hazards and unknown semantics fail before mutation; preview exactly describes migrations, collisions, reconnections, inclusions/exclusions and destination; Create copy/Replace/Skip plus add/replace restore are unambiguous; destructive replace attempts and truthfully reports a pre-restore safety backup; commit is atomic; cancellation/failure preserves source and authoritative data; and desktop/CLI/fresh-install fixtures agree.
+
+### Standalone result flow
+
+A standalone result flow is done only when one accepted immutable result builds one versioned privacy-filtered Share Result payload; preview and output fields agree exactly; HTML opens as one `file://` file with no required network/server/account/storage; user strings remain inert under the report CSP; key interactions are keyboard/screen-reader operable and every visual has a list/table equivalent; print/PDF reuse the same payload; generated output retains status/provenance/version/privacy metadata and cannot change with the source; output staging is atomic/cancellable; and supported-browser, malicious-data, large-report, offline, and no-network evidence pass.
+
 ### AI capability
 
 An AI capability is done only when a deterministic non-AI equivalent exists; the tool is typed/allowlisted; read/write risk is classified; writes produce a diff preview and require explicit apply; stale revision behavior and prompt-injection/malformed-call tests pass; secret/data scope is documented; provider failure preserves state; deterministic evidence is inspectable; and a fake provider covers it in CI.
@@ -367,11 +399,11 @@ Every item is mandatory unless the affected target/feature is explicitly removed
 
 ### Data integrity
 
-- Database, scenario-envelope, domain, and settings migrations pass every fixture.
-- Import, export, backup, restore, recovery, undo/redo, and reopen paths pass.
-- Malformed bundles cannot partially mutate authoritative data.
-- Update migration creates rollback backup behavior and preserves projects.
-- Unknown-newer formats fail safely and released migrations remain immutable.
+- Database, scenario-envelope, domain, settings, Portable Scenario, Result, and Share Result migrations pass every permanent historical fixture.
+- Current export is canonical/current-only; historical import migrates sequentially; unknown required semantics/newer versions reject before mutation while declared nonsemantic extensions preserve.
+- Scenario export/import and full-backup creation plus add/replace restore pass semantic round trip, stable identity/reference/unit, collision/reconnection, cross-platform, CLI/desktop, fresh-install, attempted safety-backup, cancellation, interruption, and recovery fixtures.
+- Malformed, checksum-invalid, traversal/symlink/duplicate/path-conflicting/decompression-hostile or over-limit bundles cannot partially mutate authoritative data or leave trusted staging.
+- Bundles contain no SQLite/database file, credential, device-specific path, disposable cache, unauthorized provider content, AI conversation/provider payload, or undisclosed excluded data.
 
 ### UX and accessibility
 
@@ -379,13 +411,17 @@ Every item is mandatory unless the affected target/feature is explicitly removed
 - Keyboard workflows pass.
 - Automated and manual accessibility checks pass the documented severity policy.
 - Large workforce and seating views meet recorded responsiveness/memory budgets.
+- Calibrated small/typical/normal-corpus solve targets pass on the recorded reference machine, stress cases remain bounded, and raw artifacts prove each end-to-end phase rather than solver time alone.
+- Progress threshold, truthful phases, cancellation/focus/announcement behavior, first-verified-feasible delivery, and optional-explanation/AI isolation pass on packaged targets.
+- One-file HTML and direct PDF pass exact privacy-preview, accepted-result provenance, immutable-snapshot, `file://` offline/no-network, safe interaction, keyboard/screen-reader/list-table, print/grayscale/page-context, supported-browser, cancellation, and large-report responsiveness gates.
+- Representative users distinguish editable export, full backup, and immutable result sharing; they can complete privacy review and add/replace recovery without unsafe assumptions.
 - AI is optional, visibly bounded, preview/apply controlled, and all deterministic paths work without it.
 
 ### Security and privacy
 
 - Threat model is reviewed against exact artifacts.
-- Tauri capabilities, registered commands, CSP, safe rendering, and Rust-only network path are reviewed.
-- Secrets remain outside webview, logs, database, exports, diagnostics, child environments, and support bundles.
+- Tauri capabilities, application CSP, standalone-report CSP, safe inert-data rendering, archive/report parser limits, output staging, and Rust-only network path are reviewed.
+- Secrets and excluded/source-only data remain outside webview, logs, database, portable bundles, HTML/PDF/other exports, diagnostics, child environments, and support bundles.
 - Dependency/advisory/secret/static scans pass or every non-blocking exception has owner, scope, rationale, expiration/review point, and maintainer approval.
 - Signed update/channel/key flows reject invalid metadata/packages and pass clean-machine tests.
 - Support bundle is structurally redacted, bounded, user-created, previewable, and manifest-consistent.
@@ -397,6 +433,7 @@ Every item is mandatory unless the affected target/feature is explicitly removed
 - The exact bundled worker validates its manifest/hash/target, handshakes, solves, cancels, and fails safely.
 - No external runtime, toolchain, language, or solver installation is required.
 - Update, migration backup, uninstall, data retention/deletion, restore, and offline behavior pass.
+- The final portable extension/media types/file associations open through bounded inspect/preview rather than direct mutation, and all registered cross-platform behavior matches the identity ADR.
 - Platform signing/notarization/timestamp/checksum/attestation evidence verifies for exact digests.
 
 ### Open-source compliance
@@ -415,9 +452,9 @@ Every item is mandatory unless the affected target/feature is explicitly removed
 - final CLI reference and stable exit/error behavior;
 - developer guide for Nix and native Windows setup;
 - architecture and approved ADRs;
-- security, privacy, AI, provider, credential, updater, and support-bundle guidance;
-- migration, backup, restore, recovery, data deletion/retention, update, uninstall, and offline instructions;
-- supported OS/target matrix, artifact/checksum/signature verification, stability labels, and known limitations.
+- security, privacy, AI, provider, credential, updater, support-bundle, standalone-report CSP/no-network, and exact share-preview guidance;
+- Portable Scenario/Result/Share Result compatibility matrices; editable export versus backup versus sharing; migration/collision/reconnection; add/replace restore, safety backup, recovery, data deletion/retention, update, uninstall, and offline instructions;
+- final extension/media types/file associations, supported OS/target/browser matrix, artifact/checksum/signature verification, stability labels, and known limitations.
 
 All documentation walkthroughs must match the exact candidate.
 
@@ -435,13 +472,13 @@ All documentation walkthroughs must match the exact candidate.
 
 1. **QA-FREEZE — freeze candidate and evidence index.** Record source, locks, toolchains, flags, manifests, digests, target matrix, expected tests, docs, and prior-beta migration corpus.
 2. **QA-CORRECT — run semantic correctness layers.** Unit/property/domain/golden/backend/differential/mutation/metamorphic suites; investigate every discrepancy at the compiler/verifier/domain cause.
-3. **QA-DATA — run persistence/migration/import/recovery gates.** Include interruptions, malformed input, backups, restart, update migration, and unknown-newer rejection.
-4. **QA-PROCESS — run protocol/worker/fuzz/sanitizer gates.** Exercise malformed frames, cancellation, crashes, limits, manifests, packaged workers, parsers, and regression corpus.
-5. **QA-UI — run frontend and packaged E2E.** Cover required workflows, stale/conflict/error/offline states, large views, support bundle, fake AI, and exact artifacts.
+3. **QA-DATA — run persistence/portable/migration/import/recovery gates.** Include permanent database and Portable Scenario/Result/Share Result fixtures, current-only export, semantic round trips, malicious/oversize archives, unknown semantics/extensions, collisions/reconnections, add/replace and fresh-install restore, safety backup, interruption/cancellation, no-forbidden-content checks, and atomic recovery.
+4. **QA-PROCESS — run protocol/worker/fuzz/sanitizer gates.** Exercise malformed worker frames, ZIP manifests/paths/checksums/decompression, portable/share decoders and migrations, cancellation, crashes, limits, manifests, packaged workers, and regression corpus.
+5. **QA-UI — run frontend, report-browser, and packaged E2E.** Cover required workflows, distinct editable/backup/share intents, exact privacy preview, import/restore review/recovery, HTML `file://` no-network/inert-data/immutability, PDF/print, stale/conflict/error/offline states, large views/reports, support bundle, fake AI, and exact artifacts.
 6. **QA-RESEARCH — conduct usability studies.** Capture and resolve every required task's repeated confusion, then retest affected flows with fresh users.
 7. **QA-A11Y — complete accessibility audit.** Automated, keyboard, screen-reader, zoom/high-DPI, reduced-motion, non-color, canvas-alternative, and severity review.
-8. **QA-PERF — establish and enforce baseline.** Lock runner/budgets/tolerances, run corpus, inspect raw stage-specific metrics, publish baseline and deltas.
-9. **QA-SECLEGAL — review threat model and exact artifacts.** Capabilities/CSP/parsers/secrets/support/updater, scans, notices/SBOM/licenses/assets, no blocked dependencies, and security reporting readiness.
+8. **QA-PERF — establish and enforce baseline.** Lock reference machine/runner, Pack A–D manifests, warm/cold/cache preconditions, budgets, sample/percentile method and tolerances; run the corpus; inspect raw end-to-end phase/model/cache/quality metrics; publish baseline and deltas; calibrate Quick/Balanced/Deep and supported envelopes without overstating guarantees.
+9. **QA-SECLEGAL — review threat model and exact artifacts.** Capabilities/application-and-report CSPs, inert rendering, archive/report parsers, portable/share privacy and prohibited content, secrets/support/updater, scans, notices/SBOM/licenses/assets, no blocked dependencies, and security reporting readiness.
 10. **QA-PLATFORM — complete clean-machine manual QA.** Installer/signing/update/uninstall/offline/credential-store/platform display behavior for every declared target.
 11. **QA-RC — triage candidate feedback and isolate experiments.** Fix root causes, regenerate candidates, and repeat affected evidence until no blocker remains.
 12. **MVP-APPROVE — maintainer release review.** Check every definition/gate line, authorize protected Phase-11 publication, and verify downloaded public artifacts after publication.
@@ -467,6 +504,8 @@ All documentation walkthroughs must match the exact candidate.
 | Provider churn | Broken optional AI | Current official contracts, recorded conformance fixtures, per-adapter isolation, AI optional. |
 | Secret leakage | Account compromise | OS keyring, no webview secrets, structural redaction, redirect and endpoint controls. |
 | Malicious project bundle | Traversal/exhaustion/data mutation | Strict manifest/checksums, limits, safe staging, transactional import. |
+| Portable migration/restore silently loses meaning | Irrecoverable trust/data loss | Permanent historical semantic fixtures, strict unknown-semantic rejection, exact preview, staged validation, atomic commit, safety backup and fresh-install recovery. |
+| Standalone report leaks or executes scenario data | Privacy or code-execution failure | Exact preview payload, purpose-built Share Result, inert encoding/rendering, restrictive report CSP, zero-required-network and malicious-data browser fixtures. |
 | Untrusted plug-in | Code execution | No native dynamic MVP plug-ins; future no-ambient-authority WASM only. |
 | License contamination | Distribution restriction | Allow/review/block policy, exact notices/SBOM, minimal OR-Tools build. |
 | Proprietary solver redistribution | Legal violation | User-provided only; never bundled. |
@@ -492,7 +531,7 @@ Pause and write an ADR before proceeding if a domain rule cannot be independentl
 
 ## Exit gate
 
-Phase 12 and public MVP are complete only when every definition of done and every gate above is evidenced against identical artifact digests; every Appendix K.8 item is closed; no release-blocking issue remains in correctness, data integrity, security/privacy, accessibility, packaging, licensing, performance, usability, migration/recovery, or documentation; all experimental paths are isolated/accurately labeled; authorized maintainers approve publication; and post-publication downloaded-artifact smokes verify the public source tag, checksums, signatures/attestations, updater metadata, notices, SBOMs, migration notes, and release notes.
+Phase 12 and public MVP are complete only when every definition of done and every gate above is evidenced against identical artifact digests; every Appendix K.8 item is closed; no release-blocking issue remains in correctness, portable-data integrity, security/privacy, accessibility, packaging, licensing, performance, usability, migration/backup/restore/report recovery, or documentation; final extension/media-type/file-association and supported-browser decisions are recorded; all experimental paths are isolated/accurately labeled; authorized maintainers approve publication; and post-publication downloaded-artifact smokes verify the public source tag, checksums, signatures/attestations, updater metadata, notices, SBOMs, migration notes, release notes, portable import/restore, and offline HTML/PDF result output.
 
 ## Deferred and non-goals
 

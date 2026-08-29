@@ -8,7 +8,7 @@ This phase establishes backend mechanics, not trust in backend output. A worker 
 
 ## Source coverage
 
-This phase incorporates blueprint Sections 14 and 15; Section 25.11; worker packaging requirements from Sections 27.1–27.4, 27.8–27.10; Phase 3; Appendix E; and worker-relevant material from Appendices B, H, I, J, and K. It depends on the contracts in [Phase 02](02-domain-pack-and-planning-ir-contracts.md), hands candidate verification and explanations to [Phase 04](04-independent-verifier-and-explanations.md), and provides the backend used by [Phase 05](05-workforce-core-vertical-slice.md). Public signing and release publication remain in [Phase 11](11-public-mvp-packaging-and-documentation.md).
+This phase incorporates blueprint Sections 14 and 15; Section 25.11; worker packaging requirements from Sections 27.1–27.4, 27.8–27.10; Phase 3; Appendix E; worker-relevant material from Appendices B, H, I, J, and K; and the worker-owned measurements in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md). It depends on the contracts in [Phase 02](02-domain-pack-and-planning-ir-contracts.md), hands candidate verification and explanations to [Phase 04](04-independent-verifier-and-explanations.md), and provides the backend used by [Phase 05](05-workforce-core-vertical-slice.md). Public signing and release publication remain in [Phase 11](11-public-mvp-packaging-and-documentation.md).
 
 ## Dependencies
 
@@ -28,6 +28,7 @@ This phase incorporates blueprint Sections 14 and 15; Section 25.11; worker pack
 - No C++ ABI crosses into `eutheto` core. Worker crashes, native memory failures, malformed output, and cancellation are isolated to a child process.
 - The bundled default solver is resolved from the application bundle, never from `PATH`. Any future user-provided backend uses a separate explicit configuration and trust flow.
 - Official artifacts are Apache-2.0 compatible. Disable GLPK, proprietary integrations, language wrappers, examples, and unrelated solver components. Inspect the exact linked artifact rather than trusting configuration intent.
+- The worker receives only the remaining parent solve budget after validation/compilation. Startup, translation, fallback, callback handling, and worker execution cannot each reset the full interactive limit.
 
 ### Backend contract
 
@@ -270,7 +271,7 @@ The parent primarily trusts a consistent terminal frame. A missing or contradict
 
 ### Finished result and diagnostics
 
-A finished frame contains raw CP-SAT status, normalized worker status, only requested projected variable values, objective values/bounds, wall/user/deterministic time when available, bounded conflicts/branches/propagations summaries, sufficient assumptions for infeasibility when available, bounded structured response stats, applied-parameters hash, and model fingerprint.
+A finished frame contains raw CP-SAT status, normalized worker status, only requested projected variable values, objective values/bounds, wall/user/deterministic time when available, bounded conflicts/branches/propagations summaries, sufficient assumptions for infeasibility when available, bounded structured response stats, applied-parameters hash, and model fingerprint. The Rust supervisor separately records queue, worker startup/handshake, translation/serialization, first-incumbent, solver, protocol-decoding, and total-adapter spans so worker time is never presented as end-to-end product latency.
 
 Allowed sanitized diagnostics are backend version, model counts, presolve reductions, incumbent score/bound, and terminal stats. The worker must never receive or print names, notes, AI content, credentials, or filesystem paths; the adapter uses numeric/stable IDs and retains human provenance in Rust. Arbitrary unbounded logs are neither captured nor persisted by default.
 
@@ -300,6 +301,8 @@ Never deserialize arbitrary user-provided `SatParameters`. Construct it from a p
 - deterministic test profile.
 
 Validate and reject out-of-range values; persist the final applied set/hash. Diagnostic assumption-core solving uses a single worker and non-optimization configuration where required by the pinned API.
+
+Balanced initially tests approximately 2–3 seconds of CP-SAT time inside the provisional 3–5 second end-to-end interactive objective; Quick may stop after the first useful incumbent and Deep remains explicitly bounded. These are benchmark hypotheses, not proof or public latency guarantees. Phase 12 calibrates versioned defaults from whole-pipeline evidence, including startup, projection, independent verification, and rendering that Phase 03 cannot itself prove.
 
 ### Assumptions and infeasibility evidence
 
@@ -347,13 +350,13 @@ Record application, core API, scenario/domain/planning-IR, worker protocol, OR-T
 ## Ordered work packages
 
 1. **WORKER-001 — protocol, supervisor, and native worker:** define versioned messages, centralized caps, request-ID/state-machine validation, exit mapping, redacted stderr capture, launch abstraction, cleanup guards, cancellation, and fault taxonomy; implement the native worker handshake, one-request parser, bounded parameter application, model validation, callbacks, terminal result/error, exit codes, and safe diagnostics without domain data.
-2. **SOLVER-001 completion — descriptors and compatibility:** implement OR-Tools capability descriptor, compatibility report, normalized status/progress records, deterministic router record, and explicit fallback policy.
+2. **SOLVER-001 completion — descriptors and compatibility:** implement OR-Tools capability descriptor, compatibility report, normalized status/progress records, deterministic router record, explicit fallback policy, remaining-budget propagation, and stable adapter timing/quality evidence.
 3. **OR-Tools 9.15 gate:** run target build probes, primitive benchmarks, exact license/config inspection, protobuf compatibility checks, callback checks, and the assumption-core issue gate; record source/hash/proto/CMake/linkage decisions. Do not begin a distributable pin if a gate fails.
 4. **WORKER-002 — pinned OR-Tools Nix/native build:** implement the explicit Nix derivation and equivalent Windows build from the same source pin; produce identical manifest semantics, run the applicable protocol/trivial-model checks, and inspect linked dependencies.
 5. **WORKER-003 — Rust CP-SAT adapter, dependent on WORKER-002:** translate the initial Boolean/integer linear/cardinality subset; retain stable index, projection, objective, assumption, and provenance maps; reject unsupported semantics before launch.
 6. **Process controls:** enforce deadlines, event/output caps, process-tree termination, private temporary directory, environment sanitation, thread limits, optional platform memory limits, cleanup, and crash recovery.
 7. **Sidecar assembly:** target-triple rename/copy, exact-binary capability, manifest validation, architecture/license/forbidden-dependency checks, and packaged launch smoke inputs for all MVP targets.
-8. **Evidence and handoff:** expose candidate assignments/evidence without acceptance, persist reproducibility metadata, and integrate Phase 04's quarantine/verification boundary.
+8. **Evidence and handoff:** expose candidate assignments/evidence without acceptance; record model counts, worker startup, translation, first-incumbent, solver, terminal status/bound and bounded callback metrics; persist reproducibility metadata; and integrate Phase 04's quarantine/verification boundary.
 
 ## Tests and acceptance
 
@@ -366,6 +369,8 @@ Record application, core API, scenario/domain/planning-IR, worker protocol, OR-T
 - raw-to-normalized statuses, time-limit with/without incumbent, proof-state accuracy, and no `Feasible`→`Optimal` mistranslation;
 - deterministic fixed-seed/single-worker profile and persisted applied-parameter hash;
 - callback throttling/coalescing and bounded progress/logging;
+- remaining-parent-budget boundaries, deadline reached during startup/translation/solve, and proof that fallback cannot exceed the original end-to-end deadline;
+- adapter timing evidence for startup/handshake, translation, first incumbent, solver and protocol decoding, with first-incumbent never mislabeled as first verified feasible;
 - sufficient-assumption propagation, polarity/index mapping, non-minimal labeling, out-of-set rejection for issue #5141, and safe unavailable behavior;
 - cancellation, timeout grace, process-tree cleanup, crash recovery, temporary-directory cleanup, stdout protocol purity, stderr truncation/redaction, and no sensitive domain text;
 - worker version/manifest/hash/target change detection.
@@ -377,10 +382,11 @@ Record application, core API, scenario/domain/planning-IR, worker protocol, OR-T
 - linked-dependency/license inspection proves no GLPK, GPL, proprietary solver, or unrelated language runtime is bundled;
 - cross-platform path, target-triple naming, executable permissions, architecture, dynamic-library resolution, and Tauri capability scope;
 - a packaged desktop smoke launches and handshakes with the bundled worker on Windows x86_64, macOS arm64/x86_64, and Linux x86_64 without system OR-Tools or language runtimes.
+- deterministic primitive/small-model benchmark artifacts report raw solver and full worker-adapter timings, model counts, objective/bound and termination under fixed seed/thread/budget settings; Phase 03 does not claim end-to-end product targets from these microbenchmarks.
 
 ### Phase exit gate
 
-Phase 03 exits only when feasible, optimal, and infeasible fixtures pass end to end through translation and worker return; mismatches are actionable; cancellation removes the process tree; malformed output/crash cannot crash or corrupt the application; all supported primitive semantics pass contract tests; no forbidden dependency is present; and every MVP target's packaged app can launch its worker. Phase 04 may still reject deliberate candidates, because Phase 03 never grants acceptance itself.
+Phase 03 exits only when feasible, optimal, and infeasible fixtures pass end to end through translation and worker return; mismatches are actionable; cancellation removes the process tree; one parent budget bounds startup, translation, worker execution, and fallback; required timing/quality evidence is emitted; malformed output/crash cannot crash or corrupt the application; all supported primitive semantics pass contract tests; no forbidden dependency is present; and every MVP target's packaged app can launch its worker. Phase 04 may still reject deliberate candidates, because Phase 03 never grants acceptance or measures first verified feasible itself.
 
 Backend definition-of-done also requires approved distribution/license, visible exact version, capability matrix, cancellation/resource limits, normalized statuses, independent-verification integration, reproducibility metadata, contract tests, benchmark evidence, crash diagnostics, and packaged-target smoke coverage.
 

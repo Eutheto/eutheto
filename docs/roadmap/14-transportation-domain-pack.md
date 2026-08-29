@@ -10,9 +10,9 @@ Transportation is a **proposed post-MVP plan**, not current product behavior. In
 
 ## Source coverage
 
-This phase incorporates the proposed **Eutheto Transportation Domain Pack — MVP and Post-MVP Product and Implementation Specification**, dated 2026-08-29, from `eutheto-transportation-domain-pack-mvp-post-mvp.md`, SHA-256 `9e269a173c217fcd6d08d4afaab9d82da3da43acda428b21c4c081cb353783e0`. It covers the blueprint’s product decisions; domain, calendar, Place Library, historical-travel, transit, candidate, optimization, validation, verification, explanation, desktop, output, privacy, CLI/application, integration, acceptance, delivery-wave, extension, risk, stop-condition, unresolved-decision, and release-gate sections.
+This phase incorporates the proposed **Eutheto Transportation Domain Pack — MVP and Post-MVP Product and Implementation Specification**, dated 2026-08-29, from `eutheto-transportation-domain-pack-mvp-post-mvp.md`, SHA-256 `9e269a173c217fcd6d08d4afaab9d82da3da43acda428b21c4c081cb353783e0`; the transportation-owned cache, critical-path, fallback, benchmark, and solver-UX requirements in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and transportation portable/share specialization under [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). It covers the blueprint’s product decisions; domain, calendar, Place Library, historical-travel, transit, candidate, optimization, validation, verification, explanation, desktop, output, privacy, CLI/application, integration, acceptance, delivery-wave, extension, risk, stop-condition, unresolved-decision, and source material.
 
-Project-wide authority remains in [the roadmap index](README.md) and [the assumptions ledger](assumptions.md). This phase consumes the domain/Planning-IR contract from [Phase 02](02-domain-pack-and-planning-ir-contracts.md), the isolated OR-Tools worker from [Phase 03](03-ortools-worker-vertical-slice.md), the trust boundary from [Phase 04](04-independent-verifier-and-explanations.md), the command/persistence/desktop/result/repair patterns proven in Phases 01 and 05–09, and the public-release baseline approved by [Phase 12](12-stabilization-and-public-release-gate.md).
+Project-wide authority remains in [the roadmap index](README.md) and [the assumptions ledger](assumptions.md). This phase consumes the domain/Planning-IR contract from [Phase 02](02-domain-pack-and-planning-ir-contracts.md), the isolated OR-Tools worker from [Phase 03](03-ortools-worker-vertical-slice.md), the trust boundary from [Phase 04](04-independent-verifier-and-explanations.md), the command/persistence/desktop/result/repair patterns proven in Phases 01 and 05–09, the performance contract above, and the public-release baseline approved by [Phase 12](12-stabilization-and-public-release-gate.md).
 
 Binding architecture decisions include [ADR-006](../adr/006-solver-neutral-planning-ir.md), [ADR-007](../adr/007-independent-solution-verification.md), [ADR-009](../adr/009-domain-pack-loading.md), [ADR-014](../adr/014-provider-authentication.md), [ADR-017](../adr/017-time-and-integer-units.md), and [ADR-018](../adr/018-public-scenario-representation.md).
 
@@ -22,7 +22,7 @@ Phase 14 is a sibling post-MVP branch entered directly from a completed Phase 12
 
 Entry requires:
 
-- the Phase-12 public release baseline, including versioned scenario documents/bundles, stable IDs, migrations, reversible revisioned commands, application services, local persistence, generated TypeScript contracts, desktop/CLI surfaces, and packaged release evidence;
+- the Phase-12 public release baseline, including versioned internal, Portable Scenario, immutable Result, privacy-filtered Share Result, bundle/report formats; stable IDs; permanent migrations; reversible revisioned commands; application services; local persistence; generated TypeScript contracts; desktop/CLI surfaces; one-file HTML/PDF report renderer; and packaged release evidence;
 - compiled official-pack registration and compatibility checks, without a native plug-in ABI or ambient provider access;
 - immutable solver-neutral Planning IR with deterministic ordering, checked integer arithmetic, provenance, lexicographic objectives, projection metadata, capability checks, and connected-component semantics;
 - the isolated bundled OR-Tools CP-SAT worker and bounded protocol; Transportation adds no domain logic to that worker;
@@ -61,6 +61,9 @@ Entry requires:
 15. **Accepted outputs only.** Published plans and solution exports originate only from an independently verified solution for the exact scenario revision and snapshot. Stale solutions remain historical comparison inputs, not current accepted plans.
 16. **Honest claims.** “Verified” means internally consistent with configured facts and recorded snapshots. It is not a promise about real-world traffic, transit operation, accidents, weather, law, supervision, safety, or accessibility compliance.
 17. **Registration is the last compatibility action.** `official.transportation` remains only proposed/reserved throughout T0–T6. T7 may explicitly register it only after pack descriptor, schemas/migrations, command catalog, UI manifest, Planning-IR compatibility, verifier, protocol, bundle, downgrade/recovery, packaging, and evidence gates pass.
+18. **Provider work is outside the normal solve critical path.** Calendar sync, relevant-pair discovery, routing/transit refresh, geocoding, and selected-detail fetching are explicit cancellable jobs that atomically commit immutable facts before a solve captures its revision/snapshot. A warm solve never performs hidden per-candidate network calls.
+19. **Both transit stages share one end-to-end budget.** Stage A, any Stage-B fallback, projection, verification, and result preparation consume remaining parent time. Starting Stage B never resets the full interactive limit, and a verified Stage-A result is not withheld for Stage B or optimality proof.
+20. **Portable/share data obeys provider policy and user intent.** The pack supplies versioned current/historical Portable Scenario and Share Result conversion/migrations. Editable export, full backup, and immutable result sharing are separate actions; exact preview omits credentials/device state and any provider data whose terms disallow persistence or redistribution.
 
 ## Unresolved decisions and mandatory gates
 
@@ -206,6 +209,8 @@ Run only when Stage A is proven infeasible, or when no verified solution is foun
 
 A plan using transit prominently identifies each transit journey, walking/transfers/buffers/restrictions, snapshot basis, and why it was necessary. “Try without transit” reuses or runs the bounded Stage-A diagnostic and reports proven infeasibility with a sufficient conflict, limit-based uncertainty, or verified smallest configured changes. It never calls a time-limited search failure proof.
 
+Stage records consumed and remaining parent budget, candidate/model counts, snapshot/cache state, first incumbent, first independently verified feasible, proof/termination, authoritative score, and exact activation reason. Stage B cannot run after the parent budget is exhausted. Counterfactual `Try without transit` is a separate explicitly started bounded diagnostic, not hidden continuation of the original solve.
+
 ## Candidate generation, Planning IR, and CP-SAT
 
 Candidate inputs are explicit start states, commitments, resolved places, driver permissions, capacities/availability, historical travel profiles, scheduled transit for opted-in people, buffers, locks/base plan, and bounded detour/pickup/handoff/wait policies.
@@ -253,23 +258,41 @@ The final executable name follows the project-wide naming gate. The CLI must pro
 
 The guided flow is People and calendars → Review commitments → Places → Vehicles and drivers → Transportation options → Travel assumptions → Validate → Optimize → Review and repair. Users can revisit steps freely. Validation groups must-fix, travel-data, calendar-review, likely-conflict, suggested-review, and informational findings and links each to the exact entity or setting.
 
-Before solve, show horizon/zone, source freshness/conflicts, historical/manual basis, snapshot freshness, transit-enabled people, base/repair state, model estimate, resource mode, and advanced backend detail. Progress reports only stages actually executed; it never claims Stage-A infeasibility, Stage-B use, optimality, or verification without corresponding evidence.
+Before solve, show horizon/zone, source freshness/conflicts, historical/manual basis, snapshot freshness, transit-enabled people, base/repair state, model estimate, resource mode, and advanced backend detail. Progress reports only stages actually executed; it never claims Stage-A infeasibility, Stage-B use, optimality, or verification without corresponding evidence. Operations completing below approximately 300–500 ms avoid progress flicker; longer runs expose truthful coarse preparation/transport/model/optimize/verify/result phases with cancellation and bounded announcements.
 
-Synchronized accepted-result views are household timeline, person itinerary, vehicle itinerary, coordination checklist, map/selected-route summaries, exceptions/warnings, authoritative score/evidence, explanation, and change comparison. Manual driver/passenger/vehicle/flexible-time/transit acceptability changes are previewed revisioned commands; invalid changes explain conflict, valid changes are undoable and require repair/verification before acceptance.
+Synchronized accepted-result views are household timeline, person itinerary, vehicle itinerary, coordination checklist, map/selected-route summaries, exceptions/warnings, authoritative score/evidence, explanation, and change comparison. Manual driver/passenger/vehicle/flexible-time/transit acceptability changes are previewed revisioned commands; invalid changes explain conflict, valid changes are undoable and require repair/verification before acceptance. The first verified plan renders without waiting for optimality proof, selected-route detail, optional explanation enrichment, or AI.
 
 ### Accessibility and performance
 
 Every essential setup, validation, solve, timeline, itinerary, checklist, map fact, manual edit, lock, repair, explanation, comparison, and export is keyboard reachable with visible focus and predictable restoration. Maps/timelines have complete synchronized list/table alternatives and no critical fact exists only in color, geometry, hover, or animation. Transit/tight-buffer/stale/manual warnings use text and icons; status changes and solve completion are announced. Screen-reader scripts, reduced motion, zoom/high-DPI, responsive large-list virtualization, cancellation, and bounded payload/rendering tests are release evidence.
 
+Record calendar/snapshot enrichment separately from validation, relevant-pair discovery, cache lookup, candidate generation/pruning, Planning-IR build, worker startup/backend solve, first incumbent, first verified feasible, verification, result preparation, initial UI render, and total. Also record pair/time-bucket cache hits/misses, candidate/model counts, Stage A/B/fallback, proof/termination, authoritative score, memory, and provider/model/freshness versions without scenario PII.
+
+The initial hypotheses are <500 ms end to end for a small warm manual/snapshot fixture; target <1 second warm and usually <3 seconds cold for the normal household fixture; p95 <5 seconds for the approved normal corpus; and a bounded responsive experience, usually <5 seconds and expected <10 seconds, for moderate/large cases. T7 calibrates this pack's exact reference machine, cache states, corpus, percentiles, budgets, and regression tolerances before any claim. Cold network enrichment is separately disclosed and never disguised as solver time.
+
 ### Imports
 
 Account-independent imports include ICS, CSV commitments, CSV places, manual commitments/places/time-dependent travel profiles, and manual vehicles. Connected calendar, geocoding, historical-profile, transit, and directions paths exist only for adapters that pass all gates. Every import performs safe type detection, byte/row/field/nesting limits, explicit mapping, additions/updates/duplicates/rejections preview, stable-ID/source matching, validation, one atomic undoable apply, and a rejected-row report. Imports never execute macros, templates, URLs, paths, or embedded instructions.
 
-### Outputs and exports
+### Outputs, portability, and result sharing
 
-Outputs are the Eutheto portable versioned bundle, normalized Transportation solution JSON, household timeline, per-person and per-vehicle itineraries, pickup/drop-off/handoff checklist, scheduled-transit itinerary, provider-permitted selected driving detail, CSV summaries, generated ICS transportation blocks without calendar write-back, print-friendly local HTML, and bounded diagnostic report.
+Outputs are:
 
-Only accepted, independently verified, non-stale solutions may be published/exported as plans. Export previews disclose revision, verification, snapshot assumptions, transit/fallback/manual data, included people/addresses, and restricted omissions. Warn before precise addresses leave the application; offer names/initials/aliases where practical. Never export credentials, sync tokens, provider secrets, unrelated raw calendar data, Planning IR, worker protobufs, or forbidden provider geometry/directions/cache data. ADR-018’s versioned scenario/bundle remains authoritative and preserves normalized user meaning and required compatibility metadata, not backend artifacts.
+- editable proposed/final Eutheto portable scenario and full backup through the shared Phase-01 services;
+- normalized Transportation solution JSON;
+- household timeline, per-person and per-vehicle itineraries, pickup/drop-off/handoff checklist, and scheduled-transit itinerary;
+- provider-permitted selected driving detail;
+- CSV summaries;
+- generated ICS transportation blocks without calendar write-back;
+- one self-contained interactive HTML result report;
+- direct PDF from the same validated Share Result Model; and
+- bounded diagnostic report.
+
+Only accepted, independently verified results may drive plan JSON/CSV/ICS/HTML/PDF. A stale accepted result may export only with explicit immutable old-revision/snapshot labeling. Editable scenario/full backup has its own valid portable-input gate and remains available without a result. Exact preview discloses revision/verification/snapshot assumptions, transit/fallback/manual basis, names or aliases, precise/generalized places, selected-route detail, source titles/notes, external links, and every provider-policy omission. Sensitive/source-only fields and precise addresses default absent; credentials, sync tokens, provider secrets, unrelated raw calendar data, Planning IR, worker frames, forbidden geometry/directions/cache data, AI conversations, and device state never enter portable/share output.
+
+The Transportation pack converts stable people/vehicle/place/commitment/rule/policy IDs, canonical time/unit meaning, allowed normalized snapshots/references and accepted-result provenance to current Portable Scenario/Share Result schemas and migrates every supported historical version sequentially. Provider terms decide whether data is included, summarized, represented by a reconnectable reference, or omitted with a visible warning; unknown required semantics fail before mutation.
+
+HTML/PDF reuse the Phase-07/09 generic accepted-result builder, exact privacy preview, safe inert-data embedding, restrictive standalone-report CSP, accessible components/list-table equivalents, offline `file://` shell, print styles, and controlled local PDF renderer. Transportation contributes immutable household/person/vehicle itinerary, coordination/checklist, transit, assumption/warning and optional provider-permitted route-detail payloads. The report supports local view switching, filtering/search/highlight/detail expansion and print, but no edit, solve, refresh, provider call, server/account/storage or required network request. Maps are optional schematics; complete place/leg meaning remains in accessible text/tables and never depends on remote tiles/fonts/icons.
 
 ## Dependency waves
 
@@ -289,9 +312,9 @@ Deliver the approved Transportation decision record set; provider/auth/license/p
 **Work:** `TRANS-003`
 **Depends on:** T0.
 
-Deliver the complete normalized schema for people, vehicles, places, commitments, availability, driver permissions, explicit accessibility/companion rules, transit policy, settings, score/candidate policies, snapshot references, base plan, and locks; migrations/unknown-extension preservation; reversible commands/batches; validation; generated DTOs; CLI/application editing path; canonical document/bundle round trips.
+Deliver the complete normalized schema for people, vehicles, places, commitments, availability, driver permissions, explicit accessibility/companion rules, transit policy, settings, score/candidate policies, allowed snapshot references, base plan, and locks; current Portable Scenario and Share Result schemas; sequential migrations/unknown-extension preservation; reversible commands/batches; validation; generated DTOs; CLI/application editing path; canonical internal/portable round trips.
 
-**Exit:** create/edit/reopen/migrate/undo/redo round trips preserve canonical meaning; command plus inverse restores state; DST/unit/reference/overflow validation is deterministic; no provider or solver is required to edit facts; credentials/backend artifacts are absent; `official.transportation` remains unregistered.
+**Exit:** create/edit/reopen/migrate/undo/redo plus current/historical Portable Scenario/Share Result round trips preserve canonical meaning; unknown required semantics reject and nonsemantic extensions preserve; command plus inverse restores state; DST/unit/reference/overflow validation is deterministic; no provider or solver is required to edit facts; credentials/backend/device/restricted-provider artifacts are absent; `official.transportation` remains unregistered.
 
 ### T2 — Calendar-first setup and Place Library
 
@@ -307,7 +330,7 @@ Deliver manual, ICS, and bounded CSV ingestion; provider-neutral read-only conne
 **Work:** `TRANS-005`
 **Depends on:** T2 place/time semantics and applicable T0 gates.
 
-Deliver relevant transition/time-bucket discovery; typical historical travel profiles; manual peak/off-peak fallback; scheduled-transit itinerary snapshots for opted-in people where a gated source exists; capability/freshness/provenance/status UI; deterministic bucket/interpolation and arrive-by behavior; bounded cache/retention enforcement; offline snapshot loading; selected-route detail fetching separated from compile data.
+Deliver relevant transition/time-bucket discovery; typical historical travel profiles; manual peak/off-peak fallback; scheduled-transit itinerary snapshots for opted-in people where a gated source exists; capability/freshness/provenance/status UI; deterministic bucket/interpolation and arrive-by behavior; bounded cache/retention enforcement; offline snapshot loading; selected-route detail fetching separated from compile data. Reusable historical matrix entries bind stable origin, destination, weekday/day class, departure-time bucket, mode, provider/model version, freshness/confidence, units, and provenance; deterministic selection rejects ambiguous or stale-incompatible entries.
 
 **Exit:** rush-hour selection uses planned day/time rather than solve-time conditions; DST/day-class boundaries pass; unsupported capabilities cannot masquerade as historical traffic; compiler/verifier run offline from exact snapshots; provider terms govern persistence/export; detailed directions are fetched only for selected accepted journeys; manual-only planning works.
 
@@ -334,16 +357,16 @@ Deliver explicit per-person policy and restrictions; scheduled transit candidate
 **Work:** `TRANS-010`, `TRANS-011`, `TRANS-012`
 **Depends on:** T4 and T5.
 
-Deliver setup/status/application queries; complete CLI parity; household/person/vehicle/checklist/map/exception views; explanation/comparison; locks/manual edits; calendar/snapshot change impact and minimal-change repair; selected-route details; accepted-solution JSON/CSV/ICS/local HTML/bundle/diagnostics; privacy controls; provider disconnect/delete/detach; keyboard/screen-reader/list alternatives; large-view and cancellation behavior.
+Deliver setup/status/application queries; complete CLI parity; household/person/vehicle/checklist/map/exception views; explanation/comparison; locks/manual edits; calendar/snapshot change impact and minimal-change repair; selected-route details; accepted-solution JSON/CSV/ICS plus one-file HTML/direct PDF through the shared Share Result renderer; editable portable scenario/full backup integration; exact privacy/provider-omission preview; diagnostics; provider disconnect/delete/detach; keyboard/screen-reader/list alternatives; large-view/report and cancellation behavior.
 
-**Exit:** a first-time household can use a provider-free path to import/enter, review, resolve, configure, validate, solve, understand, lock, repair, compare, and export; a gated connected path passes where claimed; every export derives from accepted data and obeys terms; all essential flows have keyboard and non-map alternatives; large benchmark UI stays responsive.
+**Exit:** a first-time household can use a provider-free path to import/enter, review, resolve, configure, validate, solve, understand, lock, repair, compare, export editable data/back up, and share an immutable privacy-reviewed result offline; a gated connected path passes where claimed; every result export derives from accepted data and every portable/share field obeys terms; HTML opens from `file://` with zero required network and PDF/print matches the same payload; all essential flows have keyboard and non-map alternatives; large benchmark UI/report stays responsive.
 
 ### T7 — Stabilization, explicit registration, and release
 
 **Work:** `TRANS-013`
 **Depends on:** T0–T6 and all applicable gates.
 
-Deliver complete acceptance corpus, compiler/verifier mutation and differential tests, performance/resource baselines, provider failure/reconnect/conformance evidence for every claimed adapter, migration/recovery/downgrade fixtures, security/privacy/licensing review, accessibility/usability scripts, supported-platform packaged worker and calendar/manual-path smoke evidence, offline evidence, user/developer/provider/limitations documentation, SBOM/notices, release manifest, and explicit official-pack registration.
+Deliver complete acceptance corpus; Pack A–D warm/cold/manual/transit benchmark manifests and raw phase/model/cache/quality evidence; calibrated budgets/regression policy; compiler/verifier mutation and differential tests; provider failure/reconnect/conformance evidence for every claimed adapter; permanent database/Portable Scenario/Share Result migration and recovery/downgrade fixtures; malicious bundle/report security, exact privacy-preview, offline HTML/PDF browser/accessibility and no-forbidden-provider-data evidence; supported-platform packaged worker and calendar/manual-path smoke evidence; user/developer/provider/limitations documentation; SBOM/notices; release manifest; and explicit official-pack registration.
 
 **Exit:** every Phase-14 gate below passes. Only then register and ship `official.transportation`; until that release commit, the identifier remains proposed/reserved.
 
@@ -351,21 +374,21 @@ Deliver complete acceptance corpus, compiler/verifier mutation and differential 
 
 1. **TRANS-001 — Transportation decisions and compatibility:** bind trajectory, historical-versus-operational, transit-stage, time/unit, connected-model, IR capability, registration, and Definition-of-Done decisions; close required ADRs.
 2. **TRANS-002 — Integration and snapshot boundary:** provider capability/auth/license/privacy gates; calendar/place/routing/transit normalized contracts; credential references; bounded immutable snapshots, provenance/hash/freshness/cache/export policy, manual fakes/conformance harness.
-3. **TRANS-003 — Domain state and commands:** complete schema, migrations, validation, reversible revisioned commands, base plan/locks, persistence/bundle/unknown-field behavior, generated DTOs, CLI/application editing.
+3. **TRANS-003 — Domain state, commands, and portability:** complete schema, migrations, validation, reversible revisioned commands, base plan/locks, persistence, current/historical Portable Scenario/Share Result conversions, unknown-semantic/extension behavior, generated DTOs, CLI/application editing.
 4. **TRANS-004 — Calendar and Place Library:** manual/ICS/CSV paths, gated read-only adapter paths, normalization/review, recurrence/exceptions, sync/override/conflict/staleness, aliases/resolution/duplicates/privacy.
-5. **TRANS-005 — Travel data:** historical planned-time profiles, scheduled transit snapshots, manual matrices, relevant-pair buckets, deterministic time selection, freshness/provenance, offline/cache policy, selected-detail boundary.
-6. **TRANS-006 — Candidate trajectories:** all bounded first-release journey categories, static pruning/rejection evidence, model estimates and hard budgets.
-7. **TRANS-007 — Planning IR and CP-SAT:** continuous person/vehicle paths, required rules, lexicographic score plan, locks/base plan, capability checking, existing worker translation/protocol evidence.
-8. **TRANS-008 — Projection, verification, and evidence:** normalized trajectory projection, independent required-rule evaluator/scorer, quarantine, explanations, sufficient conflicts, counterfactuals, compare, repair foundation.
-9. **TRANS-009 — Transit fallback:** per-person consent/restrictions, strict two-stage orchestration, authoritative transit vector, diagnostics, result disclosure, independent transit verification.
+5. **TRANS-005 — Travel data:** historical planned-time profiles, scheduled transit snapshots, manual matrices, relevant-pair buckets, deterministic time selection, provider/model/freshness/confidence provenance, offline/cache policy, bounded enrichment metrics, selected-detail boundary.
+6. **TRANS-006 — Candidate trajectories:** all bounded first-release journey categories, static pruning/rejection evidence, pre/post counts, model estimates and hard budgets.
+7. **TRANS-007 — Planning IR and CP-SAT:** continuous person/vehicle paths, required rules, lexicographic score plan, locks/base plan, capability checking, existing worker translation/protocol evidence, one remaining parent budget.
+8. **TRANS-008 — Projection, verification, and evidence:** normalized trajectory projection, independent required-rule evaluator/scorer, quarantine, first-verified-feasible timing, explanations, sufficient conflicts, counterfactuals, compare, repair foundation.
+9. **TRANS-009 — Transit fallback:** per-person consent/restrictions, strict two-stage one-budget orchestration, authoritative transit vector, diagnostics, result disclosure, independent transit verification.
 10. **TRANS-010 — Repair and explanations:** calendar/availability/snapshot impact, hard/soft locks, minimal-change repair, stage parity, deterministic change and infeasibility explanations.
-11. **TRANS-011 — CLI/application/desktop/accessibility:** complete headless and desktop workflows, typed APIs/views/events, timelines/itineraries/checklist/map alternatives, model progress, keyboard/screen-reader/performance evidence.
-12. **TRANS-012 — Imports, exports, and privacy:** transactional inputs, accepted-only bundle/JSON/CSV/ICS/HTML/diagnostics, provider-permitted route details, redaction/disclosure/deletion/support-bundle behavior.
-13. **TRANS-013 — Acceptance and release:** all fixtures/benchmarks, conformance/security/license/accessibility/usability/migration/package/offline/docs evidence, support declarations, exact manifest, and final explicit registry addition.
+11. **TRANS-011 — CLI/application/desktop/accessibility:** complete headless and desktop workflows, typed APIs/views/events, timelines/itineraries/checklist/map alternatives, 300–500 ms truthful progress, keyboard/screen-reader/performance evidence.
+12. **TRANS-012 — Imports, exports, reports, and privacy:** transactional inputs; distinct editable/full-backup/result/diagnostic gates; accepted-only Share Result builder; exact privacy/provider-omission preview; portable JSON/CSV/ICS; one-file offline HTML and direct PDF/print; safe inert rendering; accessible non-map views; provider-permitted route details; redaction/disclosure/deletion/support-bundle behavior.
+13. **TRANS-013 — Acceptance and release:** all fixtures/Pack A–D benchmarks, calibrated performance policy, conformance/security/license/accessibility/usability/migration/package/offline/docs evidence, support declarations, exact manifest, and final explicit registry addition.
 
 ## Required acceptance scenarios
 
-All 15 scenarios are checked-in non-identifying fixtures. Each asserts validation, expected normalized status, Planning-IR/model limits, projection, independent verification, score and transit invariants, stable evidence keys, snapshot/schema versions, and import/export preservation. Do not assert one exact plan where equivalent verified plans exist unless deterministic settings intentionally require it.
+All 15 scenarios are checked-in non-identifying fixtures. Each asserts validation, expected normalized status, Planning-IR/model limits, projection, independent verification, score and transit invariants, stable evidence keys, snapshot/schema versions, current/historical Portable Scenario/Share Result semantic preservation, unknown-semantic rejection, exact report privacy/provider omissions, and import/export preservation. Do not assert one exact plan where equivalent verified plans exist unless deterministic settings intentionally require it.
 
 1. **Two cars, five people, ordinary weekday:** work, school, and social commitments; two vehicles; three authorized drivers; feasible without transit; assert zero transit.
 2. **Rush-hour historical traffic:** same origin/destination at 04:00 and 07:30; the historical profile makes 07:30 materially longer; assert departure and feasibility use the planned bucket, not solve-time conditions.
@@ -382,6 +405,8 @@ All 15 scenarios are checked-in non-identifying fixtures. Each asserts validatio
 13. **DST transition:** commitments/travel cross a daylight-saving ambiguity or gap; assert explicit IANA-zone/DST resolution and correct checked elapsed minutes.
 14. **Manual travel fallback:** no provider account, distinct peak/off-peak manual values; assert visible manual-data warning, offline compile/solve/verify, and verified result.
 15. **Large household benchmark:** configurable people, vehicles, commitments, places, and candidate journeys; assert bounded generation, resource/cancellation behavior, model-size diagnostics, and responsive list/map-alternative UI.
+
+The ordinary weekday/manual fixture is Pack A; rush-hour and normal multi-person/carpool cases form Pack B; coordinated pickup/handoff/transit cases form Pack C; the configurable large household and adverse fallback/resource cases form Pack D. Each manifest declares manual/warm-snapshot/cold-enrichment state, relevant pair/time buckets, allowed network work, total and backend budgets, fixed seed/thread policy, expected status/invariants, and the complete timing/model/cache/quality fields above.
 
 Mutation coverage removes or corrupts at least person continuity, vehicle continuity, driver presence, passenger synchronization, capacity, buffer, transit stage, opt-in, lock, end policy, snapshot bucket/hash, and score terms; every such candidate must fail independent acceptance.
 
@@ -458,27 +483,27 @@ Phase 14 closes only when all of the following hold:
 
 - calendar/file imports and sync are bounded and transactional; recurrence, exceptions, cancellations, conflicts, local overrides, stable IDs, detach/delete, and stale-plan handling pass;
 - travel/transit snapshots are versioned, hashed, deterministic, provider-neutral, terms-compliant, and usable offline where retained;
-- scenario/database migrations, backup/recovery, bundle round trips, unknown-data preservation, supported upgrade/downgrade policy, and command history pass;
-- Planning IR, worker protocol, bundled OR-Tools capability, projection, CLI JSON, generated DTO, and pack descriptor compatibility are pinned and evidenced.
+- internal/database and Portable Scenario/Result/Share Result migrations, current-only export, unknown-semantic rejection/nonsemantic extension preservation, full-backup/add-or-replace restore/recovery, stable identity, provider reconnection/omission, and command history pass permanent fixtures;
+- Planning IR, worker protocol, bundled OR-Tools capability, projection, CLI JSON, generated DTO, pack descriptor, portable bundle and standalone report compatibility are pinned and evidenced.
 
 ### Security, privacy, providers, and licensing
 
 - every claimed adapter passes provider/auth/license/privacy/cache/persistence/export/conformance gates with current official evidence; unsupported candidates are not advertised or shipped;
-- credentials reside only in the OS credential boundary; no precise scenario data or secrets leak into normal logs/support bundles/webview/bundles/exports;
-- provider destinations and included export data are previewed; disconnect/delete/detach and restricted-data omission work;
-- Tauri capabilities/CSP, URLs/redirects, payload/resource limits, SBOM/notices, packaged dependencies, and exact release licenses pass review.
+- credentials reside only in the OS credential boundary; no precise/excluded scenario data or secrets leak into normal logs, support bundles, webview state, portable bundles, HTML/PDF/other exports;
+- provider destinations and exact portable/share fields are previewed; disconnect/delete/detach, restricted-data omission and reconnectable references work;
+- Tauri/application/report CSPs, inert rendering, URLs/redirects, archive/report payload/resource limits, output staging, SBOM/notices, packaged dependencies, and exact release licenses pass review.
 
 ### UX, accessibility, performance, and packaging
 
-- a first-time household can complete provider-free manual/file setup, review, Place resolution, vehicle/transit policy, validation, Stage-A/Stage-B solve, explanation, lock, repair, compare, and accepted export without AI/cloud/external solver;
-- every claimed connected path passes the same flow and provider failure/reconnect states on supported platforms;
-- all essential actions work by keyboard and screen reader; map/timeline facts have list alternatives; status never relies on color; focus/announcements/reduced motion/zoom pass;
-- bounded large-household generation, worker resource/cancellation, desktop responsiveness, and selected-detail fetching meet recorded baselines;
-- clean supported-platform packages contain and run the exact tested worker, open/migrate scenarios, use manual travel, solve, verify, export, and operate offline after permitted snapshots exist.
+- a first-time household can complete provider-free manual/file setup, review, Place resolution, vehicle/transit policy, validation, Stage-A/Stage-B solve, explanation, lock, repair, compare, editable export/full backup, and privacy-reviewed immutable result sharing without AI/cloud/external solver;
+- every claimed connected path passes the same flow and provider failure/reconnect/omission states on supported platforms;
+- all essential actions work by keyboard and screen reader; map/timeline/report facts have list alternatives; status never relies on color; focus/announcements/reduced motion/zoom pass;
+- Pack A–D manual/warm/cold/transit benchmarks meet their calibrated target and regression policy on the recorded reference machine; Stage A and B share one budget; calendar/provider work is absent from warm solve traces; first verified plans are not withheld by proof/detail/explanation; and bounded large-household generation, worker resource/cancellation, desktop/report responsiveness, and selected-detail fetching meet recorded baselines;
+- clean supported-platform packages contain and run the exact tested worker; open/migrate/import/restore portable data; use manual travel; solve/verify; generate one-file `file://` HTML and direct PDF with exact privacy/no-network/inert-data evidence; and operate offline after permitted snapshots exist.
 
 ### Documentation and registration
 
-- user documentation covers quick start, provider-free use, connected-source privacy/sync, Place resolution, historical-versus-live assumptions, transit fallback, repair, exports, limitations, recovery, and exact provider setup/support;
-- developer documentation covers normalized contracts, snapshots/provenance, candidate/IR semantics, independent verification, score hierarchy, conformance fixtures, migrations, and extension gates;
-- the release manifest records exact source, pack/schema/protocol/worker/dependency versions, hashes, licenses, provider capabilities/terms, platform support, known limitations, and evidence;
+- user documentation covers quick start, provider-free use, connected-source privacy/sync, Place resolution, historical-versus-live assumptions, transit fallback, repair, editable export/full backup/restore, Share Result privacy/offline HTML/PDF, limitations, recovery, and exact provider setup/support;
+- developer documentation covers normalized contracts, snapshots/provenance/provider export policy, candidate/IR semantics, independent verification, score hierarchy, Portable Scenario/Share Result conversions/migrations, report trust boundary, conformance fixtures, and extension gates;
+- the release manifest records exact source, pack/internal/portable/result/share/report/protocol/worker/dependency versions, hashes, licenses, provider capabilities/terms, platform/browser support, known limitations, and evidence;
 - T7 performs one reviewed explicit registry addition and compatibility declaration. Before that change lands, `official.transportation` remains proposed/reserved and no current-behavior documentation may claim it is available.

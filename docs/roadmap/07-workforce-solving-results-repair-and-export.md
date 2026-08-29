@@ -8,7 +8,7 @@ This phase completes the behavior begun in Phases 05–06. It does not weaken th
 
 ## Source coverage
 
-This phase is the implementation source of truth for blueprint Sections 17–18; workforce solve/result portions of Section 22; Phases 7 and the applicable Phase 5–6 prerequisites; Sections 31.2–31.4, 32, and 33.1–33.4; CLI Appendix C; Tauri API Appendix D; and backlog items `WF-004` through `WF-008`, `UI-005`, `UI-006`, `EXPLAIN-001`, `REPAIR-001`, and `EXPORT-001` from Appendix I.
+This phase is the implementation source of truth for blueprint Sections 17–18; workforce solve/result portions of Section 22; Phases 7 and the applicable Phase 5–6 prerequisites; Sections 31.2–31.4, 32, and 33.1–33.4; CLI Appendix C; Tauri API Appendix D; backlog items `WF-004` through `WF-008`, `UI-005`, `UI-006`, `EXPLAIN-001`, `REPAIR-001`, and `EXPORT-001` from Appendix I; the workforce delivery slice in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and the generic/workforce report slice in [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md).
 
 Project-wide contracts and sequencing are in [README.md](README.md). Version and evidence gates are in [assumptions.md](assumptions.md). This phase depends on [Phase 02](02-domain-pack-and-planning-ir-contracts.md), [Phase 03](03-ortools-worker-vertical-slice.md), [Phase 04](04-independent-verifier-and-explanations.md), [Phase 05](05-workforce-core-vertical-slice.md), and [Phase 06](06-desktop-design-system-and-workforce-setup.md). Backend diversification follows in [Phase 08](08-pumpkin-backend-and-router.md); seating reuses these result/repair contracts in [Phase 09](09-seating-domain-and-venue-experience.md); AI may invoke only the same typed commands in [Phase 10](10-ai-assistant-mvp.md).
 
@@ -19,7 +19,7 @@ Project-wide contracts and sequencing are in [README.md](README.md). Version and
 - The OR-Tools worker protocol, process supervision, cancellation, resource limits, status normalization, and candidate projection work end to end.
 - Phase 04 rejects deliberately invalid candidates and persists deterministic verification/explanation evidence.
 - The Phase 06 desktop shell, rule builder, validation UX, import preview, generated Rust-to-TypeScript API boundary, keyboard/focus infrastructure, and semantic design tokens exist.
-- The working CLI executable name `optimizer` and `.optplan` bundle extension are examples only until their explicit naming gates close; code and documentation must use the final decisions consistently when selected. The project/package prefix is `eutheto`.
+- The working CLI executable name `optimizer` remains an unresolved example. `.eutheto` is the proposed portable extension pending the Phase-11 identity ADR; implementation and public documentation use the final decision consistently. The project/package prefix is `eutheto`.
 
 ## Decisions and invariants
 
@@ -33,6 +33,8 @@ Project-wide contracts and sequencing are in [README.md](README.md). Version and
 8. **No exact-schedule assertions by default.** Equivalent valid schedules are expected. Tests assert status, verification, score invariants, metrics, and stable explanation keys unless deterministic settings intentionally select one arrangement.
 9. **Solution-derived exports use accepted solutions only.** Assignment/result/solution-derived export preview identifies scenario/solution revision, verification checksum, included data, and stale status. A stale but previously accepted result may be exported only after an explicit warning and accurate labeling; an unverified or rejected candidate never may drive those exports. Project/scenario backup bundles and diagnostic/infeasibility reports have separate input-validity gates and require no accepted solution.
 10. **Human language is primary.** Use `Required`, `Preference`, `Optimize`, and `Repair plan`; backend jargon is confined to advanced diagnostics.
+11. **One bounded responsive operation.** Validation, compilation, backend work, fallback, projection, verification, and result preparation consume one end-to-end budget. An accepted incumbent is available immediately; proof search or optional explanation/AI work cannot withhold it.
+12. **Share data is purpose-built and immutable.** Standalone reports and PDF use a versioned privacy-filtered Share Result Model derived from one accepted result and exact share options, never the full Scenario Model. The same preview payload drives every renderer.
 
 ## Complete workforce scope
 
@@ -151,11 +153,11 @@ Validation issues are grouped as `Must fix before optimizing`, `Likely problem`,
 
 ### Optimize flow
 
-Before `Optimize`, show scenario revision and validation status, Quick/Balanced/Deep mode, optional maximum time, repair/base-plan state, and backend only in advanced disclosure. Quick is short bounded search for a verified feasible plan; Balanced is the default budget/quality profile; Deep uses a longer search and may seek more alternatives but never promises optimality.
+Before `Optimize`, show scenario revision and validation status, Quick/Balanced/Deep mode, optional maximum time, repair/base-plan state, and backend only in advanced disclosure. Quick is short bounded search for a verified feasible plan; Balanced is the default budget/quality profile; Deep uses a longer search and may seek more alternatives but never promises optimality. The provisional Balanced hypothesis places approximately 2–3 seconds of CP-SAT time inside a 3–5 second end-to-end interactive budget; Phase 12 calibrates the shipped values from representative whole-pipeline evidence.
 
-Emit only supported, throttled progress states: queued; compiling with phase/optional percent; backend started; presolve summary; incumbent found; bound improved; safe bounded log line; verifying; explaining; completed. User-facing copy may say `Preparing the problem`, `Checking … possible assignments`, `Optimizing with OR-Tools CP-SAT`, `Found a valid plan`, `Improving preferences and fairness`, and `Verifying every required rule` only when the corresponding event proves it. Include job ID, scenario ID/revision, event version, and timestamp on every event. Provide cancellation and allow navigation. A same-scenario edit either cancels the job or allows it to finish against its recorded revision and labels the result stale.
+Detailed events remain available to bounded diagnostics, but the normal UI maps them to truthful coarse phases. Operations completing below approximately 300–500 ms do not flash progress. Longer operations show validation, candidate preparation, transportation when applicable, model build, optimization, verification, and result preparation only when that work is active. Percent is absent unless a real denominator exists. Raw callbacks are coalesced for rendering and assistive technology; cancellation and navigation remain available.
 
-Normalize results as `Optimal`, `Feasible`, `Infeasible`, `Unbounded`, `NoSolutionWithinLimit`, `Cancelled`, `InvalidModel`, `BackendUnavailable`, or `BackendFailed`. Map backend `Unknown` from incumbent presence and termination cause. Never translate feasible into optimal.
+The application may report that a backend incumbent was found without calling it valid. `Found a valid plan` and `Verified schedule ready` require completed independent verification. A same-scenario edit either cancels the job or allows it to finish against its recorded revision and labels the result stale. Normalize final results as `Optimal`, `Feasible`, `Infeasible`, `Unbounded`, `NoSolutionWithinLimit`, `Cancelled`, `InvalidModel`, `BackendUnavailable`, or `BackendFailed`; map backend `Unknown` from verified-incumbent presence and termination cause, never `Feasible` to `Optimal`.
 
 ### Independent verification and scoring
 
@@ -188,6 +190,14 @@ Implement virtualized views rather than a DOM cell per large horizon:
 - explanation side panel.
 
 The result header states an accurate `Verified schedule ready` alternative, that all required rules passed, optimal/feasible/limit status, secondary time/backend details, preference/fairness metrics, base-plan changes, and warnings. Design normal, empty, loading, stale, active, cancelled, backend-unavailable, no-solution, older-revision, and internal-verification-failure states. No indefinite spinner lacks text, cancellation, or timeout behavior.
+
+### Performance and quality evidence
+
+For every benchmark run, persist bounded local metrics for validation, candidate generation/pruning, Planning-IR build, backend translation/startup/solve, first incumbent, first verified feasible, verification, result post-processing, primary UI render, and total time, plus model counts, cache/fallback state, termination/proof, backend objective/bound, and authoritative score vector. Names, notes, scenario payloads, arbitrary logs, and provider content never enter timing records.
+
+The initial workforce objectives are <500 ms end to end for the approved small warm fixture, target <1 second warm and usually <3 seconds cold for the approved typical fixture, p95 <5 seconds over the normal corpus, and a bounded responsive experience for large/stress fixtures. They remain provisional until Phase 12 records the exact reference machine and distribution. Phase 07 supplies reproducible small/typical/stress manifests and packaged-desktop evidence; it never turns one fast backend microbenchmark into a product claim.
+
+The result shell renders as soon as the first candidate completes projection and independent verification. Continued bounded improvement may replace the displayed best verified result through a versioned event; optional detailed explanations and AI paraphrase load independently and cannot delay the first usable result.
 
 ### Explanation catalog
 
@@ -225,23 +235,40 @@ The repair diff highlights unchanged, moved/replaced, newly unfilled, and newly 
 
 Support people CSV, eligibility CSV or pasted matrix, shift-instance CSV, availability/time-off CSV, and existing-assignment CSV. Every importer follows choose file, safe format/encoding detection, column mapping/bundle summary, additions/updates/duplicates/rejected-row preview, stable-identity matching, proposed-change validation, one atomic undoable command batch, and a report with downloadable rejected rows. Never partially mutate or merge similar names silently.
 
-### Exports
+### Exports and result sharing
 
-Support all MVP outputs:
+Support all MVP outputs under distinct input-validity gates:
 
-- project/scenario bundle using the extension selected by the unresolved extension gate (working blueprint extension `.optplan`);
+- editable scenario/full backup through the proposed `.eutheto` portable services from Phase 01, including complete workforce portable meaning;
 - assignment CSV;
 - people/shift summary CSV;
 - iCalendar `.ics`, per person or combined;
-- locally produced print-friendly HTML;
-- JSON through the CLI;
+- one self-contained interactive HTML result report;
+- direct PDF from the same validated share payload/renderer;
+- JSON through the CLI; and
 - bounded, redacted diagnostic/infeasibility report.
 
-Assignment CSV, people/shift summaries derived from a result, ICS, print views, and solution-bearing CLI JSON require an accepted independently verified solution. Project/scenario backup bundles remain available whenever the project/scenario can be validly serialized, including before any solve or after infeasibility; they accurately label any included solution status and never elevate an unverified candidate. Diagnostic/infeasibility reports remain exportable whenever their bounded, redacted diagnostic inputs are valid, including when no accepted solution exists, and must identify the scenario revision, run/status, proof limits, and whether infeasibility was proved.
+Assignment CSV, result-derived summaries, ICS, HTML, PDF, and solution-bearing CLI JSON require an accepted independently verified result. A stale but previously accepted result may export only after explicit warning and immutable old-revision labeling. Editable scenario/full backup remains available before solve and after infeasibility when its portable source is valid; included results retain exact accepted/unaccepted status and cannot elevate a candidate. Diagnostic/infeasibility output uses its own bounded valid evidence gate and states revision, run/status, proof limits, and whether infeasibility was proved.
 
-Export UX starts from the goal: back up/share project; publish assignments; print/present; spreadsheet analysis; or another application. Preview explains whether rules, accepted solutions, history, or assignments are included. CSV and ICS schemas are deterministic, stable-ID-aware, time-zone explicit, escaped correctly, and tested for round trip or consumer compatibility. Print HTML is local, self-contained under the export policy, color-independent, and carries verification/status metadata.
+#### Share Result Model and renderer
 
-XLSX, PDF, payroll/vendor adapters, and live calendar synchronization are post-MVP and not implied by these outputs.
+`Share Result Builder` consumes the immutable accepted Result Model, scenario/result/revision/verification identities, chosen profile/options, workforce recipient views, and provider/redaction policy. It emits a strict versioned inert-data model with plan version, generation/application/solver/report versions, schedule/person/location/transportation sections as available, safe explanation/status/provenance, and explicit privacy flags. It defaults to excluding source calendar titles, full addresses, private notes, complete constraint graphs, rejected alternatives, raw objective/solver details, diagnostics, and all scenario fields not needed by the recipient.
+
+The generic report/component boundary introduced here has no Tauri, SQLite, filesystem, credential, provider, solver, or mutable-scenario dependency. Desktop and standalone renderers reuse accessible result view models/components where sound; desktop-only actions are injected explicitly. The workforce report provides timeline, By Person, By Location/shift, coverage, preference/fairness, changes and transportation views only when their selected data exists. Every graphical summary has a list/table equivalent.
+
+The HTML report is one file that opens from `file://` in supported modern desktop browsers, requires no Eutheto/server/account/browser storage, and works offline. It embeds project-owned code/styles/small approved assets plus safely encoded Share Result data and print CSS. Core meaning makes zero network request and has no CDN, remote font/script/icon, analytics/tracker, authentication, or map-tile dependency. Explicit external links require a visible action and are never necessary to understand the plan.
+
+Presentation interactions may switch views, filter/highlight/search, select a day/person/location, expand details/evidence, adjust density, and print. They alter only local view state. The report cannot edit a scenario, apply a command, rerun the solver, imply filtering changes the plan, load scenario-authored code, or silently contact a service.
+
+User-authored strings remain inert encoded data and render through text nodes. Validate decoded data; escape container terminators; avoid `innerHTML`, `eval`, dynamic functions, and scenario-to-JavaScript concatenation; use a restrictive self-contained-report CSP. An `About this plan` section records scenario/revision, result ID, friendly plan version, generation time, versions, verification/status basis, and applicable snapshot assumptions. Source edits never alter an existing report.
+
+#### Privacy preview, print, and PDF
+
+The intent-led UI separates **Share Result** from **Export editable scenario** and **Back up everything**. MVP has one strong participant-friendly default plus advanced allowed field/section switches; it reserves coordinator/full-analysis/custom profile IDs for later or separately justified delivery. The preview renders the exact Share Result payload and lists whether names/aliases, full addresses, source calendar titles, notes, constraint details, rejected alternatives, objective details, transportation, and external links are included. Potentially sensitive options default off.
+
+Reviewed print styles remove controls without paper meaning, retain date/plan version/status, avoid clipped schedules, control page breaks/repeated context, support grayscale, and include concise provenance. Direct PDF uses the same validated Share Result Model and controlled local report/print renderer; it cannot have a broader privacy model or remote dependencies. Atomic temporary output and cleanup apply to HTML/PDF.
+
+CSV and ICS schemas remain deterministic, stable-ID-aware, time-zone explicit, escaped correctly, and covered by semantic round-trip/consumer fixtures. XLSX, payroll/vendor adapters, live calendar synchronization, encrypted/signed bundles, automatic backups, hosted share links, and report annotations are post-MVP.
 
 ## Application and CLI contracts
 
@@ -251,15 +278,15 @@ Use revisioned request/response envelopes. Mutations carry `scenario_id`, `expec
 
 Required solve endpoints: `solve_get_backend_options`, `solve_estimate_model`, `solve_start`, `solve_cancel`, `solve_get_job`, `solve_list_runs`, and `solve_get_diagnostics_summary`.
 
-Required solution endpoints: `solution_list`, `solution_get_summary`, `solution_get_view`, `solution_select`, `solution_verify`, `solution_compare`, `solution_explain`, `solution_start_counterfactual`, `solution_cancel_counterfactual`, `solution_lock_assignment`, `solution_unlock_assignment`, `solution_create_repair_request`, `solution_export_preview`, and `solution_export`. Lock convenience endpoints issue normal scenario commands.
+Required solution endpoints: `solution_list`, `solution_get_summary`, `solution_get_view`, `solution_select`, `solution_verify`, `solution_compare`, `solution_explain`, `solution_start_counterfactual`, `solution_cancel_counterfactual`, `solution_lock_assignment`, `solution_unlock_assignment`, `solution_create_repair_request`, `solution_export_preview`, `solution_export`, `solution_share_preview`, `solution_share_create`, and `solution_export_cancel`. Lock convenience endpoints issue normal scenario commands.
 
-Events: `solve://progress`, `solve://completed`, `scenario://changed`, `scenario://validation-changed`, `counterfactual://progress`, and application notifications. Only typed frontend API modules invoke Tauri directly.
+Events: `solve://progress`, `solve://completed`, `scenario://changed`, `scenario://validation-changed`, `counterfactual://progress`, `export://progress`, `export://completed`, and application notifications. Only typed frontend API modules invoke Tauri directly.
 
 ### CLI
 
 The working command form is `optimizer` pending the CLI naming gate. It runs without desktop state, uses the same application/domain/backend/verifier services, supports human and JSON output, sends diagnostics separately, never prints secrets, accepts explicit paths, and preserves stable exit codes.
 
-Relevant commands are `scenario validate`, `scenario apply`, `solve`, `solutions list`, `solutions verify`, `solutions compare`, `solutions explain`, and `solutions export`. Solve options are backend override, quick/balanced/deep mode, max time, threads, seed, first feasible, repair-from solution, output, bounded diagnostics directory, and human/JSONL/none progress. Load/migrate, validate, compile/route, solve, project/verify, write only an accepted normalized solution, then emit status/proof/score.
+Relevant commands are `scenario validate`, `scenario apply`, `projects import/export`, `backup inspect/create/restore`, `solve`, `solutions list`, `solutions verify`, `solutions compare`, `solutions explain`, and `solutions export --format csv|ics|html|pdf|json`. They reuse the same portable/share services, accepted-result/privacy gates, and output staging as desktop. Solve options remain backend override, quick/balanced/deep mode, max time, threads, seed, first feasible, repair-from solution, output, bounded diagnostics directory, and human/JSONL/none progress.
 
 Exit behavior: `0` produced the requested result; `3` validation failure; `4` proven infeasible; `5` no verified result in limits; `6` backend unavailable/incompatible/failed; `7` candidate verification/correctness alarm; `8` file/bundle/database/migration failure; `10` revision/state conflict; `130` user cancellation. Proven infeasibility is a completed domain outcome, not an internal crash.
 
@@ -270,13 +297,13 @@ The JSON envelope uses the `eutheto` API namespace, command, `ok`, normalized st
 1. **WF-004 — Complete required rules:** implement hours, rolling windows, consecutive, maximum count, skill mix, locks, mutual restrictions, and travel transitions through schema-to-explanation slices.
 2. **WF-005 — Complete preferences/fairness/stability:** bounded score contributions, FTE/target policy, named profiles, score serialization, metric views, and small-model differential checks.
 3. **WF-006/WF-007 — Complete compiler and independent verifier:** preprocessing provenance, formulations, rejection paths, all rule evaluators, authoritative score, mutation tests, and verification quarantine.
-4. **UI-005 — Solve orchestration:** revisioned job service, progress throttling, cancellation, stale-result handling, normalized status/error UI, and advanced disclosure.
-5. **UI-006 — Results:** virtualized grids/timelines, coverage, preference, fairness, base-diff, result summary, empty/error states, keyboard and screen-reader paths.
+4. **UI-005 — Solve orchestration:** revisioned job service, one parent budget, 300–500 ms progress threshold, truthful coarse phases, event/announcement coalescing, cancellation, first-verified-feasible delivery, stale-result handling, normalized status/error UI, phase/quality metrics, and advanced disclosure.
+5. **UI-006 — Results:** virtualized grids/timelines, coverage, preference, fairness, base-diff, immediate accepted-result summary, independently loading detail/explanation, empty/error states, keyboard and screen-reader paths.
 6. **EXPLAIN-001 — Explanation and diagnostics:** assignment evidence, bounded counterfactual jobs, infeasibility mapping/shrinking, deterministic comparisons, and compact persistence.
 7. **REPAIR-001 — Locks and repair:** base-solution references, lock commands, high-level stability objective, manual-edit validation, repair diff, one-step undo.
 8. **Alternatives:** sequential recorded objective profiles, verified metrics, semantic deduplication, comparison UI.
-9. **EXPORT-001 — Export suite:** separate input-validity gates; accepted-solution gate for assignment/result/solution-derived outputs; no-solution backup and diagnostic/infeasibility exports; preview; assignments/summary CSV; ICS; local print HTML; CLI JSON; deterministic fixtures.
-10. **Acceptance hardening:** all workforce fixtures, large-grid profiling, task-based usability scripts, docs and generated contracts.
+9. **EXPORT-001 — Portable/workforce output and shared report suite:** workforce current/historical portable round trips; separate editable-backup/result/diagnostic gates; accepted-only Share Result builder; privacy-exact preview; reusable offline-safe view components; one-file `file://` HTML; safe inert embedding and restrictive CSP; direct PDF/print; assignments/summary CSV; ICS; CLI JSON; atomic generation and deterministic/security/browser/accessibility fixtures.
+10. **Acceptance hardening:** all workforce fixtures, warm/cold whole-pipeline benchmarks, target/regression evidence, large-grid profiling, task-based usability scripts, docs and generated contracts.
 
 ## Tests and acceptance fixtures
 
@@ -292,11 +319,14 @@ Checked-in minimum corpus:
 8. **Large benchmark:** configurable 100+ people and thousands of candidate assignments.
 
 For every fixture assert domain validation, expected normalized status, independent verification, required-rule outcomes, score invariants, stable explanation keys, import/export preservation, and revision/hash identity. Add valid, invalid, edge, empty-scope, period-boundary, lock-conflict, cancellation, stale-result, and resource-limit cases per rule. Differential exhaustive small models compare compiler results with the independent evaluator; intentional mutation proves detection.
-Export tests separately prove that unverified/rejected/no-solution runs cannot produce assignment/result/solution-derived outputs, while a valid project/scenario backup and a valid bounded diagnostic/infeasibility report remain exportable before any accepted solution and after proven infeasibility.
+Performance assertions use the versioned benchmark manifests and record raw distributions/artifacts rather than one best run. Tests cover sub-threshold no-flicker behavior, longer truthful progress, one parent deadline across fallback/diagnostics, first-incumbent versus first-verified-feasible ordering, immediate accepted-result availability, optional-explanation delay/failure, cancellation latency, event/announcement caps, UI long tasks, and the calibrated small/typical/stress thresholds.
+Export tests prove that unverified/rejected/no-solution runs cannot produce assignment/result/solution-derived outputs, while valid editable scenario/full backup and bounded diagnostic/infeasibility output remain available before acceptance. Workforce portable current/historical round trips preserve every rule/reference/time meaning; unknown semantics fail and declared nonsemantic extensions preserve.
 
-Desktop acceptance includes keyboard-only setup/result/lock/repair/export, focus restoration, semantic grid headers, screen-reader solve completion and validation announcements, no color-only state, cancellation, stale and internal-failure states, and a representative large grid that does not freeze the webview.
+Share/report tests prove the preview payload exactly equals the rendered Share Result fields; sensitive/source-only fields default absent; malicious names/notes cannot inject markup/script/navigation; one HTML file opens from `file://` with no server/storage and zero required network requests; principal views/filter/search/expansion plus keyboard/focus/screen-reader operation work; graphical content has list/table parity; source edits cannot alter a generated report; print/PDF preserve readable grayscale/page context/provenance; generation cancellation/failure removes staging; supported-browser and large-report responsiveness gates pass.
 
-Required usability tasks: create a small schedule, import people, express one required rest rule and one preference, understand an infeasible conflict, lock and repair, inspect `Why this?` and `Why not?`, and export. Repeated confusion about Required versus Preference or solver jargon blocks exit.
+Desktop acceptance includes keyboard-only setup/result/lock/repair/export; separate Share Result/Export editable scenario/Back up everything intents; exact privacy preview; HTML/PDF generation progress/cancel/success/failure; focus restoration; semantic grid headers; screen-reader announcements; no color-only state; cancellation, stale and internal-failure states; and a representative large grid/report that does not freeze the webview.
+
+Required usability tasks: create a small schedule, import people, express one required rest rule and one preference, understand an infeasible conflict, lock and repair, inspect `Why this?` and `Why not?`, export editable data, and share a privacy-reviewed immutable result. Confusion between Required/Preference, editable scenario/report, backup/share, or solver jargon blocks exit.
 
 ## Risks and failure handling
 
@@ -323,15 +353,15 @@ Phase 07 is complete only when:
 - repair preserves every hard lock and minimizes changes according to the recorded score policy;
 - results accurately distinguish optimal, feasible, infeasible, cancelled, and time/resource-limited outcomes;
 - assignment and counterfactual explanations return impossible, worse by explicit category, or undetermined—never invented causality;
-- every assignment/result/solution-derived export comes from an accepted verified solution; project/scenario backup bundles and diagnostic/infeasibility reports remain available without one when their own inputs are valid; and all supported import/export flows are atomic and reviewed;
-- large benchmark solve/progress/results do not freeze the webview and virtualization is profiled;
+- every assignment/result/solution-derived export comes from an accepted verified solution; the exact privacy preview drives one-file offline HTML and direct PDF; editable scenario/full backup and diagnostic/infeasibility outputs remain available under their own valid-input gates; workforce portable/share schemas and all supported import/export flows are versioned, atomic, safe, and reviewed;
+- versioned small/typical/stress benchmarks record complete phase/model/quality evidence; calibrated normal-corpus targets pass on the reference machine; first verified results are not withheld by proof or optional explanation work; and large solve/progress/results do not freeze the webview;
 - keyboard, screen-reader, focus, non-color, stale/error/offline-equivalent core states, revision conflict, undo/redo, and representative-user usability gates pass;
 - CLI and desktop call the same services and the desktop never owns authoritative scenario state.
 
 ## Deferred and non-goals
 
 - Pumpkin selection and multi-backend routing are Phase 08; OR-Tools remains the default here.
-- XLSX, PDF, payroll/vendor adapters, and live calendar synchronization are post-MVP.
+- XLSX, payroll/vendor adapters, live calendar synchronization, encrypted/signed bundles, automatic rotating backups, semantic merge, hosted sharing, and report annotations are post-MVP. One-file HTML and direct PDF are required MVP outputs.
 - Concurrent portfolios, superficial alternative generation, map-service travel calculation, legal-compliance certification, arbitrary solver parameters, and full unbounded solver logs are excluded.
 - AI is not required to create, solve, verify, explain deterministically, repair, import, or export a workforce project.
 
@@ -339,5 +369,5 @@ Phase 07 is complete only when:
 
 - Use the Phase 03 pinned OR-Tools/protobuf pair and record worker, adapter, model, seed, thread count, and options. Do not independently upgrade protocol dependencies here.
 - Exact lockfile pins are established in Phase 00; frontend result work uses the verified 2026-08-29 stack recorded in [assumptions.md](assumptions.md), including Vue 3.5.42, Vue Router 5.3.0, Pinia 4.0.3, TanStack Table 9.2.4, and TanStack Virtual 3.13.36. Account for Table v9 API and Pinia 4 ESM/devtools requirements.
-- The CLI name, bundle extension, application ID, and release/hosting decisions remain explicit gates; examples are not decisions.
+- The CLI name, application ID, and release/hosting decisions remain explicit gates. `.eutheto` is the proposed portable extension; Phase 11 must close its media type/file association through the identity ADR before public use.
 - Before public release, practitioner review must confirm workforce defaults, fairness presets/weights, workload bucket semantics, and any medical-practice wording. Presets remain starting templates, not compliance claims.

@@ -8,12 +8,12 @@ The final project name and Rust/npm namespace are `eutheto`: Rust crates use `eu
 
 - working CLI executable name: `optimizer`;
 - reverse-domain desktop application identifiers, including distinct stable/beta identifiers;
-- portable project file extension (the working example `.optplan` is not final);
+- portable project file extension (`.eutheto` is the current proposal, but is not final until its ADR closes);
 - Git hosting organization and canonical repository URL;
 - governance and private security-reporting contacts;
 - code-signing/notarization identities, custody, rotation, protected environments, and release-signing/attestation choices.
 
-Until each gate closes, documents may use `optimizer` and `.optplan` only as explicitly labelled working examples. No public schema, installer, updater channel, shell integration, or file association may freeze them accidentally.
+Until each gate closes, documents may use `optimizer` only as an explicitly labelled working example and `.eutheto` only as a proposed extension. No public schema, installer, updater channel, shell integration, or file association may freeze them accidentally.
 
 The source-of-truth order is:
 
@@ -24,6 +24,8 @@ The source-of-truth order is:
 5. incidental code comments.
 
 Resolve conflicts by changing the authoritative source and its tests together. [assumptions.md](assumptions.md) records dated version/evidence decisions; it never replaces a requirement in a phase file.
+
+Cross-cutting roadmap contracts complement the numbered phase files: [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) defines provisional latency, budget, progress, and benchmark policy; [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md) defines implementation-independent bundle, import/restore, and privacy-filtered report boundaries. Each contract identifies the phase that owns implementation and release evidence.
 
 ## Product vision
 
@@ -41,7 +43,7 @@ The platform comprises:
 - domain packs that translate workforce scheduling, individual-seat event seating, school timetabling, planned post-MVP household transportation, and future problem families into a solver-neutral planning IR;
 - an optional provider-neutral AI interface that can act only through typed, validated, reviewable, reversible application commands.
 
-The public MVP contains production workforce and event-seating packs, bundled OR-Tools CP-SAT workers for supported platforms, experimental Pumpkin only for proven-compatible subsets, local persistence/import/export/undo/redo/repair/comparison/explanations, optional BYOK/local AI with preview-and-apply changes, cross-platform artifacts, examples, notices, SBOMs, checksums, and signed update metadata. School timetabling is the first major post-MVP pack and influences foundation contracts without delaying the MVP. [Phase 14](14-transportation-domain-pack.md) is the detailed proposed post-MVP plan for household transportation; it is not current product behavior and selects no calendar, routing, or transit provider.
+The public MVP contains production workforce and event-seating packs, bundled OR-Tools CP-SAT workers for supported platforms, experimental Pumpkin only for proven-compatible subsets, local persistence, proposed `.eutheto` editable scenario export/import and full-backup/add-or-replace restore, immutable privacy-filtered offline HTML/PDF result sharing, undo/redo/repair/comparison/explanations, optional BYOK/local AI with preview-and-apply changes, cross-platform artifacts, examples, notices, SBOMs, checksums, and signed update metadata. School timetabling is the first major post-MVP pack and influences foundation contracts without delaying the MVP. [Phase 14](14-transportation-domain-pack.md) is the detailed proposed post-MVP plan for household transportation; it is not current product behavior and selects no calendar, routing, or transit provider.
 
 ## Product principles
 
@@ -92,13 +94,16 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 - Desktop forms, imports, CLI, and AI use the same transactional, revisioned command API and undo/redo journal.
 - Worker absence, mismatch, malformed output, crash, timeout, or cancellation cannot corrupt scenarios or crash the desktop process.
 - Unsupported backends are blocked by an exact compatibility report before solving.
-- Database, bundle, scenario, pack, and protocol migrations preserve every supported format.
+- Database, bundle, Portable Scenario, Result, Share Result, pack, and protocol migrations preserve every supported format and reject unknown required semantics safely.
+- Fresh-install full-backup restore, add/replace recovery, collision handling, malicious archive rejection, and atomic failure behavior pass permanent fixtures.
+- One-file HTML and direct PDF are built only from accepted immutable results and the exact privacy preview; core meaning works from `file://` with no network and accessible list/table parity.
 - Primary workforce and seating flows are keyboard-complete.
 - The application remains fully useful with AI disabled.
+- Representative warm and cold solves meet the calibrated [performance and solver UX targets](performance-and-solver-ux-targets.md), preserve UI responsiveness, and report limit/proof status accurately.
 
 ### Product
 
-A first-time user can create a workforce scenario, add/import people, define work and coverage, add required rules and preferences through plain-language guided controls, validate and optimize, understand whether requirements passed and why an assignment occurred, change a rule and repair, and export—without learning operations-research terminology.
+A first-time user can create a workforce scenario, add/import people, define work and coverage, add required rules and preferences through plain-language guided controls, validate and optimize, understand whether requirements passed and why an assignment occurred, change a rule and repair, distinguish editable export from full backup and immutable sharing, restore safely, and create a privacy-reviewed offline result report—without learning operations-research terminology.
 
 ## Approved architecture decisions
 
@@ -181,6 +186,9 @@ Protect these invariants in every phase:
 - Unknown/newer schemas and protocols fail safely; unknown extension data is preserved where practical; public data is never silently lost.
 - Secrets never enter Vue, logs, SQLite, exports, diagnostics, Nix derivations, repository files, or ordinary IPC responses.
 - Imported files and bundles are untrusted and bounded; parses/migrations finish before one atomic commit.
+- Portable data is a versioned implementation-independent schema, never a SQLite dump. Export writes the current schema; import migrates supported history and rejects unknown semantics before preview and one atomic commit.
+- Editable scenario export/full backup and immutable result sharing are distinct. A self-contained report is built only from a privacy-filtered Share Result Model tied to an accepted result; it never defaults to the source scenario or requires a network/server.
+- Every solve and nested fallback/diagnostic operation consumes one bounded parent budget; an unverified incumbent, provider call, AI response, or optimality proof never blocks access to an already verified result.
 - AI is optional and cannot exceed typed command/query permissions or skip preview/apply.
 - Official artifacts remain one-install and comply with the permissive license policy.
 - Accessibility has equivalent keyboard/list paths; canvas is never the only representation.
@@ -248,7 +256,11 @@ Use trunk-based development, short-lived branches, protected `main`, and tags fr
 | Counterfactual | Temporary diagnostic solve forcing/forbidding a choice to measure feasibility or score effect. |
 | Domain command | Typed, validated, reversible scenario mutation. |
 | View model | Purpose-built UI/CLI response, not authoritative storage. |
-| Bundle | Portable archive using the unresolved public extension; `.optplan` is the working example. |
+| Bundle | Versioned, bounded portable archive of scenario meaning and permitted assets; `.eutheto` is the proposed public extension pending its identity ADR. |
+| Portable Scenario Model | Strict implementation-independent semantic representation used inside portable bundles; separately versioned from SQLite/internal persistence. |
+| Result Model | Immutable accepted output tied to one scenario revision, verification checksum, score, and reproducibility metadata. |
+| Share Result Model | Versioned privacy-filtered presentation representation built from an accepted Result Model, not the source Scenario Model. |
+| Restore | Consequential backup operation that adds to or atomically replaces portable library data under explicit preview, confirmation, and safety-backup policy. |
 | Model hash | Canonical digest of planning meaning, versions, compiler/adapter, and relevant options. |
 | Optimal | Backend proved no better result for its exact encoded objective under its proof semantics, and the candidate verified. |
 | Feasible | A verified required-rule-compliant solution exists, without a proof of optimality. |
@@ -264,6 +276,13 @@ A backend has approved license/distribution, visible pinned version, implemented
 A desktop flow includes normal, empty, loading, stale, error, and offline states; keyboard and accessible focus/name/announcement behavior; safe optimistic/transient state; conflict and undo/redo semantics; large-fixture profiling; representative usability evidence; and current screenshots/help.
 
 An AI capability has a deterministic non-AI equivalent, typed allowlisted risk-classified tools, preview/apply writes, stale-revision and injection/malformed-call tests, documented secret/data scope, state-safe provider failures, inspectable deterministic evidence, and a fake-provider CI path.
+
+## Cross-cutting roadmap specifications
+
+| Specification | Contract |
+|---|---|
+| [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) | Provisional end-to-end latency objectives, one-budget solve policy, responsive progress behavior, instrumentation, representative benchmark packs, and Phase-12 calibration. |
+| [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md) | Proposed `.eutheto` bundle/version/migration contract, bounded import and atomic restore, immutable privacy-filtered HTML/PDF result sharing, security evidence, and phase ownership. |
 
 ## Phase navigation
 
