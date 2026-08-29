@@ -1,0 +1,85 @@
+# Rust
+/target/
+**/*.rs.bk
+*.profraw
+
+# JavaScript and frontend
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+/dist/
+**/dist/
+.output/
+.nuxt/
+.vite/
+*.tsbuildinfo
+
+# Test and coverage output
+/coverage/
+**/coverage/
+.nyc_output/
+test-results/
+playwright-report/
+allure-results/
+.wdio/
+
+# Native and CMake builds
+/build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Nix and direnv
+.direnv/
+result
+result-*
+
+# Tauri and platform packaging
+*.AppImage
+*.dmg
+*.msi
+*.msix
+*.deb
+*.rpm
+*.pkg
+*.exe
+*.pdb
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs, caches, and temporary files
+*.log
+.cache/
+.tmp/
+tmp/
+*.tmp
+*.swp
+*.swo
+*~
+
+# Editors and operating systems
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# Local databases and application state
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
