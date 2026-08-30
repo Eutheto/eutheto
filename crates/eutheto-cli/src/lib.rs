@@ -3,8 +3,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-    BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp, FoundationStatusService,
-    ProjectScope,
+    AppliedPortableScenario, BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp,
+    FoundationStatusService, ProjectScope,
 };
 use eutheto_export::{CancellationSignal, FixedExclusion};
 use eutheto_import::{
@@ -1626,10 +1626,14 @@ fn portable_applied_outcome(
     mode: RestoreMode,
     result: AppCommandResult,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let AppCommandResult::PortableApplied { scenario_ids } = result else {
+    let AppCommandResult::PortableApplied { scenarios } = result else {
         return Err((command, unexpected_result()));
     };
-    let scenario_count = scenario_ids.len();
+    let scenario_count = scenarios.len();
+    let scenario_ids = scenarios
+        .iter()
+        .map(|scenario| scenario.scenario_id)
+        .collect::<Vec<_>>();
     let mut human = portable_preview_human_with_plan(preview, Some(plan), Some(mode));
     human.push(format!("Applied {scenario_count} scenario(s)."));
     Ok(Outcome::new(
@@ -1638,7 +1642,7 @@ fn portable_applied_outcome(
         json!({
             "preview": preview_value(preview),
             "scenarioIds": scenario_ids,
-            "scenarioOutcomes": portable_scenario_outcomes(preview, plan, mode),
+            "scenarioOutcomes": portable_scenario_outcomes(preview, plan, mode, &scenarios),
         }),
         human,
     ))
@@ -1648,29 +1652,39 @@ fn portable_scenario_outcomes(
     preview: &eutheto_import::ImportPreview,
     plan: &CollisionPlan,
     mode: RestoreMode,
+    applied_scenarios: &[AppliedPortableScenario],
 ) -> Vec<Value> {
+    let mut remaining_applied_scenarios = applied_scenarios.iter();
     preview
         .scenarios
         .iter()
         .map(|scenario| {
             let action = plan.scenarios.get(&scenario.scenario_id);
+            let skipped = scenario.collides && matches!(action, Some(CollisionAction::Skip));
             let same_identity = !scenario.collides
                 || matches!(mode, RestoreMode::ReplaceLibrary)
                 || matches!(action, Some(CollisionAction::Replace));
-            let (selected_action, revision, warning) =
-                if scenario.collides && matches!(action, Some(CollisionAction::Skip)) {
-                    ("skip", None, None)
-                } else if same_identity {
-                    (
-                        "same-identity",
-                        Some(scenario.same_identity_revision),
-                        scenario.same_identity_revision_warning.as_deref(),
-                    )
-                } else {
-                    ("create-copy", Some(scenario.source_revision), None)
-                };
+            let (selected_action, revision, warning) = if skipped {
+                ("skip", None, None)
+            } else if same_identity {
+                (
+                    "same-identity",
+                    Some(scenario.same_identity_revision),
+                    scenario.same_identity_revision_warning.as_deref(),
+                )
+            } else {
+                ("create-copy", Some(scenario.source_revision), None)
+            };
+            let persisted_scenario_id = if skipped {
+                None
+            } else {
+                remaining_applied_scenarios
+                    .find(|applied| applied.source_scenario_id == scenario.scenario_id)
+                    .map(|applied| applied.scenario_id)
+            };
             json!({
-                "scenarioId": scenario.scenario_id,
+                "sourceScenarioId": scenario.scenario_id,
+                "scenarioId": persisted_scenario_id,
                 "selectedAction": selected_action,
                 "revision": revision,
                 "warning": warning,

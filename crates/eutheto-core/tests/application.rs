@@ -1725,8 +1725,10 @@ async fn apply_restore_and_assert_events(
         .boxed()?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { scenario_ids }
-            if scenario_ids == vec![restored_id]
+        AppCommandResult::PortableApplied { scenarios }
+            if scenarios.len() == 1
+                && scenarios[0].source_scenario_id == restored_id
+                && scenarios[0].scenario_id == restored_id
     ));
     let refresh = refreshed.recv().await.boxed()?;
     assert!(matches!(
@@ -2838,7 +2840,10 @@ async fn first_replace_cannot_bypass_backup_and_same_session_phrase_uses_recorde
     .boxed()?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { scenario_ids } if scenario_ids == vec![restored_id]
+        AppCommandResult::PortableApplied { scenarios }
+            if scenarios.len() == 1
+                && scenarios[0].source_scenario_id == restored_id
+                && scenarios[0].scenario_id == restored_id
     ));
     Ok(())
 }
@@ -2869,7 +2874,10 @@ async fn actual_failure_receipt_survives_restart_and_is_consumed_once() -> Resul
             .boxed()?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { scenario_ids } if scenario_ids == vec![restored_id]
+        AppCommandResult::PortableApplied { scenarios }
+            if scenarios.len() == 1
+                && scenarios[0].source_scenario_id == restored_id
+                && scenarios[0].scenario_id == restored_id
     ));
     let replay_preview = preview_restore(&reopened, backup).await?;
     assert_receipt_rejected(
@@ -3039,7 +3047,7 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
         .boxed()?;
     assert!(matches!(
         changed,
-        AppCommandResult::PortableApplied { scenario_ids } if scenario_ids.is_empty()
+        AppCommandResult::PortableApplied { scenarios } if scenarios.is_empty()
     ));
     assert!(matches!(
         changed_notifications.recv().await.boxed()?.payload,

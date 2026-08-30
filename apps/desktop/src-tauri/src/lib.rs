@@ -1725,11 +1725,16 @@ async fn project_import_apply(
         .await
         .map_err(map_app_error)?
     {
-        AppCommandResult::PortableApplied { scenario_ids } => Ok(response(
+        AppCommandResult::PortableApplied { scenarios } => Ok(response(
             request_id,
             None,
             Vec::new(),
-            PortableAppliedDto { scenario_ids },
+            PortableAppliedDto {
+                scenario_ids: scenarios
+                    .into_iter()
+                    .map(|scenario| scenario.scenario_id)
+                    .collect(),
+            },
         )),
         _ => Err(boundary_error(
             "protocol.result_mismatch",
@@ -2047,11 +2052,16 @@ async fn project_restore_apply(
         .await
         .map_err(map_app_error)?
     {
-        AppCommandResult::PortableApplied { scenario_ids } => Ok(response(
+        AppCommandResult::PortableApplied { scenarios } => Ok(response(
             request_id,
             None,
             Vec::new(),
-            PortableAppliedDto { scenario_ids },
+            PortableAppliedDto {
+                scenario_ids: scenarios
+                    .into_iter()
+                    .map(|scenario| scenario.scenario_id)
+                    .collect(),
+            },
         )),
         _ => Err(boundary_error(
             "protocol.result_mismatch",

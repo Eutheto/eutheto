@@ -253,6 +253,13 @@ pub enum AppQuery {
     Deferred(DeferredCapability),
 }
 
+/// Source and persisted identities for one applied portable scenario.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AppliedPortableScenario {
+    pub source_scenario_id: ScenarioId,
+    pub scenario_id: ScenarioId,
+}
+
 /// Results from state-changing application operations.
 #[derive(Clone, Debug)]
 pub enum AppCommandResult {
@@ -263,7 +270,9 @@ pub enum AppCommandResult {
     SettingDeleted(bool),
     BundleWritten,
     BackupWritten(BackupSummary),
-    PortableApplied { scenario_ids: Vec<ScenarioId> },
+    PortableApplied {
+        scenarios: Vec<AppliedPortableScenario>,
+    },
     PortablePreviewCancelled,
 }
 
@@ -382,11 +391,11 @@ struct PendingSafetyBackupFailure {
 }
 struct StagedPortableApply {
     import: eutheto_import::StagedImport,
-    scenario_ids: Vec<ScenarioId>,
+    scenarios: Vec<AppliedPortableScenario>,
     events: Vec<(ScenarioId, Revision, ChangeKind)>,
 }
 struct CommittedPortableApply {
-    scenario_ids: Vec<ScenarioId>,
+    scenarios: Vec<AppliedPortableScenario>,
     events: Vec<(ScenarioId, Revision, ChangeKind)>,
     library_changed: bool,
 }
@@ -1378,7 +1387,7 @@ impl EuthetoApp {
         }
         self.publish_portable_apply_events(request_id, committed.events);
         Ok(AppCommandResult::PortableApplied {
-            scenario_ids: committed.scenario_ids,
+            scenarios: committed.scenarios,
         })
     }
 
@@ -1433,15 +1442,18 @@ impl EuthetoApp {
                 .map(|item| &item.scenario.document)
                 .chain(import.scenario_revisions.iter().map(|item| &item.document)),
         )?;
-        let scenario_ids = import
+        let scenarios = import
             .scenarios
             .iter()
-            .map(|item| item.scenario.document.scenario_id)
+            .map(|item| AppliedPortableScenario {
+                source_scenario_id: item.original_id,
+                scenario_id: item.scenario.document.scenario_id,
+            })
             .collect();
         let events = portable_apply_events(&import.scenarios);
         Ok(StagedPortableApply {
             import,
-            scenario_ids,
+            scenarios,
             events,
         })
     }
@@ -1457,7 +1469,7 @@ impl EuthetoApp {
     ) -> Result<CommittedPortableApply, AppError> {
         let StagedPortableApply {
             import,
-            scenario_ids,
+            scenarios,
             mut events,
         } = staged;
         let applied_at = self.clock.now();
@@ -1471,7 +1483,10 @@ impl EuthetoApp {
             } else {
                 BTreeSet::new()
             };
-            let imported = scenario_ids.iter().copied().collect::<BTreeSet<_>>();
+            let imported = scenarios
+                .iter()
+                .map(|scenario| scenario.scenario_id)
+                .collect::<BTreeSet<_>>();
             for removed in &local.scenarios {
                 if remove_scenario_ids.contains(&removed.scenario_id)
                     && !imported.contains(&removed.scenario_id)
@@ -1516,7 +1531,7 @@ impl EuthetoApp {
                 .map_err(store_error)?
         };
         Ok(CommittedPortableApply {
-            scenario_ids,
+            scenarios,
             events,
             library_changed: outcome.library_revision != local.revision,
         })

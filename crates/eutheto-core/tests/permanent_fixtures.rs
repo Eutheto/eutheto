@@ -253,8 +253,13 @@ async fn import_fixture(
     )?;
     assert!(matches!(
         applied,
-        AppCommandResult::PortableApplied { ref scenario_ids }
-            if scenario_ids == &[scenario_id]
+        AppCommandResult::PortableApplied { ref scenarios }
+            if matches!(
+                scenarios.as_slice(),
+                [applied_scenario]
+                    if applied_scenario.source_scenario_id == scenario_id
+                        && applied_scenario.scenario_id == scenario_id
+            )
     ));
     Ok(())
 }

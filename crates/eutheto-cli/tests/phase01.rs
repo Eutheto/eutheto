@@ -415,6 +415,15 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
         run_json(imported.path(), &["projects", "import", scenario_path])?;
     assert!(import_output.status.success(), "{import}");
     assert_eq!(import["result"]["scenarioIds"][0], id);
+    assert_eq!(
+        import["result"]["scenarioOutcomes"][0]["sourceScenarioId"],
+        id
+    );
+    assert_eq!(import["result"]["scenarioOutcomes"][0]["scenarioId"], id);
+    assert_eq!(
+        import["result"]["scenarioOutcomes"][0]["selectedAction"],
+        "same-identity"
+    );
     let (review_output, review) =
         run_json(imported.path(), &["projects", "import", scenario_path])?;
     assert!(review_output.status.success(), "{review}");
@@ -449,6 +458,15 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
         Some(1)
     );
     assert_eq!(
+        applied["result"]["scenarioOutcomes"][0]["sourceScenarioId"],
+        id
+    );
+    assert_eq!(
+        applied["result"]["scenarioOutcomes"][0]["scenarioId"],
+        applied["result"]["scenarioIds"][0]
+    );
+    assert_ne!(applied["result"]["scenarioIds"][0], id);
+    assert_eq!(
         applied["result"]["scenarioOutcomes"][0]["selectedAction"],
         "create-copy"
     );
@@ -457,6 +475,30 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
         applied["result"]["preview"]["scenarios"][0]["sourceRevision"]
     );
     assert!(applied["result"]["scenarioOutcomes"][0]["warning"].is_null());
+    let mut skip_plan = review["result"]["requiredCollisionPlan"].clone();
+    skip_plan["scenarios"][id.as_str()] = json!("skip");
+    let skip_plan = skip_plan.to_string();
+    let (skip_output, skipped) = run_json(
+        imported.path(),
+        &[
+            "projects",
+            "import",
+            scenario_path,
+            "--collision-plan",
+            &skip_plan,
+        ],
+    )?;
+    assert!(skip_output.status.success(), "{skipped}");
+    assert_eq!(skipped["result"]["scenarioIds"], json!([]));
+    assert_eq!(
+        skipped["result"]["scenarioOutcomes"][0]["sourceScenarioId"],
+        id
+    );
+    assert!(skipped["result"]["scenarioOutcomes"][0]["scenarioId"].is_null());
+    assert_eq!(
+        skipped["result"]["scenarioOutcomes"][0]["selectedAction"],
+        "skip"
+    );
 
     let included = import["result"]["preview"]["includedSections"]
         .as_array()
