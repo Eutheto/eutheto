@@ -247,6 +247,10 @@ Automatic rotating backups, retention tiers, restore-point browsing, encryption,
 
 ## Immutable generated-result sharing
 
+### Result capsule terminology
+
+The roadmap may call the recipient-facing immutable offline artifact a **result capsule**. This is a product concept, not another persistence or interchange authority: the MVP capsule is the existing standalone HTML or direct PDF rendered from a validated Share Result Model. It is never an editable `.eutheto` scenario, full backup, database image, solver workspace, or container for unrestricted pack code. User-facing naming remains subject to product review; the artifact contracts below do not depend on the label.
+
 ### Share Result Model
 
 Only an independently accepted Result Model may produce assignment/plan sharing output. The Share Result Builder takes:
@@ -413,6 +417,6 @@ The public MVP cannot claim this contract complete until:
 
 ## Post-MVP opportunities
 
-Separate approved branches may add password-encrypted bundles with an independently versioned authenticated-encryption envelope; automatic change/daily backups, retention and health monitoring; selected multi-scenario export; scheduled verification/restore drills; richer saved/per-recipient profiles; licensed offline schematic/static maps; result comparison across revisions; local annotations separated from immutable result; branding/templates; digital signatures and trust UI; optional hosted sharing that retains downloadable offline reports; QR identifiers; support import-diagnostic packages; or organization sharing policies.
+Separate approved branches may add password-encrypted bundles with an independently versioned authenticated-encryption envelope; automatic change/daily backups, retention and health monitoring; selected multi-scenario export; scheduled verification/restore drills; richer saved/per-recipient profiles; licensed offline schematic/static maps; result comparison across revisions; local annotations separated from immutable result; branding/templates; digital signatures and trust UI; optional hosted sharing that retains downloadable offline reports; QR identifiers; support import-diagnostic packages; or organization sharing policies. Advanced result-capsule work may add precomputed verified alternatives, comparison views, recipient-specific disclosure, or an explicit create-editable-copy flow. Such work versions and previews every newly included field, preserves immutable source/result identity, keeps annotations outside the accepted result, and never grants the offline artifact ambient network/filesystem/credential access. Capsule-to-scenario conversion creates a newly reviewed portable scenario or links to separately included source data; it never reconstructs editable authority from a privacy-filtered presentation payload or silently imports omitted/private fields.
 
 Any hosted/cloud function remains additive. It cannot replace local export, inspection, backup, restore, and offline sharing or weaken data minimization, source revision identity, independent verification, provider terms, and explicit user control.

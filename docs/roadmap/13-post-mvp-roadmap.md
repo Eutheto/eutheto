@@ -2,13 +2,13 @@
 
 ## Outcome
 
-Extend the released local-first `eutheto` platform without weakening public-MVP contracts. The immediate release delivers the complete official school-timetabling pack, deeper explainability, stronger verified portfolio routing and alternative generation, and a separate Nuxt documentation/community website. Later branches may add sandboxed domain packs, optional solver adapters, specialized algorithms, new targets, richer imports, collaboration/server mode, enterprise integrations, additional official domains, improved AI, optional telemetry, and optional hosted services. Every branch remains independently gated, capability-scoped, license-reviewed, resource-bounded, migration-safe, accessible, and optional relative to the open-source core and desktop application.
+Extend the released local-first `eutheto` platform without weakening public-MVP contracts. The immediate release delivers the complete official school-timetabling pack, deeper explainability, stronger verified portfolio routing and alternative generation, and a separate Nuxt documentation/community website. Dependency-gated planner evolution then deepens repair, semantic comparison, plan health, trade-off exploration, history, resilience analysis, and person-aware fairness before any generalized platform claim. Later independent branches may add sandboxed domain packs, optional solver adapters, specialized algorithms, new targets, richer imports, collaboration/server mode, enterprise integrations, additional official domains, improved AI, optional telemetry, and optional hosted services. Every branch remains independently gated, capability-scoped, license-reviewed, resource-bounded, migration-safe, accessible, and optional relative to the open-source core and desktop application.
 
 The public-MVP baseline is defined in [Phase 11](11-public-mvp-packaging-and-documentation.md) and approved in [Phase 12](12-stabilization-and-public-release-gate.md). Version and decision evidence is in [the assumptions ledger](assumptions.md).
 
 ## Source coverage
 
-This phase fully maps blueprint Section 20; immediate/later scope in Sections 6.4–6.5; Section 12.2's post-MVP pack model; Section 14.11; Sections 16.3–16.6; Sections 24.9 and 24.12; future targets and distribution options in Section 27; every branch in Section 30; Appendix C.8; applicable validation/definition-of-done/stop-condition gates; and the explicitly deferred opportunities in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) and [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md).
+This phase fully maps blueprint Section 20; immediate/later scope in Sections 6.4–6.5; Section 12.2's post-MVP pack model; Section 14.11; Sections 16.3–16.6; Sections 24.9 and 24.12; future targets and distribution options in Section 27; every branch in Section 30; Appendix C.8; applicable validation/definition-of-done/stop-condition gates; and the explicitly deferred opportunities in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) and [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). It also incorporates the accepted, scope-disciplined recommendations from **Eutheto — Feature Expansion and Product Evolution Roadmap**, dated 2026-08-29, source SHA-256 `b55dc5a3e423a955a7dabb0a62cebd283be54598d5fc0afc6f6bf90cd37bb7cb`.
 
 ## Dependencies
 
@@ -30,6 +30,8 @@ This phase fully maps blueprint Section 20; immediate/later scope in Sections 6.
 - Legal/regulatory presets remain non-authoritative starting templates unless separately maintained and jurisdiction-reviewed.
 - Post-MVP optimization may reuse only immutable, hash-addressed validated artifacts and accepted-result hints. Cache, precompute, warm start, portfolio, or adaptive policy never changes semantics, verification, revision identity, one-operation resource accounting, or truthful status/provenance.
 - Portable/report enhancements remain optional layers over current canonical schemas and purpose-built Share Result data. Encryption, signatures, automation, merge and hosting cannot weaken local unencrypted recovery, exact preview, atomicity, privacy, export/exit, or offline access.
+- Planner-evolution features remain pack-evidenced before they become generic. A universal health score, fairness policy, repair cost, resilience probability, shared-person model, or cross-pack objective hierarchy is forbidden until several materially different domain packs prove common semantics.
+- Explanations, comparisons, health indicators, repairs, stress tests, and AI paraphrases are derived from structured pack/verifier evidence. They distinguish fact from interpretation, sufficient from minimal conflict, correlation from causality, deterministic perturbation from probability, and configured policy from legal or safety authority.
 
 ### At/after-1.0 compatibility contract
 
@@ -52,7 +54,10 @@ Every branch delivered at or after 1.0 must:
 
 ### Later post-MVP
 
-- sandboxed domain-pack SDK/catalog;
+- generalized pack-evidenced Plan Health, arbitrary semantic Scenario Compare, named timeline milestones, and refresh-and-compare;
+- ranked reviewed repairs, curated trade-off presets, deterministic stress tests, multi-period fairness, and later scenario branching;
+- an experimental sandboxed Pack SDK after multiple first-party packs validate the internal contract, followed only later by a Pack Composer or community registry;
+- advanced result capsules and explicit capsule-to-scenario workflows under the portable-data privacy and provenance gates;
 - native specialized algorithms;
 - optional HiGHS, SCIP, MiniZinc, commercial-solver, and routing adapters;
 - collaboration/server and enterprise integrations;
@@ -211,12 +216,61 @@ Deliver CP-SAT parameter-profile portfolios, concurrent OR-Tools/Pumpkin for exa
 - introduce incremental solving or domain-aware dominance pruning only after differential/verifier evidence proves semantic equivalence and benchmarks prove material benefit;
 - allow adaptive budget/profile recommendations only when visible, deterministic from recorded inputs, bounded by the user’s selected operation, and never auto-spending a larger budget;
 - require alternatives to declare diversity metrics and remain required-rule feasible;
+- expose a small pack-defined Tradeoff Explorer preset set only after semantic Scenario Compare is stable; labels such as `Recommended`, `Lowest cost`, `Least disruption`, or `Most flexible` map to versioned objective configurations, not hidden narrative or an unbounded weight-slider surface;
 - keep opaque remote AI outside backend selection and resource policy; and
 - treat cross-solver decomposition of one connected component as separate research requiring proof of independence and merge equivalence.
 
 ## Branch C — Deeper explainability
 
 Deliver more efficient bounded minimal-conflict shrinking; multiple independent conflict sets; causal repair explanations; visual rule-dependency graphs with non-visual equivalents; sensitivity analysis; preference shadow-price-like summaries only where mathematically meaningful; richer counterfactual batches; and explanation-quality evaluation with domain users. Preserve sufficient-versus-minimal, causal-versus-correlated, and configured-rule-versus-legal-certification distinctions. Add cancellation/resource budgets, provenance, replay, and certainty-wording tests.
+
+## Cross-cutting planner-evolution sequence
+
+These capabilities deepen the existing solve → understand → repair → reflow → compare → share loop. They are dependency-ordered evidence tracks, not one release bundle and not permission to retrofit speculative generic abstractions into the MVP.
+
+```text
+structured pack/verifier evidence
+  → Why this plan? → reviewed repair alternatives → semantic comparison
+accepted result + explicit change costs
+  → Lock/Prefer/Move/Reflow → plan stability → timeline and branching
+pack-owned health metrics + immutable run inputs
+  → deterministic stress tests → resilience objectives → trade-off exploration
+run manifest + frozen provider snapshots
+  → reproducibility → refresh-and-compare → privacy-reviewed result capsules
+```
+
+### Early post-MVP
+
+1. **Richer Constraint Clinic behavior:** extend the existing infeasibility workflow with several independently verified, explicitly reviewed repair alternatives. Rank by pack-defined named disruption/cost categories; say `minimum` only when the search proves it; never silently weaken a requirement or propose relaxing safety, accessibility, legal, or otherwise protected rules as an ordinary compromise.
+2. **Generalized Plan Health:** let each pack expose typed, dimensioned buffer, tightness, dependency, and criticality evidence with source/freshness/uncertainty metadata and accessible list/table equivalents. Generalize only semantics demonstrated by multiple packs; do not collapse incomparable facts into one universal health score or imply independent slack where constraints are coupled.
+3. **Full Scenario Compare and timeline:** compare any two retained revisions/runs using input changes, locks/preferences, assignments, independently verified score/category deltas, affected entities, proof status, and evidence-backed reasons. Add named milestones, restore points, retention controls, and `Duplicate from here`; retain separate identities for scenario revision, input snapshot, solver run, and accepted result.
+4. **Curated Tradeoff Explorer:** begin with a small pack-defined set such as `Lowest cost`, `Least disruption`, `Most flexible`, or `Fairness first`. Each label maps to recorded objective configuration; every alternative is independently verified and rendered through semantic comparison. Do not present incomparable metrics as one magic score.
+5. **Refresh and compare:** calendar, routing, price, or other provider updates create a reviewed immutable input snapshot and a new run; they never overwrite the accepted result's basis. The user can review source/freshness changes, refresh and compare, or retain the prior snapshot.
+6. **Person-aware fairness expansion:** expose named burden definitions, populations, targets, distributions, deviations, and pack-owned balancing presets. Accessibility and safety remain requirements, not fairness trade-offs; equal treatment is not asserted to be equitable.
+
+### Advanced post-MVP
+
+1. **Deterministic stress tests first:** packs define bounded, understandable perturbations and recovery criteria. Each test records its base revision, immutable inputs, perturbation, budget, candidate, independent verification, and repair cost; supports progress/cancellation; and never emits a success probability without a reviewed empirical distribution.
+2. **Resilience objectives and interactive trade-offs:** only after deterministic tests, performance evidence, and domain semantics mature may a pack trade a recorded amount of nominal score for a recorded resilience measure or expose interactive movement among competing objectives.
+3. **Multi-period fairness:** burden history and rotation require explicit retention, correction/deletion, time-window, baseline, weighting, and privacy semantics. Historical disadvantage is not inferred from opaque scores.
+4. **Scenario branching and reconciliation:** branches retain provenance and immutable base identities; guided reconciliation previews semantic conflicts and applies revision-checked commands. Do not expose source-control terminology by default.
+5. **Reviewed conversational changes:** the optional AI may translate “Make it fit” language only into the same typed pack commands available to deterministic UI. The user reviews hard-versus-soft meaning and affected scope before apply; solving and verification remain deterministic authorities.
+6. **Advanced result capsules:** precomputed alternatives, annotations, recipient-specific disclosure, or capsule-to-scenario conversion follow Branch O and the cross-cutting portable-data specification. A capsule never gains ambient network, filesystem, credential, or mutable-scenario authority.
+
+### Platform research gates
+
+- Publish an experimental Pack SDK only after at least three materially different completed first-party packs demonstrate the internal contract and its migration, verification, explanation, presentation, resource, and security boundaries. Compatibility remains explicitly experimental until its conformance corpus survives independent third-party use.
+- A visual Pack Composer may follow the SDK only if it emits the same reviewed declarative representation and conformance evidence; it must not create a second pack format or permit arbitrary native/web code. A community catalog additionally requires signatures, capability disclosure, compatibility, recovery, license, moderation, and sandbox evidence while preserving sideloading.
+- Cross-pack evolution proceeds only through explicit user-approved data handoff, then independently useful conflict detection, and only later research into coordinated solving. Stable typed identities and namespaces do not create a universal shared-person/resource model. Coordinated solving requires versioned shared semantics, priority governance, provenance, independent verification, budget accounting, privacy boundaries, and semantic merge evidence.
+
+### Planner-evolution acceptance
+
+- Health, comparison, repair, fairness, resilience, and trade-off claims round-trip as typed evidence and regenerate deterministic non-AI views.
+- Counterfactual and causal wording is backed by the exact recorded diagnostic operation; otherwise the UI reports verified differences without invented causality.
+- Every nested solve shares a visible parent operation budget, remains cancellable, preserves an already accepted result, and records partial/inconclusive outcomes honestly.
+- Representative packs prove accessible keyboard/screen-reader views, deterministic fixtures, migration/portable behavior, privacy previews, resource bounds, and cold-path equivalence where reuse is introduced.
+- User research validates product language and decision usefulness; it cannot waive verifier, privacy, security, compatibility, or evidence gates.
+
 
 ## Branch D — Native specialized algorithms
 

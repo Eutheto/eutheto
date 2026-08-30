@@ -186,6 +186,7 @@ Implement virtualized views rather than a DOM cell per large horizon:
 - preference-satisfaction summary;
 - fairness distribution with targets, actual values, deviation, and spread;
 - changes from base schedule;
+- pack-owned Plan Health indicators for applicable rules—rest above the configured minimum, hours below a configured limit, transition/travel margin, and coverage margin—with typed units, affected assignments, and no universal health score;
 - warnings and accurate solver/proof status;
 - explanation side panel.
 
@@ -218,6 +219,8 @@ Why-assigned statements are limited to verified facts: eligibility; unavailable/
 For infeasibility: confirm no verified candidate; read an available assumption core; map assumptions through provenance; bounded-shrink an oversized core by removing a rule/group and re-solving within a small diagnostic budget; retain removal only while infeasibility remains proven; stop on budget exhaustion; render pack-owned evidence and label it `sufficient conflict`, never `minimal` unless proved. Offer inspect, edit, temporary relaxation in a reversible diagnostic copy, or export diagnostic report. Never alter the original.
 
 Comparison computes added/removed/changed assignments, required-rule status, score-vector deltas by level/category, fairness deltas, preference deltas, affected people/groups, lock preservation, and solver status/proof differences.
+
+Phase 07's Scenario Compare scope is intentionally bounded: compare the current accepted result with the immediately preceding accepted result for the same scenario. Show the complete semantic difference above, preserve both result/run/revision identities, and let the user reopen or restore the prior accepted plan through existing revisioned commands. Arbitrary revision selection, named milestones, branching, reconciliation, generalized criticality, and cross-pack health semantics remain post-MVP.
 
 Persist compact assumption-to-rule mappings, objective contribution records, counterfactual summaries, backend bounds/status, verifier evaluations, and model/solution hashes. Full solver logs are opt-in and bounded. A later AI paraphrase never replaces the deterministic evidence view.
 
@@ -353,6 +356,7 @@ Phase 07 is complete only when:
 - repair preserves every hard lock and minimizes changes according to the recorded score policy;
 - results accurately distinguish optimal, feasible, infeasible, cancelled, and time/resource-limited outcomes;
 - assignment and counterfactual explanations return impossible, worse by explicit category, or undetermined—never invented causality;
+- current-versus-immediately-previous Scenario Compare renders semantic assignment/rule/score/fairness/preference/lock/proof deltas, while pack-owned buffer/tightness indicators show typed rule margins without false precision or a universal health score;
 - every assignment/result/solution-derived export comes from an accepted verified solution; the exact privacy preview drives one-file offline HTML and direct PDF; editable scenario/full backup and diagnostic/infeasibility outputs remain available under their own valid-input gates; workforce portable/share schemas and all supported import/export flows are versioned, atomic, safe, and reviewed;
 - versioned small/typical/stress benchmarks record complete phase/model/quality evidence; calibrated normal-corpus targets pass on the reference machine; first verified results are not withheld by proof or optional explanation work; and large solve/progress/results do not freeze the webview;
 - keyboard, screen-reader, focus, non-color, stale/error/offline-equivalent core states, revision conflict, undo/redo, and representative-user usability gates pass;
