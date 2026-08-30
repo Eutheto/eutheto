@@ -158,6 +158,10 @@ Values are maximum stable releases reported by `https://crates.io/api/v1/crates/
 | [`rusqlite`](https://crates.io/crates/rusqlite) | 0.40.2 | bundled SQLite; dedicated service | 1 |
 | [`zstd`](https://crates.io/crates/zstd) | 0.13.3 | bounded compression | 1/11 |
 | [`zip`](https://crates.io/crates/zip) | 8.6.0 | newest stable; 9.0.0-pre3 excluded; strict wrapper | 1/11 |
+| [`image`](https://crates.io/crates/image) | 0.25.10 | bounded full-stream PNG/JPEG decode only; default features disabled | 1 |
+| [`same-file`](https://crates.io/crates/same-file) | 1.0.6 | stable opened-file/path identity checks for private storage | 1 |
+| [`rustix`](https://crates.io/crates/rustix) | 1.1.4 | safe effective-user ownership checks; `process` feature only | 1 |
+| [`libc`](https://crates.io/crates/libc) | 0.2.189 | Unix `O_NOFOLLOW`/`O_NONBLOCK`; 1.0.0-alpha excluded | 1 |
 | [`blake3`](https://crates.io/crates/blake3) | 1.8.7 | content/model hashes, not passwords | 1–4/11 |
 | [`prost`](https://crates.io/crates/prost) | 0.14.4 | match `prost-build` and OR-Tools proto contract | 2/3 |
 | [`prost-build`](https://crates.io/crates/prost-build) | 0.14.4 | match prost/protoc gate | 2/3 |
@@ -188,7 +192,38 @@ Values are maximum stable releases reported by `https://crates.io/api/v1/crates/
 | [`pumpkin-solver`](https://crates.io/crates/pumpkin-solver) | 0.5.0 | K.4-gated | 8/13 |
 | [`pumpkin-core`](https://crates.io/crates/pumpkin-core) | 0.5.0 | match solver; cooperative termination | 8/13 |
 | [`tauri`](https://crates.io/crates/tauri) | 2.11.5 | align through tested Tauri contract, not patch-number assumptions | 0/6/11 |
+| [`tauri-plugin-dialog`](https://crates.io/crates/tauri-plugin-dialog) | 2.7.2 | exact desktop pin; its `tauri = "2.10"` requirement admits the selected Tauri 2.11 line | 1/6/11 |
 | [`tauri-build`](https://crates.io/crates/tauri-build) | 2.6.3 | direct maximum stable; ignore unrelated prerelease-like newest metadata | 0/6/11 |
+
+### Phase-01 implementation limits and dependency evidence
+
+The following implementation evidence was recorded on **2026-08-29** and controls Phase 01 until the named constants or dependency pins change:
+
+- `apps/desktop/src-tauri/Cargo.toml` pins `tauri = 2.11.5` and `tauri-plugin-dialog = 2.7.2`, and the root `Cargo.lock` resolves that exact pair. The upstream [`dialog-v2.7.2` workspace manifest](https://github.com/tauri-apps/plugins-workspace/blob/dialog-v2.7.2/Cargo.toml) declares `tauri = "2.10"`, whose Cargo-compatible 2.x range admits Tauri 2.11. This is controlling manifest/lock compatibility evidence, not packaged cross-platform dialog execution evidence.
+- `.eutheto` remains only the proposed portable extension. The working `optimizer` CLI name, reverse-domain application ID, file association/media type, and other public identities remain unresolved; the implemented bundle formats and limits do not settle them.
+
+`eutheto_export::PORTABLE_LIMITS` is the one production limit set shared by export and untrusted import:
+
+| Boundary | Controlling value |
+|---|---:|
+| Archive bytes | 64 MiB (`64 * 1024 * 1024`) |
+| Total uncompressed bytes | 64 MiB (`64 * 1024 * 1024`) |
+| One entry | 16 MiB (`16 * 1024 * 1024`) |
+| Entries | 4,096 |
+| Compression ratio | 200:1 |
+| UTF-8 path bytes | 240 |
+| One JSON document | 16 MiB (`16 * 1024 * 1024`) |
+| JSON nesting depth | 128 |
+| One JSON string | 1 MiB (`1024 * 1024`) |
+| Items in one JSON collection | 1,000,000 |
+
+The CLI bounds command-file JSON reads at 16 MiB and bundle reads at the same centralized 64 MiB production archive ceiling. Desktop granted-file reads apply the same 64 MiB ceiling with one-byte overflow detection, require an opened regular file, and reject links and special files. Unix opens use `O_NOFOLLOW | O_NONBLOCK` plus device/inode comparison; Windows opens use `FILE_FLAG_OPEN_REPARSE_POINT`, reject every `FILE_ATTRIBUTE_REPARSE_POINT` entry, and compare volume/file-index identity on the opened handle. The store's default periodic snapshot policy is every 50 committed commands, at most 16 MiB of document JSON, with zstd level 3. Accepted configured snapshot bounds are 1–10,000 commands, 1 byte–64 MiB per document, and zstd levels 1–19. Every SQLite connection uses a 5,000 ms busy timeout.
+
+Phase-01 portable previews are retained in native memory only, capped at three pending previews and 64 MiB of retained inspected data in total. Ordinary import accepts only `scenario-export`; add/replace restore accepts only `full-backup`; typed portable application settings and every supplemental collision identity are validated before a preview is retained. Apply, stale/conflicting apply, terminal failure, explicit cancellation, and eviction consume the preview without mutation. The sole exception is the first safe replace-library safety-backup failure: that failure retains the same preview and collision choices, exposes only its user-safe reason, and enables a second request with the exact phrase `REPLACE WITHOUT BACKUP`; a prospective phrase is rejected and consumed. Replace preview discloses exact project and supplemental removal scope at the bound library revision. The safety backup is assembled, published without clobbering, reopened, and verified before replacement. Scenario export and full backup are each assembled from one store snapshot, preserve portable capability/semantic/nonsemantic wrapper metadata, selected supplemental JSON, and exact inert asset media-type/redistribution declarations, and reject retained results whose exact scenario revision is not represented. Scenario export scopes retained records/assets to declared references for its one scenario. Both paths structurally omit unsupported or secret-bearing application settings; the public settings boundary accepts only typed `appearance`, `locale`, and `units` values. Every committed create, duplicate, scenario command, lifecycle action, portable apply/removal, and setting mutation publishes a request-correlated post-commit event; lag is retryable, Tauri requests authoritative refresh, and forwarding continues.
+
+The `zip = 8.6.0` reader can collapse duplicate raw filenames before ordinary indexed inspection. The controlling defense is therefore to validate the raw ZIP32 central directory before constructing `ZipArchive`: reject duplicate raw names and duplicate normalized paths, inconsistent EOCD/count/offset/size records, ZIP64, multi-disk, encryption flags/fields, malformed extra fields, and then retain normalized and case-collision checks during bounded entry reads. Dependency-reader behavior alone is not the duplicate-path trust boundary.
+
+Stable harness compilation and fuzz execution are separate evidence. On 2026-08-29, `cargo check --manifest-path crates/eutheto-import/fuzz/Cargo.toml --all-targets` passed, proving that stable Cargo can compile all targets in the nested harness manifest; that check alone does **not** prove a libFuzzer run. Separately, `nix develop .#full -c just fuzz-check` completed successfully with explicit rustup `nightly-2026-08-28` `FUZZ_CARGO`, `FUZZ_RUSTC`, and `FUZZ_RUSTDOC`. With `-seed=0 -jobs=1 -workers=1 -timeout=5 -max_total_time=30 -rss_limit_mb=4096`, `scenario_envelope` completed 145,840 runs in 31 seconds and `bundle` completed 2,644,047 runs in 31 seconds, with no crashes. The scenario target rejects inputs over 64 KiB; the raw-bundle target rejects inputs over 512 KiB and further caps total uncompressed data at 1 MiB, one entry at 256 KiB, entries at 128, compression ratio at 32:1, JSON at 256 KiB/depth 64/string 64 KiB/collection 4,096, and paths at 240 bytes.
 
 ## Complete direct GitHub latest-release ledger
 

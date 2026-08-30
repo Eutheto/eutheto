@@ -1,4 +1,9 @@
-//! Deterministic application services for the Phase-00 foundation shell.
+//! Platform-neutral Phase-01 application services.
+
+#[path = "app.rs"]
+mod application;
+
+pub use application::*;
 
 use eutheto_types::FoundationStatus;
 
@@ -34,10 +39,10 @@ impl FoundationStatusService {
         self.package_version
     }
 
-    /// Returns the stable Phase-00 shell capability status.
+    /// Returns the stable Phase-01 application capability status.
     #[must_use]
     pub const fn status(self) -> FoundationStatus {
-        FoundationStatus::phase_00()
+        FoundationStatus::phase_01()
     }
 }
 
@@ -47,7 +52,7 @@ impl Default for FoundationStatusService {
     }
 }
 
-/// Returns the stable status of the compiled Phase-00 foundation shell.
+/// Returns the stable status of the compiled Phase-01 application core.
 #[must_use]
 pub const fn foundation_status() -> FoundationStatus {
     FoundationStatusService::current().status()
@@ -71,9 +76,6 @@ mod tests {
             first.status().schema_version,
             FOUNDATION_STATUS_SCHEMA_VERSION
         );
-        assert_eq!(
-            first.status().capability,
-            CapabilityState::Phase00Foundation
-        );
+        assert_eq!(first.status().capability, CapabilityState::Phase01Core);
     }
 }

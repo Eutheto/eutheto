@@ -1,34 +1,36 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted } from "vue";
 
-import { getFoundationStatus } from "./api/generated";
-import FoundationStatusPanel from "./components/FoundationStatusPanel.vue";
-import type { FoundationStatusView } from "./foundation-status";
+import ProjectHome from "./components/ProjectHome.vue";
+import { createProjectHomeController } from "./project-home";
 
-const phase = ref<FoundationStatusView>({ state: "loading" });
+const home = createProjectHomeController();
 
-async function loadFoundationStatus(): Promise<void> {
-  phase.value = { state: "loading" };
-
-  try {
-    const status = await getFoundationStatus();
-    phase.value = { state: "ready", status };
-  } catch {
-    phase.value = { state: "error" };
-  }
-}
-
-onMounted(loadFoundationStatus);
+onMounted(async () => {
+  await home.startEventListeners();
+  await home.load();
+});
+onUnmounted(() => {
+  void home.dispose();
+});
 </script>
 
 <template>
   <main>
-    <header>
-      <p class="eyebrow">Phase 00 development shell</p>
-      <h1>eutheto</h1>
-      <p class="lede">A local-first foundation for constraint planning.</p>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Phase 01 · local-first workspace</p>
+        <h1>Eutheto</h1>
+      </div>
+      <div>
+        <p class="lede">Plan carefully. Keep the authoritative work on your machine.</p>
+        <p class="boundary-note">
+          Solver features and the <code>.eutheto</code> extension remain provisional development
+          capabilities.
+        </p>
+      </div>
     </header>
 
-    <FoundationStatusPanel :phase="phase" @retry="loadFoundationStatus" />
+    <ProjectHome :home="home" />
   </main>
 </template>

@@ -1,1 +1,1 @@
-{"main":{"identifier":"main","description":"Minimum local capability for the Phase-00 desktop shell.","local":true,"windows":["main"],"permissions":["allow-foundation-status-read"]}}
+{"main":{"identifier":"main","description":"Strict local capability for the Phase 01 development shell.","local":true,"windows":["main"],"permissions":["allow-phase-01-api"]}}

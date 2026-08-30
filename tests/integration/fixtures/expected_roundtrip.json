@@ -1,0 +1,73 @@
+{
+  "format": "eutheto.test/semantic-roundtrip-expectation",
+  "schemaVersion": 1,
+  "version": 1,
+  "id": "018f47f2-e880-7000-8000-000000000103",
+  "purpose": "Define portable export and import equivalence without treating container hashes as scenario meaning.",
+  "provenance": {
+    "kind": "deterministic-synthetic",
+    "license": "Apache-2.0"
+  },
+  "sourceFixture": "official_test_scenario_v1.json",
+  "portableFixture": "../../migration/fixtures/portable_v1_scenario.json",
+  "inputContract": {
+    "format": "eutheto/scenario",
+    "scenarioFormatVersion": 1,
+    "portableSchemaVersion": 1,
+    "domainPackId": "official.test",
+    "domainPackSchemaVersion": 1
+  },
+  "expectedMeaning": {
+    "scenarioId": "018f47f2-e880-7000-8000-000000000001",
+    "revision": 7,
+    "metadata": {
+      "title": "Deterministic fixture",
+      "description": "",
+      "createdAt": "2026-08-28T23:00:00Z",
+      "updatedAt": "2026-08-28T23:00:00Z"
+    },
+    "settings": {
+      "timeZone": "America/Chicago",
+      "locale": "en-US",
+      "units": "us-customary",
+      "horizon": {
+        "start": "2026-09-01T05:00:00Z",
+        "end": "2026-10-01T05:00:00Z"
+      },
+      "gapPolicy": "reject",
+      "overlapPolicy": "earlier"
+    },
+    "domain": {
+      "entities": {
+        "018f47f2-e880-7000-8000-000000000002": {
+          "name": "Synthetic entity"
+        }
+      },
+      "rules": {},
+      "preferences": {},
+      "lockedAssignments": {}
+    },
+    "nonsemanticExtensions": {
+      "vendor.example": {
+        "opaque": [
+          1,
+          "two",
+          true
+        ]
+      }
+    }
+  },
+  "comparison": {
+    "document": "exact-semantic-value",
+    "revision": "exact",
+    "nonsemanticExtensions": "exact-json-value",
+    "containerSha256": "excluded-from-semantic-comparison"
+  },
+  "expectedOutcome": {
+    "status": "accepted",
+    "semanticRoundtrip": true,
+    "revisionPreserved": true,
+    "nonsemanticExtensionPreserved": true,
+    "containerHashRequiredToMatch": false
+  }
+}

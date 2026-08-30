@@ -212,6 +212,8 @@ For each scenario identity collision, MVP choices are:
 - **Create a copy:** mint new scenario/scenario-owned IDs and remap every internal reference consistently while retaining source provenance;
 - **Replace existing:** explicit reviewed replacement in the final atomic transaction; or
 - **Skip:** leave that scenario unchanged and exclude its selected dependent records.
+Every existing local supplemental `(section, key)` collision is also listed. Add/import requires an explicit **Replace** or **Skip** choice for each; no hidden upsert is allowed. Replace-library may overwrite all supplemental identities only after the preview discloses their exact removal scope. Skipping a scenario excludes supplemental JSON that declares a dependency on it, while Create a copy rewrites only declared identity/reference positions and preserves UUID-shaped prose and external values.
+
 
 No automatic semantic merge in the MVP. Similar names are not identities. Cancel, checksum failure, validation error, unresolved collision, stale preview, I/O failure, or commit failure leaves the local library unchanged. Successful imports retain source bundle ID, original scenario ID/schema/application, timestamp, migration warnings, and ID-remap state without cluttering normal editing.
 
@@ -221,16 +223,16 @@ No automatic semantic merge in the MVP. Similar names are not identities. Cancel
 
 A scenario export contains one editable scenario and only records required by it. A full backup defaults to the complete portable library:
 
-- all scenarios and revisions required by retained results;
+- every exact scenario revision required by a selected retained result, otherwise export fails rather than orphaning evidence;
 - referenced shared people, places, vehicles, activities, rules, reusable templates, and presets;
 - retained immutable accepted results and required verification/provenance records;
 - user-created share/report presets;
 - portable application preferences; and
-- safe, permitted user-authored assets.
+- bounded PNG, JPEG, or UTF-8 plain-text assets with exact media type and retained affirmative redistribution permission.
 
 It excludes credentials/tokens, device-only paths, nonportable keychain references, ephemeral or prohibited provider caches, window positions/disposable UI state, unrelated logs, and build/runtime caches. Users may exclude retained results or large optional assets to reduce size, but the default favors a complete understandable restore and clearly lists exclusions.
 
-Backup assembly reads one consistent portable snapshot, writes to a temporary destination, verifies contents/checksums, flushes, and atomically renames where supported. Failure removes staging output and does not publish a plausible partial backup.
+Backup assembly reads one consistent portable snapshot, writes and fsyncs a private temporary destination, reopens and verifies its exact contents/checksums, then publishes with an atomic no-clobber operation. That successful publication is the commit point. Pre-publication failure removes staging output and leaves the destination unchanged; post-publication directory-sync uncertainty is not reported as an ordinary failure after the destination changed.
 
 ### Restore safety
 

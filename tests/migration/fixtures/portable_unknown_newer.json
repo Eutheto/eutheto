@@ -1,0 +1,72 @@
+{
+  "format": "eutheto.test/portable-scenario-fixture",
+  "schemaVersion": 1,
+  "version": 1,
+  "id": "018f47f2-e880-7000-8000-000000000101",
+  "purpose": "Refuse an unknown newer portable schema before authoritative mutation.",
+  "provenance": {
+    "kind": "deterministic-synthetic",
+    "license": "Apache-2.0"
+  },
+  "input": {
+    "format": "eutheto/scenario",
+    "schemaVersion": 2,
+    "revision": 7,
+    "document": {
+      "format": "eutheto/scenario",
+      "formatVersion": 1,
+      "scenarioId": "018f47f2-e880-7000-8000-000000000001",
+      "domainPack": {
+        "id": "official.test",
+        "schemaVersion": 1
+      },
+      "metadata": {
+        "title": "Deterministic fixture",
+        "description": "",
+        "createdAt": "2026-08-28T23:00:00Z",
+        "updatedAt": "2026-08-28T23:00:00Z"
+      },
+      "settings": {
+        "timeZone": "America/Chicago",
+        "locale": "en-US",
+        "units": "us-customary",
+        "horizon": {
+          "start": "2026-09-01T05:00:00Z",
+          "end": "2026-10-01T05:00:00Z"
+        },
+        "gapPolicy": "reject",
+        "overlapPolicy": "earlier"
+      },
+      "domain": {
+        "entities": {
+          "018f47f2-e880-7000-8000-000000000002": {
+            "name": "Synthetic entity"
+          }
+        },
+        "rules": {},
+        "preferences": {},
+        "lockedAssignments": {}
+      },
+      "extensions": {
+        "vendor.example": {
+          "opaque": [
+            1,
+            "two",
+            true
+          ]
+        }
+      }
+    },
+    "requiredCapabilities": [],
+    "semanticExtensions": {},
+    "extensions": {}
+  },
+  "expectedOutcome": {
+    "status": "rejected",
+    "errorKind": "UnsupportedNewerVersion",
+    "versionSpace": "portable schema",
+    "foundVersion": 2,
+    "currentVersion": 1,
+    "authoritativeMutation": false
+  }
+}

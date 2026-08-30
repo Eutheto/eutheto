@@ -1,0 +1,19 @@
+[package]
+name = "eutheto-command"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+eutheto-types = { path = "../eutheto-types" }
+serde = "=1.0.229"
+serde_json = "=1.0.151"
+thiserror = "=2.0.20"
+
+[dev-dependencies]
+proptest = "=1.11.0"
