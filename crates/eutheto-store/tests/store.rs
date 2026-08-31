@@ -2879,6 +2879,27 @@ async fn authoritative_database_and_safety_backup_are_private_and_refuse_indirec
 
 #[cfg(windows)]
 #[tokio::test]
+async fn windows_platform_app_data_supports_private_store_creation() -> Result<(), Box<dyn Error>> {
+    let app_data = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .ok_or("APPDATA is not configured")?;
+    for precreate in [false, true] {
+        let data_dir = app_data.join(format!("eutheto-store-test-{}", Uuid::now_v7()));
+        if precreate {
+            std::fs::create_dir(&data_dir)?;
+        }
+        let database = data_dir.join("library.sqlite3");
+        let (store, _) = SqliteScenarioStore::open(&database)
+            .await
+            .map_err(|error| format!("platform app-data store initialization failed: {error:?}"))?;
+        drop(store);
+        std::fs::remove_dir_all(data_dir)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::test]
 async fn windows_authoritative_paths_apply_private_acls_and_refuse_links()
 -> Result<(), Box<dyn Error>> {
     use std::os::windows::fs::symlink_file;

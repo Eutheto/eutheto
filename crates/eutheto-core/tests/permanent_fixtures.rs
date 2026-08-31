@@ -29,6 +29,13 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 fn app_result<T>(result: Result<T, AppError>) -> TestResult<T> {
     result.map_err(|error| Box::<dyn Error>::from(std::io::Error::other(format!("{error:?}"))))
 }
+fn private_tempdir() -> TestResult<TempDir> {
+    let base = dirs::home_dir().ok_or("platform home directory is unavailable")?;
+    std::fs::create_dir_all(&base)?;
+    Ok(tempfile::Builder::new()
+        .prefix("eutheto-core-fixture-test-")
+        .tempdir_in(base)?)
+}
 
 fn required_str<'a>(value: &'a Value, field: &str) -> TestResult<&'a str> {
     value.get(field).and_then(Value::as_str).ok_or_else(|| {
@@ -293,7 +300,7 @@ async fn official_fixture_roundtrips_through_application_storage_and_reopen() ->
     let (document, portable) = portable_fixture(&official, expected_meaning)?;
     let source_bundle = source_bundle(portable)?;
 
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = app_result(EuthetoApp::open(dependencies(&directory)?).await)?;
     import_fixture(&app, source_bundle, document.scenario_id).await?;
     assert_exported_fixture(&app, &document, expected_meaning).await?;

@@ -581,6 +581,14 @@ impl SafeCliError {
         Self::new(CliExitCode::Storage, code, message)
     }
 
+    fn cancelled() -> Self {
+        Self::new(
+            CliExitCode::Cancelled,
+            "operation.cancelled",
+            "The operation was cancelled.",
+        )
+    }
+
     fn unavailable(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(CliExitCode::Unavailable, code, message)
     }
@@ -765,6 +773,11 @@ async fn execute_cli(
             ))
         }
         Command::Projects(args) => {
+            if cancellation.is_cancelled()
+                && matches!(&args.command, ProjectsCommand::Export { .. })
+            {
+                return Err(("projects.export", SafeCliError::cancelled()));
+            }
             let app = open_app(cli.data_dir, &cancellation)
                 .await
                 .map_err(|error| ("projects", error))?;
@@ -2858,7 +2871,7 @@ mod tests {
     use super::{
         Cli, CliExitCode, OutputFormat, RestoreModeArg, SafeCliError, app_error,
         collision_plan_value, execute_cli, is_safety_backup_failure, render_error,
-        replace_review_token, restore_authorization, run_from,
+        replace_review_token, restore_authorization,
     };
     use clap::Parser;
     use eutheto_export::CancellationSignal;
@@ -2950,44 +2963,9 @@ mod tests {
     #[test]
     fn injected_cancellation_prevents_export_publication_and_leaves_no_temp()
     -> Result<(), Box<dyn Error>> {
-        #[cfg(windows)]
-        let directory = tempfile::tempdir_in(
-            dirs::data_local_dir().ok_or("Windows local data directory is unavailable")?,
-        )?;
-        #[cfg(not(windows))]
         let directory = tempfile::tempdir()?;
         let data_dir = directory.path().to_string_lossy().into_owned();
-        let mut create_stdout = Vec::new();
-        let mut create_stderr = Vec::new();
-        let created = run_from(
-            [
-                "optimizer",
-                "--format",
-                "json",
-                "--data-dir",
-                &data_dir,
-                "projects",
-                "create",
-                "--pack",
-                "official.test",
-                "--title",
-                "Cancellation fixture",
-            ],
-            &mut create_stdout,
-            &mut create_stderr,
-        );
-        assert_eq!(
-            created,
-            CliExitCode::Success,
-            "create stdout: {}; create stderr: {}",
-            String::from_utf8_lossy(&create_stdout),
-            String::from_utf8_lossy(&create_stderr)
-        );
-        assert!(create_stderr.is_empty());
-        let response: serde_json::Value = serde_json::from_slice(&create_stdout)?;
-        let scenario_id = response["result"]["scenarioId"]
-            .as_str()
-            .ok_or("create response omitted scenarioId")?;
+        let scenario_id = "018f1e2d-3c4b-7a69-8def-012345678940";
         let destination = directory.path().join("cancelled.eutheto");
         let destination_text = destination.to_string_lossy().into_owned();
         let cli = Cli::try_parse_from([

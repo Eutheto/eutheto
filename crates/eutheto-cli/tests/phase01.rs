@@ -4,6 +4,30 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+fn private_tempdir() -> Result<tempfile::TempDir, Box<dyn Error>> {
+    let base = dirs::home_dir().ok_or("platform home directory is unavailable")?;
+    fs::create_dir_all(&base)?;
+    Ok(tempfile::Builder::new()
+        .prefix("eutheto-cli-test-")
+        .tempdir_in(base)?)
+}
+
+#[cfg(windows)]
+#[test]
+fn private_storage_opens_under_the_windows_profile() -> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(eutheto_store::SqliteScenarioStore::open(
+        &directory.path().join("probe.sqlite"),
+    ));
+    if let Err(error) = result {
+        return Err(format!("Windows private storage probe failed: {error:?}").into());
+    }
+    Ok(())
+}
+
 fn run_json(data_dir: &Path, args: &[&str]) -> Result<(Output, Value), Box<dyn Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
         .args(["--format", "json", "--data-dir"])
@@ -170,7 +194,7 @@ fn legacy_status_json_preflight_envelopes_parse_errors() -> Result<(), Box<dyn E
 
 #[test]
 fn project_create_list_reopen_archive_and_delete_are_durable() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let id = create_project(directory.path(), "Durable roster")?;
 
     let (list_output, list) = run_json(directory.path(), &["projects", "list"])?;
@@ -213,7 +237,7 @@ fn project_create_list_reopen_archive_and_delete_are_durable() -> Result<(), Box
 
 #[test]
 fn unsafe_revision_argument_is_rejected_without_rounding() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let id = create_project(directory.path(), "Safe revision")?;
     let (output, envelope) = run_json(
         directory.path(),
@@ -236,7 +260,7 @@ fn unsafe_revision_argument_is_rejected_without_rounding() -> Result<(), Box<dyn
 #[test]
 fn scenario_apply_validate_history_undo_and_redo_use_authoritative_revisions()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let id = create_project(directory.path(), "Journal")?;
     let commands = directory.path().join("commands.json");
     let entity_id = "018f47f2-e880-7000-8000-000000000001";
@@ -300,7 +324,7 @@ fn scenario_apply_validate_history_undo_and_redo_use_authoritative_revisions()
 #[test]
 fn committed_apply_returns_success_warning_when_output_publication_fails()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let id = create_project(directory.path(), "Committed warning")?;
     let commands = directory.path().join("commit-warning.json");
     let entity_id = "018f47f2-e880-7000-8000-00000000000a";
@@ -385,9 +409,9 @@ fn committed_apply_returns_success_warning_when_output_publication_fails()
 #[allow(clippy::too_many_lines)]
 #[test]
 fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), Box<dyn Error>> {
-    let source = tempfile::tempdir()?;
-    let imported = tempfile::tempdir()?;
-    let restored = tempfile::tempdir()?;
+    let source = private_tempdir()?;
+    let imported = private_tempdir()?;
+    let restored = private_tempdir()?;
     let id = create_project(source.path(), "Portable")?;
     let scenario_bundle = source.path().join("scenario.eutheto");
     let backup_bundle = source.path().join("backup.eutheto");
@@ -505,7 +529,7 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
         .ok_or("import preview omitted included sections")?;
     assert!(included.contains(&json!("results")));
     assert!(included.contains(&json!("assets")));
-    let excluded_import = tempfile::tempdir()?;
+    let excluded_import = private_tempdir()?;
     let (excluded_output, excluded) = run_json(
         excluded_import.path(),
         &[
@@ -554,7 +578,7 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
 
 fn large_asset_exclusion_keeps_the_assets_section_and_reports_scope() -> Result<(), Box<dyn Error>>
 {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     create_project(directory.path(), "Large asset selection")?;
     let fixed_exclusions = json!([
         "local-undo-and-audit-history",
@@ -627,8 +651,8 @@ fn large_asset_exclusion_keeps_the_assets_section_and_reports_scope() -> Result<
 #[test]
 fn replace_restore_requires_review_and_rejects_a_forged_failure_receipt()
 -> Result<(), Box<dyn Error>> {
-    let source = tempfile::tempdir()?;
-    let target = tempfile::tempdir()?;
+    let source = private_tempdir()?;
+    let target = private_tempdir()?;
     let source_id = create_project(source.path(), "Backup source")?;
     let target_id = create_project(target.path(), "Keep target")?;
     let backup = source.path().join("replace-token.eutheto");
@@ -727,8 +751,8 @@ fn replace_restore_requires_review_and_rejects_a_forged_failure_receipt()
 #[test]
 fn replace_restore_returns_and_accepts_only_an_actual_failure_receipt() -> Result<(), Box<dyn Error>>
 {
-    let source = tempfile::tempdir()?;
-    let target = tempfile::tempdir()?;
+    let source = private_tempdir()?;
+    let target = private_tempdir()?;
     let source_id = create_project(source.path(), "Receipt source")?;
     let target_id = create_project(target.path(), "Receipt target")?;
     let backup = source.path().join("receipt-backup.eutheto");
@@ -800,7 +824,7 @@ fn replace_restore_returns_and_accepts_only_an_actual_failure_receipt() -> Resul
 #[test]
 fn json_is_exactly_one_envelope_and_human_diagnostics_stay_on_stderr() -> Result<(), Box<dyn Error>>
 {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let (output, value) = run_json(directory.path(), &["projects", "list"])?;
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
@@ -831,7 +855,7 @@ fn json_is_exactly_one_envelope_and_human_diagnostics_stay_on_stderr() -> Result
 #[test]
 fn usage_validation_storage_conflict_and_unavailable_have_stable_exit_codes()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let id = create_project(directory.path(), "Exit codes")?;
 
     let usage = Command::new(env!("CARGO_BIN_EXE_optimizer"))
@@ -909,7 +933,7 @@ fn usage_validation_storage_conflict_and_unavailable_have_stable_exit_codes()
 
 #[test]
 fn strict_json_rejects_duplicate_command_and_collision_plan_keys() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let id = create_project(directory.path(), "Strict JSON")?;
     let commands = directory.path().join("duplicates.json");
     fs::write(
@@ -939,7 +963,7 @@ fn strict_json_rejects_duplicate_command_and_collision_plan_keys() -> Result<(),
         &["projects", "export", &id, "--output", scenario_path],
     )?;
     assert!(export_output.status.success());
-    let other = tempfile::tempdir()?;
+    let other = private_tempdir()?;
     let collision = r#"{"scenarios":{},"scenarios":{}}"#;
     let (collision_output, collision_error) = run_json(
         other.path(),

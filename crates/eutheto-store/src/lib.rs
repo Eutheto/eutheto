@@ -1718,17 +1718,20 @@ $allowed.Add($identity.User.Value) | Out-Null
 $allowed.Add('S-1-5-18') | Out-Null
 $allowed.Add('S-1-5-32-544') | Out-Null
 $writeMask = [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
-$acl = Get-Acl -LiteralPath $args[0]
+$acl = Get-Acl -LiteralPath $env:EUTHETO_PRIVATE_PATH
 $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
 foreach ($rule in $rules) {
+  if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) {
+    continue
+  }
   if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
       -not $allowed.Contains($rule.IdentityReference.Value) -and
       (($rule.FileSystemRights -band $writeMask) -ne 0)) {
-    throw 'private storage path has an ambient writable ancestor'
+    throw "ambient writable ancestor '$($env:EUTHETO_PRIVATE_PATH)': SID=$($rule.IdentityReference.Value), rights=$($rule.FileSystemRights), inheritance=$($rule.InheritanceFlags), propagation=$($rule.PropagationFlags)"
   }
 }
 "#;
-    let status = Command::new("powershell.exe")
+    let output = Command::new("powershell.exe")
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -1736,16 +1739,20 @@ foreach ($rule in $rules) {
             "-Command",
             script,
         ])
-        .arg(path)
+        .env_remove("PSModulePath")
+        .env("EUTHETO_PRIVATE_PATH", path)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .output()
         .map_err(StoreError::PrivatePath)?;
-    if !status.success() {
-        return Err(private_path_error(
-            "private storage path has an ambient writable ancestor",
-        ));
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(StoreError::PrivatePath(io::Error::other(
+            if detail.is_empty() {
+                "private storage path has an ambient writable ancestor".to_owned()
+            } else {
+                detail
+            },
+        )));
     }
     Ok(())
 }
@@ -1902,7 +1909,7 @@ $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
   [System.Security.AccessControl.PropagationFlags]::None,
   [System.Security.AccessControl.AccessControlType]::Allow)
 $acl.AddAccessRule($rule)
-[System.IO.Directory]::CreateDirectory($args[0], $acl) | Out-Null
+[System.IO.Directory]::CreateDirectory($env:EUTHETO_PRIVATE_PATH, $acl) | Out-Null
 "#;
     let status = Command::new("powershell.exe")
         .args([
@@ -1912,7 +1919,8 @@ $acl.AddAccessRule($rule)
             "-Command",
             script,
         ])
-        .arg(path)
+        .env_remove("PSModulePath")
+        .env("EUTHETO_PRIVATE_PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1938,7 +1946,7 @@ fn ensure_path_has_no_windows_hard_links(path: &Path) -> Result<(), StoreError> 
     use std::process::{Command, Stdio};
     let script = r#"
 $ErrorActionPreference = 'Stop'
-$item = Get-Item -Force -LiteralPath $args[0]
+$item = Get-Item -Force -LiteralPath $env:EUTHETO_PRIVATE_PATH
 if ($item.LinkType -eq 'HardLink') {
   throw 'private storage files may not have additional hard links'
 }
@@ -1951,7 +1959,8 @@ if ($item.LinkType -eq 'HardLink') {
             "-Command",
             script,
         ])
-        .arg(path)
+        .env_remove("PSModulePath")
+        .env("EUTHETO_PRIVATE_PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -2032,15 +2041,20 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> Result<(), StoreError> 
     use std::process::{Command, Stdio};
     let script = r#"
 $ErrorActionPreference = 'Stop'
-$path = $args[0]
-$isDirectory = $args[1] -eq 'directory'
+$path = $env:EUTHETO_PRIVATE_PATH
+$isDirectory = $env:EUTHETO_PRIVATE_KIND -eq 'directory'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$trustedOwners = [System.Collections.Generic.HashSet[string]]::new()
+$trustedOwners.Add($sid.Value) | Out-Null
+$trustedOwners.Add('S-1-5-18') | Out-Null
+$trustedOwners.Add('S-1-5-32-544') | Out-Null
 $item = Get-Item -Force -LiteralPath $path
 if (-not $isDirectory -and $item.LinkType -eq 'HardLink') {
   throw 'private storage files may not have additional hard links'
 }
 $existingAcl = Get-Acl -LiteralPath $path
-if ($existingAcl.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $sid) {
+$owner = $existingAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
+if (-not $trustedOwners.Contains($owner.Value)) {
   throw 'private storage ownership is invalid'
 }
 if ($isDirectory) {
@@ -2078,8 +2092,12 @@ if (-not $verified.AreAccessRulesProtected -or $rules.Count -ne 1 -or
             "-Command",
             script,
         ])
-        .arg(path)
-        .arg(if directory { "directory" } else { "file" })
+        .env_remove("PSModulePath")
+        .env("EUTHETO_PRIVATE_PATH", path)
+        .env(
+            "EUTHETO_PRIVATE_KIND",
+            if directory { "directory" } else { "file" },
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

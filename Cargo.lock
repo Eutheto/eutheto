@@ -912,6 +912,7 @@ dependencies = [
  "eutheto-core",
  "eutheto-export",
  "eutheto-import",
+ "eutheto-store",
  "eutheto-types",
  "serde",
  "serde_json",
@@ -934,6 +935,7 @@ dependencies = [
 name = "eutheto-core"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "eutheto-command",
  "eutheto-export",
  "eutheto-import",

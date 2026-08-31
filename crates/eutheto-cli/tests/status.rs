@@ -1,7 +1,15 @@
 use serde_json::Value;
 use std::error::Error;
+use std::fs;
 use std::process::Command;
 use std::str;
+fn private_tempdir() -> Result<tempfile::TempDir, Box<dyn Error>> {
+    let base = dirs::home_dir().ok_or("platform home directory is unavailable")?;
+    fs::create_dir_all(&base)?;
+    Ok(tempfile::Builder::new()
+        .prefix("eutheto-cli-status-test-")
+        .tempdir_in(base)?)
+}
 
 #[test]
 fn status_truthfully_reports_phase_01_capability() -> Result<(), Box<dyn Error>> {
@@ -45,7 +53,7 @@ fn legacy_status_json_uses_the_single_cli_result_envelope() -> Result<(), Box<dy
 
 #[test]
 fn later_solver_command_is_catalogued_but_typed_unavailable() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let output = Command::new(env!("CARGO_BIN_EXE_optimizer"))
         .args(["--format", "json", "--data-dir"])
         .arg(directory.path())

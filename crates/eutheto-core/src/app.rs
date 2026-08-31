@@ -429,16 +429,6 @@ impl EuthetoApp {
     /// Returns a typed storage or protocol failure when directories, startup,
     /// migration, integrity recovery, or the database actor cannot initialize.
     pub async fn open(dependencies: AppDependencies) -> Result<Self, AppError> {
-        let database = dependencies.paths.database.clone();
-        tokio::task::spawn_blocking(move || {
-            if let Some(parent) = database.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            Ok::<_, std::io::Error>(())
-        })
-        .await
-        .map_err(join_error)?
-        .map_err(filesystem_error)?;
         let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database)
             .await
             .map_err(store_error)?;

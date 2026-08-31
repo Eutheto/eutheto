@@ -44,6 +44,13 @@ impl<T> BoxedResult<T> for Result<T, Box<dyn Error>> {
         self
     }
 }
+fn private_tempdir() -> Result<TempDir, Box<dyn Error>> {
+    let base = dirs::home_dir().ok_or("platform home directory is unavailable")?;
+    std::fs::create_dir_all(&base)?;
+    Ok(tempfile::Builder::new()
+        .prefix("eutheto-core-test-")
+        .tempdir_in(base)?)
+}
 
 struct CancellingIdGenerator {
     cancellation: eutheto_export::CancellationSignal,
@@ -188,7 +195,7 @@ async fn scenario_view(
 #[tokio::test]
 async fn create_edit_reopen_and_stale_conflict_use_the_application_service()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let dependencies = dependencies(&directory)?;
     let app = EuthetoApp::open(dependencies.clone()).await.boxed()?;
     let scenario_id = create_project(&app, "Roster").await.boxed()?;
@@ -253,7 +260,7 @@ async fn create_edit_reopen_and_stale_conflict_use_the_application_service()
 #[tokio::test]
 async fn committed_mutations_reach_independent_subscribers_and_lag_is_recoverable()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let mut first_window = app.subscribe(EventTopic::ScenarioChanged).await.boxed()?;
     let mut second_window = app.subscribe(EventTopic::ScenarioChanged).await.boxed()?;
@@ -313,7 +320,7 @@ async fn committed_mutations_reach_independent_subscribers_and_lag_is_recoverabl
 }
 #[tokio::test]
 async fn batch_undo_and_redo_survive_restart() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let dependencies = dependencies(&directory)?;
     let app = EuthetoApp::open(dependencies.clone()).await.boxed()?;
     let scenario_id = create_project(&app, "History").await.boxed()?;
@@ -386,7 +393,7 @@ async fn batch_undo_and_redo_survive_restart() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn duplicate_archive_delete_and_settings_are_real_lifecycle_operations()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let source_id = create_project(&app, "Source").await.boxed()?;
     let duplicate = app
@@ -483,7 +490,7 @@ async fn duplicate_archive_delete_and_settings_are_real_lifecycle_operations()
 
 #[tokio::test]
 async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let scenario_id = create_project(&app, "Portable").await.boxed()?;
     let add_command = add_entity_envelope(scenario_id, Revision::INITIAL, "Portable person")?;
@@ -588,7 +595,7 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
 #[tokio::test]
 async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_changed_bytes()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let scenario_id = create_project(&app, "Prepared scenario").await?;
     let (bytes, revision, library_revision) = match app
@@ -681,7 +688,7 @@ async fn prepared_scenario_publication_is_byte_exact_and_rejects_stale_or_change
 
 #[tokio::test]
 async fn prepared_backup_publication_binds_the_library_revision() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     create_project(&app, "Prepared backup").await?;
     let (bytes, library_revision) = match app
@@ -725,7 +732,7 @@ async fn prepared_backup_publication_binds_the_library_revision() -> Result<(), 
 #[tokio::test]
 async fn cancelled_portable_publication_leaves_no_destination_temp_or_storage_mutation()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let cancellation = eutheto_export::CancellationSignal::new();
     let mut app_dependencies = dependencies(&directory)?;
     app_dependencies.cancellation = cancellation.clone();
@@ -763,7 +770,7 @@ async fn cancelled_portable_publication_leaves_no_destination_temp_or_storage_mu
 #[tokio::test]
 async fn cancellation_observed_after_portable_inspection_retains_no_preview_or_store_state()
 -> Result<(), Box<dyn Error>> {
-    let source_directory = tempfile::tempdir()?;
+    let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
         .boxed()?;
@@ -776,7 +783,7 @@ async fn cancellation_observed_after_portable_inspection_retains_no_preview_or_s
         AppQueryResult::Bundle { bytes, .. } => bytes,
         other => return Err(format!("unexpected inspection seed: {other:?}").into()),
     };
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let cancellation = eutheto_export::CancellationSignal::new();
     let mut target_dependencies = dependencies(&target_directory)?;
     target_dependencies.cancellation = cancellation.clone();
@@ -812,7 +819,7 @@ async fn cancellation_observed_after_portable_inspection_retains_no_preview_or_s
 #[tokio::test]
 async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified()
 -> Result<(), Box<dyn Error>> {
-    let source_directory = tempfile::tempdir()?;
+    let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
         .boxed()?;
@@ -825,7 +832,7 @@ async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified(
         AppQueryResult::Bundle { bytes, .. } => bytes,
         other => return Err(format!("unexpected cancellation seed: {other:?}").into()),
     };
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let cancellation = eutheto_export::CancellationSignal::new();
     let mut target_dependencies = dependencies(&target_directory)?;
     target_dependencies.cancellation = cancellation.clone();
@@ -872,7 +879,7 @@ async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified(
 #[tokio::test]
 async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revisions()
 -> Result<(), Box<dyn Error>> {
-    let source_directory = tempfile::tempdir()?;
+    let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
         .boxed()?;
@@ -910,7 +917,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
         other => return Err(format!("unexpected ABA backup export: {other:?}").into()),
     };
 
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let mut target_ids = vec![scenario_id.as_uuid()];
     target_ids.extend(
         [
@@ -1345,13 +1352,13 @@ fn collision_scenario_bundle(
 #[tokio::test]
 async fn preview_detects_local_nested_semantic_historical_and_result_identities()
 -> Result<(), Box<dyn Error>> {
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let (_, _, collision_ids) = seed_local_identity_closure(&target_directory).await?;
     let target = EuthetoApp::open(dependencies(&target_directory)?)
         .await
         .boxed()?;
 
-    let import_directory = tempfile::tempdir()?;
+    let import_directory = private_tempdir()?;
     let import_source = EuthetoApp::open(dependencies(&import_directory)?)
         .await
         .boxed()?;
@@ -1406,7 +1413,7 @@ fn identity_fixture_inspection_policy() -> InspectionPolicy {
 
 #[tokio::test]
 async fn duplicate_uses_injected_ids_for_the_complete_owned_graph() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let (source_id, source_revision) = seed_identity_closure_library(&directory).await?;
     let replacements = [
         "018f1e2d-3c4b-7a69-8def-012345678950",
@@ -1462,7 +1469,7 @@ async fn duplicate_uses_injected_ids_for_the_complete_owned_graph() -> Result<()
 #[tokio::test]
 async fn duplicate_identity_collision_and_exhaustion_are_safe_and_do_not_mutate()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let (source_id, source_revision) = seed_identity_closure_library(&directory).await?;
     let collision_app = EuthetoApp::open(dependencies_with_fixed_ids(
         &directory,
@@ -1512,7 +1519,7 @@ async fn duplicate_identity_collision_and_exhaustion_are_safe_and_do_not_mutate(
 
 #[tokio::test]
 async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(), Box<dyn Error>> {
-    let source_directory = tempfile::tempdir()?;
+    let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
         .boxed()?;
@@ -1527,7 +1534,7 @@ async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(
     };
     let (full_backup, _) = create_inspected_backup().await?;
 
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let target = EuthetoApp::open(dependencies(&target_directory)?)
         .await
         .boxed()?;
@@ -1563,7 +1570,7 @@ async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(
 }
 
 async fn create_inspected_backup() -> Result<(Vec<u8>, eutheto_types::ScenarioId), Box<dyn Error>> {
-    let source_directory = tempfile::tempdir()?;
+    let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
         .boxed()?;
@@ -1815,7 +1822,7 @@ async fn restore_backup_and_assert(
     backup: Vec<u8>,
     restored_id: eutheto_types::ScenarioId,
 ) -> Result<(), Box<dyn Error>> {
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let target = EuthetoApp::open(dependencies(&target_directory)?)
         .await
         .boxed()?;
@@ -1838,7 +1845,7 @@ async fn restore_backup_and_assert(
 #[tokio::test]
 async fn backup_audit_selection_is_explicitly_deferred_and_never_silently_omitted()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let scenario_id = create_project(&app, "Audit exclusion").await.boxed()?;
     let envelope = add_entity_envelope(scenario_id, Revision::INITIAL, "Journalled person")?;
@@ -1907,7 +1914,7 @@ async fn backup_audit_selection_is_explicitly_deferred_and_never_silently_omitte
 
 async fn restore_large_asset_fixture()
 -> Result<(EuthetoApp, TempDir, eutheto_types::ScenarioId), Box<dyn Error>> {
-    let source_directory = tempfile::tempdir()?;
+    let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
         .boxed()?;
@@ -1961,7 +1968,7 @@ async fn restore_large_asset_fixture()
         manifest_extensions: complete_full_backup_extensions()?,
     })?;
 
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let target = EuthetoApp::open(dependencies(&target_directory)?)
         .await
         .boxed()?;
@@ -2005,7 +2012,7 @@ async fn assert_omitted_placeholder_survives_restore(
     restore_mode: RestoreMode,
     expected_placeholder: &[u8],
 ) -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     if restore_mode == RestoreMode::ReplaceLibrary {
         create_project(&app, "Removed during placeholder restore").await?;
@@ -2363,7 +2370,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
         AppQueryResult::BackupBundle { bytes, .. } => bytes,
         other => return Err(format!("unexpected placeholder source backup: {other:?}").into()),
     };
-    let restored_directory = tempfile::tempdir()?;
+    let restored_directory = private_tempdir()?;
     let restored = EuthetoApp::open(dependencies(&restored_directory)?)
         .await
         .boxed()?;
@@ -2392,7 +2399,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
     )?;
     let expected_placeholder = assert_scenario_placeholder_selection(&inspected)?;
 
-    let imported_directory = tempfile::tempdir()?;
+    let imported_directory = private_tempdir()?;
     let imported = EuthetoApp::open(dependencies(&imported_directory)?)
         .await
         .boxed()?;
@@ -2448,7 +2455,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
 }
 async fn create_historical_closure_backup()
 -> Result<(eutheto_types::ScenarioId, Vec<u8>), Box<dyn Error>> {
-    let source_directory = tempfile::tempdir()?;
+    let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
         .boxed()?;
@@ -2522,7 +2529,7 @@ async fn scenario_export_keeps_historical_results_and_historical_only_assets()
 -> Result<(), Box<dyn Error>> {
     let (scenario_id, bundle) = create_historical_closure_backup().await?;
 
-    let target_directory = tempfile::tempdir()?;
+    let target_directory = private_tempdir()?;
     let target = EuthetoApp::open(dependencies(&target_directory)?)
         .await
         .boxed()?;
@@ -2576,7 +2583,7 @@ async fn scenario_export_keeps_historical_results_and_historical_only_assets()
 async fn failed_destructive_restore_rolls_back_across_restart_and_keeps_verified_backup()
 -> Result<(), Box<dyn Error>> {
     let (backup, restored_id) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let dependencies = dependencies(&directory)?;
     std::fs::create_dir_all(&dependencies.paths.safety_backups)?;
     let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database).await?;
@@ -2773,7 +2780,7 @@ async fn record_failed_backup_receipt(
 #[tokio::test]
 async fn add_restore_rejects_replace_receipt_fields() -> Result<(), Box<dyn Error>> {
     let (backup, _) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let (preview_id, _) = preview_add_backup(&app, backup).await?;
     let result = app
@@ -2804,7 +2811,7 @@ async fn add_restore_rejects_replace_receipt_fields() -> Result<(), Box<dyn Erro
 async fn first_replace_cannot_bypass_backup_and_same_session_phrase_uses_recorded_failure()
 -> Result<(), Box<dyn Error>> {
     let (backup, restored_id) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     disable_safety_backups(&directory)?;
 
@@ -2852,7 +2859,7 @@ async fn first_replace_cannot_bypass_backup_and_same_session_phrase_uses_recorde
 async fn actual_failure_receipt_survives_restart_and_is_consumed_once() -> Result<(), Box<dyn Error>>
 {
     let (backup, restored_id) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let dependencies = dependencies(&directory)?;
     let app = EuthetoApp::open(dependencies.clone()).await.boxed()?;
     disable_safety_backups(&directory)?;
@@ -2889,7 +2896,7 @@ async fn actual_failure_receipt_survives_restart_and_is_consumed_once() -> Resul
 #[tokio::test]
 async fn failure_receipt_rejects_a_stale_preview_binding() -> Result<(), Box<dyn Error>> {
     let (backup, _) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     disable_safety_backups(&directory)?;
     let proof = request_id()?.to_string();
@@ -2917,7 +2924,7 @@ async fn failure_receipt_rejects_a_stale_preview_binding() -> Result<(), Box<dyn
 #[tokio::test]
 async fn failure_receipt_rejects_a_changed_collision_plan() -> Result<(), Box<dyn Error>> {
     let (backup, scenario_id) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let (add_preview, _) = preview_add_backup(&app, backup.clone()).await?;
     apply_restore_with_authorization(
@@ -2964,7 +2971,7 @@ async fn failure_receipt_rejects_a_changed_collision_plan() -> Result<(), Box<dy
 #[tokio::test]
 async fn verified_safety_backup_does_not_create_a_failure_receipt() -> Result<(), Box<dyn Error>> {
     let (backup, _) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let prospective_proof = request_id()?.to_string();
     let preview_id = preview_restore(&app, backup.clone()).await?;
@@ -2989,7 +2996,7 @@ async fn verified_safety_backup_does_not_create_a_failure_receipt() -> Result<()
 async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is_noop()
 -> Result<(), Box<dyn Error>> {
     let (backup, scenario_id) = create_inspected_backup().await?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let first = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     let (initial_preview, _) = preview_add_backup(&first, backup.clone()).await?;
     first
@@ -3081,7 +3088,7 @@ async fn timestamp_only_setting_restore_refreshes_once_then_identical_restore_is
 #[tokio::test]
 async fn deferred_solve_solution_and_ai_calls_are_typed_unsupported() -> Result<(), Box<dyn Error>>
 {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     for capability in [
         DeferredCapability::Solve,
@@ -3103,7 +3110,7 @@ async fn deferred_solve_solution_and_ai_calls_are_typed_unsupported() -> Result<
 #[tokio::test]
 async fn initialized_app_exposes_the_exact_startup_recovery_outcome() -> Result<(), Box<dyn Error>>
 {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let dependencies = dependencies(&directory)?;
     let (store, mut initialization) =
         SqliteScenarioStore::open(&dependencies.paths.database).await?;
@@ -3127,7 +3134,7 @@ async fn initialized_app_exposes_the_exact_startup_recovery_outcome() -> Result<
 #[tokio::test]
 async fn application_settings_accept_only_the_documented_nonsecret_schema()
 -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     for (key, value) in [
         (
@@ -3281,7 +3288,7 @@ fn assert_support_preview_is_redacted(serialized: &str) {
 #[tokio::test]
 async fn support_preview_is_deterministic_and_structurally_redacted() -> Result<(), Box<dyn Error>>
 {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempdir()?;
     let (app, dependencies, storage_schema_version) = seeded_support_app(&directory).await?;
 
     let first = support_preview(&app).await?;

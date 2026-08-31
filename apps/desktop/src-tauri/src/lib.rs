@@ -1009,8 +1009,10 @@ fn require_portable_path(path: PathBuf) -> Result<PathBuf, NativeFileError> {
 }
 
 fn read_bounded_portable(path: &Path) -> Result<Vec<u8>, NativeFileError> {
+    #[cfg(not(windows))]
     let selected_metadata =
         std::fs::symlink_metadata(path).map_err(|_| NativeFileError::Unreadable)?;
+    #[cfg(not(windows))]
     if selected_metadata.file_type().is_symlink() || !selected_metadata.is_file() {
         return Err(NativeFileError::InvalidFileType);
     }
@@ -1024,7 +1026,7 @@ fn read_bounded_portable(path: &Path) -> Result<Vec<u8>, NativeFileError> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        // Open the selected directory entry itself rather than traversing a reparse point.
+        // Open the final selected directory entry itself rather than traversing a reparse point.
         // This is the Win32 FILE_FLAG_OPEN_REPARSE_POINT value.
         options.custom_flags(0x0020_0000);
     }
@@ -1047,15 +1049,11 @@ fn read_bounded_portable(path: &Path) -> Result<Vec<u8>, NativeFileError> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        // FILE_ATTRIBUTE_REPARSE_POINT covers symlinks, junctions, and other name-surrogate
-        // entries. Comparing the opened file identity closes replacement races between metadata
-        // inspection and the no-follow open.
+        // FILE_ATTRIBUTE_REPARSE_POINT covers symlinks and other name-surrogate final entries.
+        // The native dialog returns only a path, so this single resolution is authoritative:
+        // inspect and read the same handle without reopening the selected path.
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        if selected_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || opened_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || selected_metadata.volume_serial_number() != opened_metadata.volume_serial_number()
-            || selected_metadata.file_index() != opened_metadata.file_index()
-        {
+        if opened_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(NativeFileError::Unreadable);
         }
     }
@@ -2622,7 +2620,6 @@ pub fn run() -> tauri::Result<()> {
             let app_data_dir = handle.path().app_data_dir()?;
             let cache_dir = app_data_dir.join("cache");
             let backup_dir = app_data_dir.join("backups");
-            std::fs::create_dir_all(&cache_dir)?;
             let app = tauri::async_runtime::block_on(EuthetoApp::open(AppDependencies {
                 paths: AppPaths {
                     database: app_data_dir.join("library.sqlite3"),
@@ -2635,6 +2632,7 @@ pub fn run() -> tauri::Result<()> {
             .map_err(|error| {
                 std::io::Error::other(format!("application startup failed: {error:?}"))
             })?;
+            std::fs::create_dir_all(&cache_dir)?;
             spawn_event_forwarder(
                 handle.handle().clone(),
                 app.clone(),
