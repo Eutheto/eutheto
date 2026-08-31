@@ -108,9 +108,11 @@ jobs:
             ['lightningcss-win32-arm64-msvc@1.33.0', 'MPL-2.0'],
             ['lightningcss-win32-x64-msvc@1.33.0', 'MPL-2.0']
           ]);
-          // Exact lifecycle-script reviews belong here with a package version,
-          // the exact script object, and review rationale in the change.
-          const reviewedScripts = new Map();
+          // esbuild's locked script selects the platform package, links its binary,
+          // checks version, and verifies any registry fallback against pinned hashes.
+          const reviewedScripts = new Map([
+            ['esbuild@0.28.2', { postinstall: 'node install.js' }]
+          ]);
           const blocked = /(?:^|[^A-Za-z])(?:A?GPL|SSPL|BUSL|Commons-Clause|NC|ND|Proprietary)(?:[^A-Za-z]|$)/i;
           const root = 'node_modules/.pnpm';
           const queue = fs.existsSync(root) ? [root] : [];
