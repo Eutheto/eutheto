@@ -98,6 +98,18 @@ export default withVueTs(
     name: "eutheto/vue-formatting",
     files: ["src/**/*.vue"],
     rules: {
+      "vue/html-self-closing": [
+        "warn",
+        {
+          html: {
+            void: "always",
+            normal: "always",
+            component: "always",
+          },
+          svg: "always",
+          math: "always",
+        },
+      ],
       "vue/max-attributes-per-line": "off",
       "vue/singleline-html-element-content-newline": "off",
     },

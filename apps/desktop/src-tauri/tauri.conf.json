@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "eutheto Phase 00 development shell",
+  "productName": "eutheto Phase 01 development shell",
   "version": "0.1.0",
-  "identifier": "dev.eutheto.phase00.desktop",
+  "identifier": "dev.eutheto.phase01.desktop",
   "build": {
     "beforeBuildCommand": "pnpm build",
     "beforeDevCommand": "pnpm dev",
@@ -17,7 +17,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "eutheto development shell",
+        "title": "eutheto Phase 01 development shell",
         "width": 960,
         "height": 680,
         "minWidth": 320,

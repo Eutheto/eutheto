@@ -4,6 +4,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
 
+    nixgl = {
+      url = "github:nix-community/nixGL";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -11,7 +16,12 @@
   };
 
   outputs =
-    { nixpkgs, rust-overlay, ... }:
+    {
+      nixgl,
+      nixpkgs,
+      rust-overlay,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -36,7 +46,14 @@
         let
           pkgs = pkgsFor system;
           src = (import ./nix/source-filter.nix { inherit (pkgs) lib; }) ./.;
-          tooling = import ./nix/tooling.nix { inherit pkgs system; };
+          tooling = import ./nix/tooling.nix {
+            inherit
+              nixgl
+              nixpkgs
+              pkgs
+              system
+              ;
+          };
         in
         import ./nix/packages.nix {
           inherit
@@ -62,15 +79,30 @@
         let
           pkgs = pkgsFor system;
           src = (import ./nix/source-filter.nix { inherit (pkgs) lib; }) ./.;
+          tooling = import ./nix/tooling.nix {
+            inherit
+              nixgl
+              nixpkgs
+              pkgs
+              system
+              ;
+          };
         in
-        import ./nix/checks.nix { inherit pkgs src; }
+        import ./nix/checks.nix { inherit pkgs src tooling; }
       );
 
       devShells = forAllSystems (
         system:
         let
           pkgs = pkgsFor system;
-          tooling = import ./nix/tooling.nix { inherit pkgs system; };
+          tooling = import ./nix/tooling.nix {
+            inherit
+              nixgl
+              nixpkgs
+              pkgs
+              system
+              ;
+          };
           mkDevShell =
             shellName: extraPackages:
             import ./nix/dev-shell.nix {

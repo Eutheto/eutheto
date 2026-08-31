@@ -1,14 +1,21 @@
 {
   "schemaVersion": 1,
-  "documentName": "eutheto Phase-00 workspace dependency inventory",
-  "documentNamespace": "urn:eutheto:spdx:phase-00-workspace:0.1.0",
-  "created": "2026-08-29T00:00:00Z",
+  "documentName": "eutheto Phase-01 workspace dependency inventory",
+  "documentNamespace": "urn:eutheto:spdx:phase-01-workspace:0.1.0",
+  "created": "2026-08-30T00:00:00Z",
   "workspacePackages": [
     {
       "ecosystem": "cargo",
       "name": "eutheto-cli",
       "version": "0.1.0",
       "path": "crates/eutheto-cli",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-command",
+      "version": "0.1.0",
+      "path": "crates/eutheto-command",
       "license": "Apache-2.0"
     },
     {
@@ -23,6 +30,27 @@
       "name": "eutheto-desktop",
       "version": "0.1.0",
       "path": "apps/desktop/src-tauri",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-export",
+      "version": "0.1.0",
+      "path": "crates/eutheto-export",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-import",
+      "version": "0.1.0",
+      "path": "crates/eutheto-import",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-store",
+      "version": "0.1.0",
+      "path": "crates/eutheto-store",
       "license": "Apache-2.0"
     },
     {

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Minimum local capability for the Phase-00 desktop shell.",
+  "description": "Strict local capability for the Phase 01 development shell.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["allow-foundation-status-read"]
+  "permissions": ["allow-phase-01-api"]
 }

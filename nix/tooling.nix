@@ -1,6 +1,16 @@
-{ pkgs, system }:
+{
+  nixgl,
+  nixpkgs,
+  pkgs,
+  system,
+}:
 let
   inherit (pkgs) lib;
+  nixglPackages = import nixgl {
+    inherit pkgs;
+    enable32bits = system == "x86_64-linux";
+    enableIntelX86Extensions = system == "x86_64-linux";
+  };
 
   rust = pkgs.rust-bin.fromRustupToolchainFile ../rust-toolchain.toml;
   nodeVersion = "24.20.0";
@@ -148,9 +158,44 @@ let
     pkgs.sqlite
   ];
 
+  desktopRuntime = pkgs.writeShellApplication {
+    name = "eutheto-desktop-runtime";
+    runtimeInputs = [ pkgs.nix ];
+    text = ''
+      if (( $# == 0 )); then
+        printf 'usage: eutheto-desktop-runtime COMMAND [ARG ...]\n' >&2
+        exit 64
+      fi
+
+      ${lib.optionalString (system == "x86_64-linux") ''
+        if [[ -r /proc/driver/nvidia/version ]]; then
+          exec ${pkgs.coreutils}/bin/env NIXPKGS_ALLOW_UNFREE=1 \
+            ${pkgs.nix}/bin/nix \
+            --extra-experimental-features 'nix-command flakes' \
+            run \
+            --impure \
+            --no-write-lock-file \
+            --override-input nixpkgs path:${nixpkgs} \
+            path:${nixgl}#nixGLDefault \
+            -- "$@"
+        fi
+      ''}
+
+      ${lib.optionalString (system == "aarch64-linux") ''
+        if [[ -r /proc/driver/nvidia/version ]]; then
+          printf 'error: the repository graphics wrapper cannot provide the proprietary NVIDIA runtime on aarch64-linux\n' >&2
+          exit 1
+        fi
+      ''}
+
+      exec ${nixglPackages.nixGLIntel}/bin/nixGLIntel "$@"
+    '';
+  };
+
   linuxTools = [
     pkgs.patchelf
     pkgs.xvfb-run
+    desktopRuntime
   ];
   linuxLibraries = [
     pkgs.glib
@@ -180,10 +225,11 @@ in
 assert lib.assertMsg (node.version == nodeVersion) "eutheto requires exact Node.js ${nodeVersion}";
 {
   inherit
-    rust
-    executableTools
     commonLibraries
+    desktopRuntime
+    executableTools
     qualityTools
+    rust
     ;
   platformTools =
     if system == "x86_64-linux" || system == "aarch64-linux" then

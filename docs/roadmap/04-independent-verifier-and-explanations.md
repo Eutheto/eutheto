@@ -199,6 +199,8 @@ Persist compact evidence required to regenerate deterministic explanations:
 - verifier rule evaluations and domain metrics;
 - scenario revision, model/solution hashes, verifier checksum, and component/backend provenance.
 
+Each accepted or terminal solve also owns a versioned **run manifest** distinct from the scenario revision, immutable normalized input/enrichment snapshot, and accepted Result Model. It records run ID; scenario revision and snapshot IDs/hashes/timestamps; pack/schema/domain/Planning-IR/compiler/adapter/worker/solver/application versions; model hash; explicit optimization profile/objective policy; seed, worker/determinism settings and total budget; active locks/preferences/temporary relaxations; scenario time-zone/DST context; provider/model freshness and redistribution-safe source identifiers; warnings; terminal/proof status; verified score/result identity; and bounded phase timing. Fields not applicable to a pack are absent rather than guessed. Product and diagnostics distinguish reproduction of the same input/model, an equivalent verified optimum, and the exact assignment; no manifest promises exact repeatability that backend or tie semantics cannot provide.
+
 Do not persist full solver logs by default. Opt-in diagnostics are bounded, redacted, and separate from normal evidence. Native-worker evidence must not contain names, notes, credentials, AI content, or paths. Retention/export rules distinguish normal explanation evidence from quarantined correctness alarms.
 
 ## APIs and events
@@ -303,6 +305,7 @@ Build and integrate application-owned `ValidationSummary`, `ConflictCard`, `Solu
 - counterfactual outcomes: proven impossible, verified worse by categories, equivalent/undistinguished, timeout without proof, stale revision, backend failure, and invalid candidate;
 - comparison covers assignment deltas, required-rule state, score/fairness/preference deltas, affected entities, locks, and proof status;
 - compact evidence round-trips while full logs remain absent by default.
+- run manifests reject revision/snapshot/model/result mismatches, round-trip every recorded version/option and distinguish same-model, equivalent-result, and exact-assignment reproduction claims;
 - timing fixtures distinguish raw incumbent, projection, verification, first verified feasible, score/evidence persistence, and optional explanation work; the accepted result remains available when later explanation work is slow, cancelled, or unavailable.
 
 ### Independence and differential tests

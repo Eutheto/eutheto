@@ -9,13 +9,25 @@
     "pnpm": ">=11 <12"
   },
   "scripts": {
-    "build": "pnpm --recursive run build",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test",
-    "dev": "pnpm --filter @eutheto/desktop run dev",
-    "format": "pnpm --recursive run format",
-    "format:check": "pnpm --recursive run format:check",
-    "lint": "pnpm --recursive run lint",
-    "test": "pnpm --recursive run test",
-    "typecheck": "pnpm --recursive run typecheck"
+    "build": "just ui-build",
+    "check": "just frontend-check",
+    "check:fixtures": "just fixtures-check",
+    "check:generated": "just generate-check",
+    "check:migrations": "just migration-check",
+    "dev": "just ui-dev",
+    "format": "just frontend-format",
+    "format:check": "just frontend-format-check",
+    "fuzz:build": "just fuzz-build",
+    "fuzz:harness-check": "just fuzz-harness-check",
+    "fuzz:check": "just fuzz-check",
+    "lint": "just frontend-lint",
+    "test": "just frontend-test",
+    "test:cli": "just test-cli",
+    "test:core": "just test-core",
+    "test:phase01": "just test-phase01",
+    "test:portable": "just test-portable",
+    "test:store": "just test-store",
+    "test:tauri": "just test-tauri",
+    "typecheck": "just frontend-typecheck"
   }
 }

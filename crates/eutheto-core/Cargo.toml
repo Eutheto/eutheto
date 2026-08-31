@@ -11,3 +11,15 @@ workspace = true
 
 [dependencies]
 eutheto-types = { path = "../eutheto-types" }
+eutheto-command = { path = "../eutheto-command" }
+eutheto-export = { path = "../eutheto-export" }
+eutheto-import = { path = "../eutheto-import" }
+eutheto-store = { path = "../eutheto-store" }
+serde_json = "=1.0.151"
+tokio = { version = "=1.53.1", features = ["rt", "sync"] }
+uuid = "=1.26.0"
+
+[dev-dependencies]
+dirs = "=6.0.0"
+tempfile = "=3.27.0"
+tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "sync"] }

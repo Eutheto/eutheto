@@ -1,166 +1,142 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# @eutheto/desktop — Phase-00 development shell
+# @eutheto/desktop — Phase 01 development desktop
 
-This is a **non-public development shell**, not a released desktop application.
-It exists to prove the Vue/Vite/Tauri integration, generated API layer, capability
-boundaries, and identity-gate discipline described in [Phase 00](../../docs/roadmap/00-repository-and-reproducible-tooling.md)
-and [ADR-012](../../docs/adr/012-tauri-api-and-generated-dtos.md).
+This package is the non-public Tauri/Vue development application for the
+[Phase 01 core application shell and persistence](../../docs/roadmap/01-core-application-shell-and-persistence.md).
+It exercises the real local Rust application service; it is not a mock shell,
+a packaged release, or evidence that the public application identity is
+complete.
 
-## What this shell contains
+## Implemented development behavior
 
-A single Tauri command (`app_get_foundation_status`) that returns a coarse
-`FoundationStatus` value indicating whether the Phase-00 repository foundation
-is wired through. The command is registered through Tauri's application manifest,
-capability-scoped to the `main` window, and granted only the
-`allow-foundation-status-read` permission.
+At startup, Tauri opens one `EuthetoApp` service backed by
+`library.sqlite3` in the platform application-data directory. Rust and SQLite
+are authoritative. The Vue application loads projections from that service and
+sends typed requests back to it; browser state is not a second persistence
+layer.
 
-The shell does **not** contain domain planning, solver, scenario, database, or
-AI features. Those arrive in later phases.
+The current `ProjectHome` surface supports:
 
-## Status API flow
+- listing persisted active and archived projects;
+- creating an `official.test` project with explicit locale, time zone, horizon,
+  units, and daylight-saving gap/overlap policies;
+- selecting, duplicating, archiving, unarchiving, and permanently deleting a
+  project;
+- previewing and applying project imports, including an explicit action for
+  each identifier collision;
+- previewing and creating full-library backups; and
+- previewing restores in add-to-library or replace-library mode, reviewing
+  collisions, and explicitly confirming the destructive replacement path.
+
+The Rust command boundary and generated client also implement project export
+preview and creation. The current `ProjectHome` component does not expose
+export controls, so export is API scope rather than a claim about the visible
+home screen.
+
+Generic scenario views, validation, command application, history, undo/redo,
+and local settings are available through the Phase 01 command boundary. The
+present Vue surface is a project home, not a domain planning or solution UI.
+
+Solve, solution, and AI command names are registered in the stable command
+catalog, but they are deliberately unavailable. `app_get_capabilities` reports
+them as unavailable, and calls return typed `unsupported` errors. The desktop
+does not advertise solver or AI availability.
+
+## Rust-authoritative flow
 
 ```text
-┌──────────────┐    invoke()     ┌──────────────────────┐
-│ App.vue      │ ──────────────▶ │ api/generated.ts     │
-│ (Vue/Vite)   │                 │ getFoundationStatus() │
-└──────────────┘                 └──────────┬───────────┘
-                                            │ Tauri IPC
-                                            ▼
-                                 ┌──────────────────────┐
-                                 │ src-tauri/src/lib.rs  │
-                                 │ app_get_foundation_   │
-                                 │   status()            │
-                                 └──────────┬───────────┘
-                                            │ delegates
-                                            ▼
-                                 ┌──────────────────────┐
-                                 │ eutheto_core          │
-                                 │ foundation_status()   │
-                                 └──────────────────────┘
+ProjectHome.vue
+    │
+    ▼
+project-home.ts
+    │ typed generated functions
+    ▼
+src/api/generated.ts
+    │ Tauri invoke
+    ▼
+src-tauri/src/lib.rs
+    │
+    ▼
+EuthetoApp ── SQLite library
 ```
 
-The webview never reads Rust state directly. The Rust command delegates to
-`eutheto_core::foundation_status()`, which is the single authoritative source.
-A unit test in `src-tauri/src/lib.rs` verifies the command returns the same
-value as the core function.
+The application-data database is the durable project authority. Portable
+imports and exports use the managed local exchange area, while backups use the
+managed backup area. Portable operations preview their artifact before
+mutation. A replace-library restore requests a safety backup before replacing
+the current library.
 
-## Formatting and linting
+## Generated API-only Tauri imports
 
-Prettier owns whitespace and layout, including the placement of content and
-attributes in single-line Vue elements. ESLint owns correctness and continues
-to apply the recommended Vue rules and strict, type-aware TypeScript rules to
-all source files, including the generated API. The lint command keeps
-`--max-warnings 0`; only `vue/singleline-html-element-content-newline` and
-`vue/max-attributes-per-line` are disabled because they conflict with
-Prettier's output. Do not manually reshape templates solely to satisfy those
-two rules, because Prettier will restore its canonical layout.
+[`ADR-012`](../../docs/adr/012-tauri-api-and-generated-dtos.md) defines the IPC
+boundary. In production frontend source,
+`src/api/generated.ts` is the only file that imports
+`@tauri-apps/api/core`. Vue components and controllers consume its typed
+functions instead of importing `invoke` directly.
 
-## Generated API layer
+`src/api/generated.ts` is generated from the Rust-owned command and DTO
+contract and is checked in. Do not edit it by hand:
 
-`src/api/generated.ts` is produced by `cargo xtask generate` and checked in.
-It contains:
+1. Change the authoritative Rust DTO or command definition.
+2. Run `just generate`.
+3. Review the generated diff.
+4. Run `just generate-check` to reject drift.
 
-- A `FoundationStatus` TypeScript interface matching the Rust `FoundationStatus`
-  struct from `eutheto-types`.
-- A `getFoundationStatus()` function that calls
-  `invoke<FoundationStatus>("app_get_foundation_status")`.
-
-This file must **never** be hand-edited. To change the API:
-
-1. Change the authoritative Rust type in `eutheto-types` or the command
-   signature in `src-tauri/src/lib.rs`.
-2. Regenerate with the repository generation command.
-3. Review the generated diff and run `generate-check` for drift.
-
-See [generated code discipline](../../docs/contributors/generated-code-and-contracts.md)
+See
+[generated code discipline](../../docs/contributors/generated-code-and-contracts.md)
 and [generated artifacts](../../docs/architecture/generated-artifacts.md).
 
-## Only-API-layer invoke rule
+## Capability and release boundary
 
-[ADR-012](../../docs/adr/012-tauri-api-and-generated-dtos.md) requires that
-**only files under `src/api/`** import `@tauri-apps/api` (invoke, event
-subscription). Vue components must not import invoke or event helpers directly;
-they consume the typed functions exported by the generated API layer.
+The local `main` window receives the `allow-phase-01-api` permission. The
+permission admits the registered protocol catalog, while
+`app_get_capabilities` remains the authority for which registered commands are
+implemented in this development phase. No shell or broad filesystem permission
+is granted to the webview.
 
-This separation ensures:
+The configured content security policy permits local application resources and
+Tauri IPC; it does not permit remote scripts or remote navigation. Tauri
+bundling is disabled, and the repository desktop build uses `--no-bundle`.
+There is no supported packaged-desktop E2E command.
 
-- Commands are tested and typed in one place.
-- The invoke/event surface is auditable.
-- Components remain presentation-focused with no IPC coupling.
+## Development identity and portable-extension notices
 
-## Accessibility states
+These values are explicit development values, not public compatibility or
+release commitments:
 
-The `FoundationStatusPanel` component uses ARIA roles to communicate the
-three shell states:
+| Value                                | Current use                                     | Status                                                                                                  |
+| ------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `dev.eutheto.phase01.desktop`        | Tauri application identifier                    | Development-only; not the approved public reverse-domain identifier                                     |
+| `eutheto Phase 01 development shell` | Tauri product name and main-window title        | Development-only; not a release brand                                                                   |
+| `0.1.0`                              | Workspace and Tauri version                     | Development version; not a released desktop version                                                     |
+| `.eutheto`                           | Portable scenario and backup artifact extension | Proposed and reported by the API as `provisional-development-only`; not a final public file association |
 
-| State     | ARIA role       | Live region          | Content                                        |
-| --------- | --------------- | -------------------- | ---------------------------------------------- |
-| `loading` | `role="status"` | `aria-live="polite"` | "Checking the local application foundation…"   |
-| `ready`   | `role="status"` | `aria-live="polite"` | Capability name, schema version, boundary note |
-| `error`   | `role="alert"`  | (implicit)           | Error message, "Try again" button              |
+The stable/beta application identifiers, final portable extension, signing
+identities, updater trust, and packaged-release evidence remain open gates.
+See [identity gates](../../docs/architecture/identity-gates.md).
 
-The heading uses `aria-labelledby` referencing `foundation-heading`. The
-retry button is keyboard-accessible and fires a `retry` event handled by
-`App.vue`.
+## Development commands
 
-## Commands
+Run these commands from the repository root. The `just` recipes are the
+canonical repository entry points.
 
-| Command                     | Registration                                    | Permission                              | Scope              |
-| --------------------------- | ----------------------------------------------- | --------------------------------------- | ------------------ |
-| `app_get_foundation_status` | `lib.rs` invoke handler via `generate_handler!` | `allow-foundation-status-read` (custom) | `main` window only |
+| Task                                                | `just` command                     | Direct pnpm command                                          |
+| --------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
+| Install locked dependencies                         | `just install`                     | `pnpm install --frozen-lockfile --ignore-scripts`            |
+| Run the native Tauri development application        | `just desktop-dev`                 | `pnpm --filter @eutheto/desktop run tauri dev`               |
+| Run only the Vue/Vite development server            | `just ui-dev`                      | `pnpm --filter @eutheto/desktop run dev`                     |
+| Type-check the frontend                             | `just typecheck`                   | `pnpm --filter @eutheto/desktop run typecheck`               |
+| Run desktop ESLint                                  | `just lint` (repository-wide)      | `pnpm --filter @eutheto/desktop run lint`                    |
+| Check desktop Prettier output                       | `just fmt-check` (repository-wide) | `pnpm --filter @eutheto/desktop run format:check`            |
+| Run the UI unit/component tests                     | `just test-ui`                     | `pnpm --filter @eutheto/desktop run test`                    |
+| Build the Vue frontend                              | `just ui-build`                    | `pnpm --filter @eutheto/desktop run build`                   |
+| Build the native desktop executable without bundles | `just desktop-build`               | `pnpm --filter @eutheto/desktop run tauri build --no-bundle` |
 
-New commands must be:
+API generation is Rust-owned: use `just generate` and
+`just generate-check`, which invoke the corresponding `cargo xtask` commands.
 
-1. Registered in `src-tauri/src/lib.rs` through the invoke handler.
-2. Declared in a Tauri permission file under `src-tauri/permissions/`.
-3. Granted to the minimum required window through a capability in
-   `src-tauri/capabilities/`.
-4. Exposed to the webview only through a generated function in `src/api/`.
-
-## Capability and CSP boundary
-
-**Capabilities** are defined in `src-tauri/capabilities/main.json` and grant
-the `main` window only the `allow-foundation-status-read` permission. No shell,
-filesystem, or broad permissions are enabled.
-
-**Content Security Policy** (from `tauri.conf.json`):
-
-```text
-default-src 'self';
-connect-src ipc: http://ipc.localhost;
-img-src 'self' data:;
-script-src 'self';
-style-src 'self' 'unsafe-inline'
-```
-
-The CSP blocks remote navigation, remote script loading, and `eval`-style
-execution. `unsafe-inline` is required only for Vite-injected style tags
-during development and will be tightened for production.
-
-## Non-public development values
-
-The following values are explicitly **not production identities**. They exist
-only for local development and will be resolved by the identity gates in
-[Phase 11](../../docs/roadmap/README.md) with approved ADRs before any
-public release:
-
-| Value                                  | Location                                            | Status                                                                |
-| -------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
-| `dev.eutheto.phase00.desktop`          | `tauri.conf.json` identifier, `Cargo.toml` metadata | Development-only reverse-domain ID; **not** the production identifier |
-| `eutheto Phase 00 development shell`   | `tauri.conf.json` productName, window title         | Provisional product name; **not** a release brand                     |
-| `icon.svg` and generated desktop icons | `src-tauri/icons/`                                  | Phase-00 placeholder mark; **not** a final logo or trademark          |
-| Bundle version `0.1.0`                 | `tauri.conf.json`                                   | Development version; **not** a released version                       |
-
-See [identity gates](../../docs/architecture/identity-gates.md) for the full
-list of unresolved product, packaging, and signing gates.
-
-## Running locally
-
-```bash
-pnpm install
-pnpm tauri dev
-```
-
-Requires the pinned Rust toolchain (see `rust-toolchain.toml`) and platform
-prerequisites documented in [development setup](../../docs/contributors/development.md).
+The native development application requires the pinned Rust toolchain and
+platform prerequisites described in
+[development setup](../../docs/contributors/development.md). The Vite-only
+server does not provide the native Tauri/Rust service.

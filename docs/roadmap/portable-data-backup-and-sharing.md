@@ -212,6 +212,8 @@ For each scenario identity collision, MVP choices are:
 - **Create a copy:** mint new scenario/scenario-owned IDs and remap every internal reference consistently while retaining source provenance;
 - **Replace existing:** explicit reviewed replacement in the final atomic transaction; or
 - **Skip:** leave that scenario unchanged and exclude its selected dependent records.
+Every existing local supplemental `(section, key)` collision is also listed. Add/import requires an explicit **Replace** or **Skip** choice for each; no hidden upsert is allowed. Replace-library may overwrite all supplemental identities only after the preview discloses their exact removal scope. Skipping a scenario excludes supplemental JSON that declares a dependency on it, while Create a copy rewrites only declared identity/reference positions and preserves UUID-shaped prose and external values.
+
 
 No automatic semantic merge in the MVP. Similar names are not identities. Cancel, checksum failure, validation error, unresolved collision, stale preview, I/O failure, or commit failure leaves the local library unchanged. Successful imports retain source bundle ID, original scenario ID/schema/application, timestamp, migration warnings, and ID-remap state without cluttering normal editing.
 
@@ -221,16 +223,16 @@ No automatic semantic merge in the MVP. Similar names are not identities. Cancel
 
 A scenario export contains one editable scenario and only records required by it. A full backup defaults to the complete portable library:
 
-- all scenarios and revisions required by retained results;
+- every exact scenario revision required by a selected retained result, otherwise export fails rather than orphaning evidence;
 - referenced shared people, places, vehicles, activities, rules, reusable templates, and presets;
 - retained immutable accepted results and required verification/provenance records;
 - user-created share/report presets;
 - portable application preferences; and
-- safe, permitted user-authored assets.
+- bounded PNG, JPEG, or UTF-8 plain-text assets with exact media type and retained affirmative redistribution permission.
 
 It excludes credentials/tokens, device-only paths, nonportable keychain references, ephemeral or prohibited provider caches, window positions/disposable UI state, unrelated logs, and build/runtime caches. Users may exclude retained results or large optional assets to reduce size, but the default favors a complete understandable restore and clearly lists exclusions.
 
-Backup assembly reads one consistent portable snapshot, writes to a temporary destination, verifies contents/checksums, flushes, and atomically renames where supported. Failure removes staging output and does not publish a plausible partial backup.
+Backup assembly reads one consistent portable snapshot, writes and fsyncs a private temporary destination, reopens and verifies its exact contents/checksums, then publishes with an atomic no-clobber operation. That successful publication is the commit point. Pre-publication failure removes staging output and leaves the destination unchanged; post-publication directory-sync uncertainty is not reported as an ordinary failure after the destination changed.
 
 ### Restore safety
 
@@ -244,6 +246,10 @@ If the safety backup cannot be created, explain why and require stronger explici
 Automatic rotating backups, retention tiers, restore-point browsing, encryption, and scheduled restore drills remain post-MVP. A normal user-selected folder may later interoperate with existing sync/backup tools without turning Eutheto into a hosted storage provider.
 
 ## Immutable generated-result sharing
+
+### Result capsule terminology
+
+The roadmap may call the recipient-facing immutable offline artifact a **result capsule**. This is a product concept, not another persistence or interchange authority: the MVP capsule is the existing standalone HTML or direct PDF rendered from a validated Share Result Model. It is never an editable `.eutheto` scenario, full backup, database image, solver workspace, or container for unrestricted pack code. User-facing naming remains subject to product review; the artifact contracts below do not depend on the label.
 
 ### Share Result Model
 
@@ -411,6 +417,6 @@ The public MVP cannot claim this contract complete until:
 
 ## Post-MVP opportunities
 
-Separate approved branches may add password-encrypted bundles with an independently versioned authenticated-encryption envelope; automatic change/daily backups, retention and health monitoring; selected multi-scenario export; scheduled verification/restore drills; richer saved/per-recipient profiles; licensed offline schematic/static maps; result comparison across revisions; local annotations separated from immutable result; branding/templates; digital signatures and trust UI; optional hosted sharing that retains downloadable offline reports; QR identifiers; support import-diagnostic packages; or organization sharing policies.
+Separate approved branches may add password-encrypted bundles with an independently versioned authenticated-encryption envelope; automatic change/daily backups, retention and health monitoring; selected multi-scenario export; scheduled verification/restore drills; richer saved/per-recipient profiles; licensed offline schematic/static maps; result comparison across revisions; local annotations separated from immutable result; branding/templates; digital signatures and trust UI; optional hosted sharing that retains downloadable offline reports; QR identifiers; support import-diagnostic packages; or organization sharing policies. Advanced result-capsule work may add precomputed verified alternatives, comparison views, recipient-specific disclosure, or an explicit create-editable-copy flow. Such work versions and previews every newly included field, preserves immutable source/result identity, keeps annotations outside the accepted result, and never grants the offline artifact ambient network/filesystem/credential access. Capsule-to-scenario conversion creates a newly reviewed portable scenario or links to separately included source data; it never reconstructs editable authority from a privacy-filtered presentation payload or silently imports omitted/private fields.
 
 Any hosted/cloud function remains additive. It cannot replace local export, inspection, backup, restore, and offline sharing or weaken data minimization, source revision identity, independent verification, provider terms, and explicit user control.

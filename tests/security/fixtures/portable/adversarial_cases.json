@@ -1,0 +1,396 @@
+{
+  "format": "eutheto.test/archive-adversarial-fixture",
+  "schemaVersion": 1,
+  "version": 1,
+  "id": "018f47f2-e880-7000-8000-000000000104",
+  "purpose": "Describe bounded hostile portable archives without committing executable or machine-specific fixture bytes.",
+  "provenance": {
+    "kind": "deterministic-synthetic",
+    "license": "Apache-2.0"
+  },
+  "inputContract": {
+    "bundleFormat": "eutheto-bundle",
+    "bundleFormatVersion": 1,
+    "portableFormat": "eutheto/scenario",
+    "portableSchemaVersion": 1,
+    "archiveFormat": "zip32"
+  },
+  "centralLimits": {
+    "maxArchiveBytes": 67108864,
+    "maxTotalUncompressedBytes": 67108864,
+    "maxEntryBytes": 16777216,
+    "maxEntries": 4096,
+    "maxCompressionRatio": 200,
+    "maxPathBytes": 240,
+    "maxJsonBytes": 16777216,
+    "maxJsonDepth": 128,
+    "maxStringBytes": 1048576,
+    "maxCollectionItems": 1000000
+  },
+  "defaultInspectionOptions": {
+    "limits": "centralLimits",
+    "supportedCapabilities": {}
+  },
+  "cases": [
+    {
+      "id": "018f47f2-e880-7000-8000-000000000200",
+      "name": "parent-directory-traversal",
+      "input": {
+        "archiveBuilder": "zip32-standard",
+        "options": {
+          "compression": "stored",
+          "unixMode": "0o100600",
+          "pathEncoding": "utf-8"
+        },
+        "entries": [
+          {
+            "path": "../manifest.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{}"
+            }
+          }
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "UnsafePath",
+        "path": "../manifest.json",
+        "reason": "path violates portable normalization policy",
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000201",
+      "name": "non-ascii-path",
+      "input": {
+        "archiveBuilder": "zip32-standard",
+        "options": {
+          "compression": "stored",
+          "unixMode": "0o100600",
+          "pathEncoding": "utf-8"
+        },
+        "entries": [
+          {
+            "path": "MÄNIFEST.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{}"
+            }
+          },
+          {
+            "path": "Mänifest.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{}"
+            }
+          }
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "UnsafePath",
+        "path": "MÄNIFEST.json",
+        "reason": "portable paths must be ASCII",
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000202",
+      "name": "duplicate-normalized-path",
+      "input": {
+        "archiveBuilder": "zip32-raw",
+        "options": {
+          "compression": "stored",
+          "unixMode": "0o100600",
+          "allowDuplicateNames": true,
+          "pathEncoding": "utf-8"
+        },
+        "entries": [
+          {
+            "path": "manifest.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{}"
+            }
+          },
+          {
+            "path": "manifest.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{}"
+            }
+          }
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "DuplicatePath",
+        "path": "manifest.json",
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000203",
+      "name": "symbolic-link-entry",
+      "input": {
+        "archiveBuilder": "zip32-raw",
+        "options": {
+          "compression": "stored",
+          "pathEncoding": "utf-8"
+        },
+        "entries": [
+          {
+            "path": "manifest.json",
+            "entryKind": "symbolic-link",
+            "unixMode": "0o120777",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "target.json"
+            }
+          }
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "NonRegularEntry",
+        "path": "manifest.json",
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000204",
+      "name": "deflate-compression-bomb",
+      "input": {
+        "archiveBuilder": "zip32-standard",
+        "options": {
+          "compression": "deflated",
+          "unixMode": "0o100600",
+          "pathEncoding": "utf-8"
+        },
+        "entries": [
+          {
+            "path": "large.json",
+            "bytes": {
+              "encoding": "repeat-byte",
+              "byte": 97,
+              "count": 1048576
+            }
+          }
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "CompressionRatio",
+        "path": "large.json",
+        "maximumRatio": 200,
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000205",
+      "name": "manifest-checksum-mismatch",
+      "input": {
+        "archiveBuilder": "zip32-standard",
+        "options": {
+          "compression": "stored",
+          "unixMode": "0o100600",
+          "pathEncoding": "utf-8"
+        },
+        "entries": [
+          {
+            "path": "checksums.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{\"algorithm\":\"sha256\",\"files\":{\"manifest.json\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}"
+            }
+          },
+          {
+            "path": "manifest.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{\"format\":\"eutheto-bundle\",\"formatVersion\":1,\"schemaVersion\":1,\"requiredCapabilities\":[]}"
+            }
+          }
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "ChecksumMismatch",
+        "path": "manifest.json",
+        "algorithm": "sha256",
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000206",
+      "name": "undeclared-archive-entry",
+      "input": {
+        "archiveBuilder": "scenario-export-v1",
+        "portableFixture": {
+          "path": "../../../migration/fixtures/portable_v1_scenario.json",
+          "jsonPointer": "/input"
+        },
+        "bundleOptions": {
+          "bundleId": "018f47f2-e880-7000-8000-000000000300",
+          "createdAt": "2026-08-29T00:00:00Z",
+          "application": {
+            "name": "Eutheto",
+            "version": "0.1.0"
+          },
+          "title": "Deterministic fixture",
+          "compression": "stored"
+        },
+        "mutations": [
+          {
+            "operation": "add-entry",
+            "path": "undeclared.json",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "{}"
+            }
+          },
+          {
+            "operation": "recompute-checksums",
+            "algorithm": "sha256"
+          }
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "UndeclaredEntry",
+        "path": "undeclared.json",
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000207",
+      "name": "unsupported-semantic-capability",
+      "input": {
+        "archiveBuilder": "scenario-export-v1",
+        "portableFixture": {
+          "path": "../../../migration/fixtures/portable_v1_scenario.json",
+          "jsonPointer": "/input"
+        },
+        "bundleOptions": {
+          "bundleId": "018f47f2-e880-7000-8000-000000000301",
+          "createdAt": "2026-08-29T00:00:00Z",
+          "application": {
+            "name": "Eutheto",
+            "version": "0.1.0"
+          },
+          "title": "Deterministic fixture",
+          "compression": "stored"
+        },
+        "mutations": [
+          {
+            "operation": "require-semantic-capability",
+            "id": "vendor.unsupported",
+            "version": 1,
+            "manifest": true,
+            "scenario": true
+          },
+          {
+            "operation": "set-semantic-extension",
+            "namespace": "vendor.unsupported",
+            "value": {
+              "opaque": true
+            }
+          },
+          {
+            "operation": "recompute-checksums",
+            "algorithm": "sha256"
+          }
+        ]
+      },
+      "inspectionOptions": {
+        "limits": "centralLimits",
+        "supportedCapabilities": {}
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "UnsupportedCapability",
+        "capabilityId": "vendor.unsupported",
+        "capabilityVersion": 1,
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000208",
+      "name": "common-credential-fields",
+      "input": {
+        "archiveBuilder": "scenario-export-v1",
+        "portableFixture": {
+          "path": "../../../migration/fixtures/portable_v1_scenario.json",
+          "jsonPointer": "/input"
+        },
+        "bundleOptions": {
+          "bundleId": "018f47f2-e880-7000-8000-000000000302",
+          "createdAt": "2026-08-29T00:00:00Z",
+          "application": {"name": "Eutheto", "version": "0.1.0"},
+          "title": "Credential refusal",
+          "compression": "stored"
+        },
+        "mutations": [
+          {
+            "operation": "set-document-extension",
+            "namespace": "fixture.security",
+            "field": "record",
+            "value": {
+              "clientSecret": "EUTHETO_SENTINEL_SECRET",
+              "privateKeyPem": "EUTHETO_SENTINEL_SECRET",
+              "authorizationHeader": "EUTHETO_SENTINEL_SECRET"
+            }
+          },
+          {"operation": "recompute-checksums", "algorithm": "sha256"}
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "InvalidManifest",
+        "authoritativeMutation": false
+      }
+    },
+    {
+      "id": "018f47f2-e880-7000-8000-000000000209",
+      "name": "active-svg-asset",
+      "input": {
+        "archiveBuilder": "scenario-export-v1",
+        "portableFixture": {
+          "path": "../../../migration/fixtures/portable_v1_scenario.json",
+          "jsonPointer": "/input"
+        },
+        "bundleOptions": {
+          "bundleId": "018f47f2-e880-7000-8000-000000000303",
+          "createdAt": "2026-08-29T00:00:00Z",
+          "application": {"name": "Eutheto", "version": "0.1.0"},
+          "title": "Active asset refusal",
+          "compression": "stored"
+        },
+        "mutations": [
+          {
+            "operation": "add-declared-asset",
+            "name": "widget.svg",
+            "mediaType": "image/svg+xml",
+            "bytes": {
+              "encoding": "utf-8",
+              "value": "<svg><script>alert(1)</script></svg>"
+            }
+          },
+          {"operation": "recompute-checksums", "algorithm": "sha256"}
+        ]
+      },
+      "expectedOutcome": {
+        "status": "rejected",
+        "errorKind": "ProhibitedContent",
+        "path": "assets/widget.svg",
+        "authoritativeMutation": false
+      }
+    }
+  ],
+  "expectedOutcome": {
+    "status": "all-cases-rejected",
+    "caseCount": 10,
+    "authoritativeMutation": false
+  }
+}

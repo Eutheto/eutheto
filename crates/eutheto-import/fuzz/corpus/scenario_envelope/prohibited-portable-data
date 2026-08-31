@@ -1,0 +1,1 @@
+{"extensions":{"example.visual":{"clientSecret":"EUTHETO_SENTINEL_SECRET","privateKeyPem":"EUTHETO_SENTINEL_SECRET","authorizationHeader":"EUTHETO_SENTINEL_SECRET","databasePath":"C:/private/data.sqlite","template":"{{ executable }}"}}}

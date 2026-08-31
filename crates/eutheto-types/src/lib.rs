@@ -1,4 +1,14 @@
-//! Stable serialized value types shared by eutheto application boundaries.
+//! Stable serialized value types shared by Eutheto application boundaries.
+
+mod contracts;
+mod ids;
+mod portable;
+mod values;
+
+pub use contracts::*;
+pub use ids::*;
+pub use portable::*;
+pub use values::*;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -6,14 +16,16 @@ use std::fmt;
 /// The schema version of [`FoundationStatus`].
 pub const FOUNDATION_STATUS_SCHEMA_VERSION: u32 = 1;
 
-/// Capability exposed by the Phase-00 application shell.
-///
-/// This state deliberately makes no domain or solver capability claim.
+/// Capability exposed by the application shell.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityState {
+    /// Repository/tooling foundation retained for wire compatibility.
     #[serde(rename = "phase_00_foundation")]
     Phase00Foundation,
+    /// Phase-01 core application shell and persistence contracts.
+    #[serde(rename = "phase_01_core")]
+    Phase01Core,
 }
 
 impl CapabilityState {
@@ -22,6 +34,7 @@ impl CapabilityState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Phase00Foundation => "phase_00_foundation",
+            Self::Phase01Core => "phase_01_core",
         }
     }
 }
@@ -32,10 +45,7 @@ impl fmt::Display for CapabilityState {
     }
 }
 
-/// Versioned status returned by the Phase-00 foundation shell.
-///
-/// The DTO contains only its schema version and the capability state. Product,
-/// domain, and solver metadata remain outside this stable serialized contract.
+/// Versioned application-shell capability status.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FoundationStatus {
@@ -46,12 +56,21 @@ pub struct FoundationStatus {
 }
 
 impl FoundationStatus {
-    /// Creates the status of the Phase-00 foundation shell.
+    /// Creates the retained Phase-00 status for compatibility with older shells.
     #[must_use]
     pub const fn phase_00() -> Self {
         Self {
             schema_version: FOUNDATION_STATUS_SCHEMA_VERSION,
             capability: CapabilityState::Phase00Foundation,
+        }
+    }
+
+    /// Creates the current Phase-01 core capability status.
+    #[must_use]
+    pub const fn phase_01() -> Self {
+        Self {
+            schema_version: FOUNDATION_STATUS_SCHEMA_VERSION,
+            capability: CapabilityState::Phase01Core,
         }
     }
 }
@@ -88,21 +107,16 @@ mod tests {
     use super::{CapabilityState, FOUNDATION_STATUS_SCHEMA_VERSION, FoundationStatus};
 
     #[test]
-    fn foundation_status_has_stable_json() -> Result<(), serde_json::Error> {
-        let json = serde_json::to_string(&FoundationStatus::phase_00())?;
-
-        assert_eq!(
-            json,
-            r#"{"schemaVersion":1,"capability":"phase_00_foundation"}"#
-        );
+    fn phase_01_status_has_stable_json() -> Result<(), serde_json::Error> {
+        let json = serde_json::to_string(&FoundationStatus::phase_01())?;
+        assert_eq!(json, r#"{"schemaVersion":1,"capability":"phase_01_core"}"#);
         Ok(())
     }
 
     #[test]
-    fn foundation_status_json_round_trips() -> Result<(), serde_json::Error> {
+    fn retained_phase_00_status_round_trips() -> Result<(), serde_json::Error> {
         let json = r#"{"schemaVersion":1,"capability":"phase_00_foundation"}"#;
         let status: FoundationStatus = serde_json::from_str(json)?;
-
         assert_eq!(status.schema_version, FOUNDATION_STATUS_SCHEMA_VERSION);
         assert_eq!(status.capability, CapabilityState::Phase00Foundation);
         Ok(())
@@ -110,9 +124,7 @@ mod tests {
 
     #[test]
     fn foundation_status_rejects_unknown_schema_version() {
-        let json = r#"{"schemaVersion":2,"capability":"phase_00_foundation"}"#;
-        let result = serde_json::from_str::<FoundationStatus>(json);
-
-        assert!(result.is_err());
+        let json = r#"{"schemaVersion":2,"capability":"phase_01_core"}"#;
+        assert!(serde_json::from_str::<FoundationStatus>(json).is_err());
     }
 }

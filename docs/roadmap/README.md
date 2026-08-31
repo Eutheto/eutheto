@@ -51,10 +51,12 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 - **Progressive disclosure.** Guided choices and safe defaults lead; advanced modeling appears only when needed.
 - **Deterministic core; optional AI.** Validation, compilation, solving, verification, persistence, scoring, and deterministic explanations are application functions. AI is neither source of truth nor solver.
 - **Local-first.** Create, edit, solve, and inspect without accounts or cloud services. Local storage is the default.
-- **Human control.** AI writes are visible proposals; all applied changes use the normal command API, are undoable, and honor revisions. Results can be locked, repaired, compared, and explained.
+- **Human control and plan stability.** AI writes are visible proposals; all applied changes use the normal command API, are undoable, and honor revisions. A user can hard-lock what must remain, express softer preferences, and reflow from an accepted plan while explicitly minimizing avoidable disruption. A hard lock is never silently weakened.
 - **Verifiability over trust.** Backend claims never make a candidate publishable; original domain meaning is independently evaluated.
-- **Explanations are product behavior.** “No solution” alone is insufficient. Report validation issues and, where evidence permits, sufficient conflicting required rules in domain language.
+- **Explanations and recovery are product behavior.** “No solution” alone is insufficient. Report validation issues and, where evidence permits, sufficient conflicting required rules in domain language. Proposed repairs identify the exact compromise, require explicit review, and apply only through reversible commands; deterministic evidence remains useful without AI.
 - **Open architecture without premature generalization.** Stable contracts first; no dynamic native plugins, arbitrary DSL, unsafe code loading, marketplace, or generic workflow engine in the MVP.
+- **Comparison before judgment.** Compare accepted plans and revisions semantically—changed decisions, verified score/category deltas, lock preservation, affected entities, and proof status—rather than presenting a raw data diff or an unexplained universal quality score.
+- **Preserve and share deliberately.** Editable scenarios, full-library backups, and immutable offline result capsules are distinct artifacts. Sharing starts from an accepted sanitized presentation model, shows an exact privacy preview, and remains useful without an account, server, or network.
 - **Beautiful means clear.** Calm, legible, fast, accessible, restrained interfaces—not an unrelated-card dashboard.
 
 ## Goals
@@ -67,6 +69,8 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 - Solver-neutral planning representation and stable routing to OR-Tools, Pumpkin, native algorithms, and future reviewed backends.
 - Independent verification and authoritative score recomputation for every accepted candidate.
 - Domain-language explanations for validation, infeasibility, assignment, trade-off, comparison, and repair changes.
+- Lock, prefer, move, and repair/reflow interactions that preserve an accepted-plan baseline, minimize unnecessary change, summarize what changed, and retain the prior accepted result.
+- Previous-versus-current semantic comparison plus reliable pack-owned buffer/tightness indicators where the domain can calculate them without false precision.
 - Optional provider-neutral AI with BYOK and compatible local endpoints.
 - Domain packs independent of OR-Tools, Pumpkin, persistence, network providers, and desktop implementation.
 - Permissive official distribution with complete third-party notices and release SBOMs.
@@ -103,7 +107,7 @@ The public MVP contains production workforce and event-seating packs, bundled OR
 
 ### Product
 
-A first-time user can create a workforce scenario, add/import people, define work and coverage, add required rules and preferences through plain-language guided controls, validate and optimize, understand whether requirements passed and why an assignment occurred, change a rule and repair, distinguish editable export from full backup and immutable sharing, restore safely, and create a privacy-reviewed offline result report—without learning operations-research terminology.
+A first-time user can create a workforce scenario, add/import people, define work and coverage, add required rules and preferences through plain-language guided controls, validate and optimize, understand whether requirements passed and why an assignment occurred, recognize reliable pack-owned buffers or tight points, lock a decision they value, change another decision and reflow without needless reshuffling, compare the revised plan with the prior accepted plan, and receive actionable reviewed guidance when a requested plan cannot work. They can also distinguish editable export from full backup and immutable sharing, restore safely, and create a privacy-reviewed offline result capsule—without learning operations-research terminology.
 
 ## Approved architecture decisions
 
@@ -260,6 +264,9 @@ Use trunk-based development, short-lived branches, protected `main`, and tags fr
 | Portable Scenario Model | Strict implementation-independent semantic representation used inside portable bundles; separately versioned from SQLite/internal persistence. |
 | Result Model | Immutable accepted output tied to one scenario revision, verification checksum, score, and reproducibility metadata. |
 | Share Result Model | Versioned privacy-filtered presentation representation built from an accepted Result Model, not the source Scenario Model. |
+| Result capsule | Product term for an immutable privacy-reviewed offline artifact rendered from a Share Result Model, initially standalone HTML or direct PDF; it is not an editable scenario, backup, or additional source-of-truth format. |
+| Scenario Compare | Semantic comparison of recorded inputs, locks/preferences, accepted decisions, verified score categories, affected entities, and proof state—not a raw JSON/database diff. |
+| Plan Health | Pack-owned typed evidence about buffers, tightness, dependencies, or criticality; never an unexplained cross-domain score or unsupported probability. |
 | Restore | Consequential backup operation that adds to or atomically replaces portable library data under explicit preview, confirmation, and safety-backup policy. |
 | Model hash | Canonical digest of planning meaning, versions, compiler/adapter, and relevant options. |
 | Optimal | Backend proved no better result for its exact encoded objective under its proof semantics, and the candidate verified. |

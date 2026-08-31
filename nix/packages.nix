@@ -20,3 +20,6 @@ in
   default = eutheto-cli;
   inherit eutheto-cli;
 }
+// pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+  desktop-runtime = tooling.desktopRuntime;
+}

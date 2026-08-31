@@ -1,0 +1,49 @@
+[package]
+name = "eutheto-import-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+eutheto-export = { path = "../../eutheto-export", version = "=0.1.0" }
+eutheto-import = { path = "..", version = "=0.1.0" }
+eutheto-types = { path = "../../eutheto-types", version = "=0.1.0" }
+libfuzzer-sys = "=0.4.13"
+serde_json = "=1.0.151"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+
+[[bin]]
+name = "scenario_envelope"
+path = "fuzz_targets/scenario_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bundle"
+path = "fuzz_targets/bundle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "migration_chain"
+path = "fuzz_targets/migration_chain.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bundle_remap"
+path = "fuzz_targets/bundle_remap.rs"
+test = false
+doc = false
+bench = false
+
+# Keep cargo-fuzz intentionally outside the release workspace and its gates.
+[workspace]
+members = ["."]
+resolver = "3"

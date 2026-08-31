@@ -1,4 +1,8 @@
-{ pkgs, src }:
+{
+  pkgs,
+  src,
+  tooling,
+}:
 {
   required-files = pkgs.runCommand "eutheto-required-files" { } ''
     set -eu
@@ -80,6 +84,10 @@
     assert cargo["workspace"]["members"] == [
         "crates/eutheto-types",
         "crates/eutheto-core",
+        "crates/eutheto-store",
+        "crates/eutheto-command",
+        "crates/eutheto-export",
+        "crates/eutheto-import",
         "crates/eutheto-cli",
         "apps/desktop/src-tauri",
         "xtask",
@@ -214,11 +222,15 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 5 and
+      (.workspace_members | length) == 9 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
+        "eutheto-command",
         "eutheto-core",
         "eutheto-desktop",
+        "eutheto-export",
+        "eutheto-import",
+        "eutheto-store",
         "eutheto-types",
         "xtask"
       ] | sort)
@@ -238,4 +250,7 @@
     done
     touch "$out"
   '';
+}
+// pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+  desktop-runtime = tooling.desktopRuntime;
 }

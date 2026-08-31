@@ -177,22 +177,1006 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Enables the app_get_foundation_status command without any pre-configured scope.",
+          "description": "Enables the ai_apply_proposal command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-app-get-foundation-status",
-          "markdownDescription": "Enables the app_get_foundation_status command without any pre-configured scope."
+          "const": "allow-ai-apply-proposal",
+          "markdownDescription": "Enables the ai_apply_proposal command without any pre-configured scope."
         },
         {
-          "description": "Allows the main local window to read the coarse Phase-00 foundation status.",
+          "description": "Enables the ai_cancel_turn command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-foundation-status-read",
-          "markdownDescription": "Allows the main local window to read the coarse Phase-00 foundation status."
+          "const": "allow-ai-cancel-turn",
+          "markdownDescription": "Enables the ai_cancel_turn command without any pre-configured scope."
         },
         {
-          "description": "Denies the app_get_foundation_status command without any pre-configured scope.",
+          "description": "Enables the ai_create_conversation command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-app-get-foundation-status",
-          "markdownDescription": "Denies the app_get_foundation_status command without any pre-configured scope."
+          "const": "allow-ai-create-conversation",
+          "markdownDescription": "Enables the ai_create_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_delete_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-delete-conversation",
+          "markdownDescription": "Enables the ai_delete_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_delete_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-delete-credential",
+          "markdownDescription": "Enables the ai_delete_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_get_configuration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-get-configuration",
+          "markdownDescription": "Enables the ai_get_configuration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_get_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-get-conversation",
+          "markdownDescription": "Enables the ai_get_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_get_proposal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-get-proposal",
+          "markdownDescription": "Enables the ai_get_proposal command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_get_provider_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-get-provider-catalog",
+          "markdownDescription": "Enables the ai_get_provider_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_list_conversations command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-list-conversations",
+          "markdownDescription": "Enables the ai_list_conversations command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_list_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-list-models",
+          "markdownDescription": "Enables the ai_list_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_reject_proposal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-reject-proposal",
+          "markdownDescription": "Enables the ai_reject_proposal command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_send_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-send-turn",
+          "markdownDescription": "Enables the ai_send_turn command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_store_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-store-credential",
+          "markdownDescription": "Enables the ai_store_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ai_test_provider command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ai-test-provider",
+          "markdownDescription": "Enables the ai_test_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_check_for_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-check-for-update",
+          "markdownDescription": "Enables the app_check_for_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_create_support_bundle command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-create-support-bundle",
+          "markdownDescription": "Enables the app_create_support_bundle command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_create_support_bundle_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-create-support-bundle-preview",
+          "markdownDescription": "Enables the app_create_support_bundle_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_get_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-get-capabilities",
+          "markdownDescription": "Enables the app_get_capabilities command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_get_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-get-info",
+          "markdownDescription": "Enables the app_get_info command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_get_license_inventory command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-get-license-inventory",
+          "markdownDescription": "Enables the app_get_license_inventory command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_get_paths_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-get-paths-summary",
+          "markdownDescription": "Enables the app_get_paths_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_install_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-install-update",
+          "markdownDescription": "Enables the app_install_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_open_data_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-open-data-folder",
+          "markdownDescription": "Enables the app_open_data_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Allows the main local window to call exactly the stable desktop command catalog.",
+          "type": "string",
+          "const": "allow-phase-01-api",
+          "markdownDescription": "Allows the main local window to call exactly the stable desktop command catalog."
+        },
+        {
+          "description": "Enables the project_archive command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-archive",
+          "markdownDescription": "Enables the project_archive command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_backup_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-backup-create",
+          "markdownDescription": "Enables the project_backup_create command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_backup_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-backup-preview",
+          "markdownDescription": "Enables the project_backup_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-create",
+          "markdownDescription": "Enables the project_create command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-delete",
+          "markdownDescription": "Enables the project_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_duplicate command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-duplicate",
+          "markdownDescription": "Enables the project_duplicate command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_export_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-export-create",
+          "markdownDescription": "Enables the project_export_create command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_export_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-export-preview",
+          "markdownDescription": "Enables the project_export_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_get_metadata command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-get-metadata",
+          "markdownDescription": "Enables the project_get_metadata command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_import_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-import-apply",
+          "markdownDescription": "Enables the project_import_apply command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_import_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-import-preview",
+          "markdownDescription": "Enables the project_import_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-list",
+          "markdownDescription": "Enables the project_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_operation_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-operation-cancel",
+          "markdownDescription": "Enables the project_operation_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_restore_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-restore-apply",
+          "markdownDescription": "Enables the project_restore_apply command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_restore_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-restore-preview",
+          "markdownDescription": "Enables the project_restore_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_unarchive command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-unarchive",
+          "markdownDescription": "Enables the project_unarchive command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_apply_batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-apply-batch",
+          "markdownDescription": "Enables the scenario_apply_batch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_apply_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-apply-command",
+          "markdownDescription": "Enables the scenario_apply_command command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_get_command_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-get-command-catalog",
+          "markdownDescription": "Enables the scenario_get_command_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_get_entity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-get-entity",
+          "markdownDescription": "Enables the scenario_get_entity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_get_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-get-history",
+          "markdownDescription": "Enables the scenario_get_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_get_rule_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-get-rule-catalog",
+          "markdownDescription": "Enables the scenario_get_rule_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_get_setup_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-get-setup-status",
+          "markdownDescription": "Enables the scenario_get_setup_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_get_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-get-summary",
+          "markdownDescription": "Enables the scenario_get_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_get_view command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-get-view",
+          "markdownDescription": "Enables the scenario_get_view command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_migrate_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-migrate-preview",
+          "markdownDescription": "Enables the scenario_migrate_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_redo command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-redo",
+          "markdownDescription": "Enables the scenario_redo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_search_entities command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-search-entities",
+          "markdownDescription": "Enables the scenario_search_entities command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_undo command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-undo",
+          "markdownDescription": "Enables the scenario_undo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scenario_validate command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scenario-validate",
+          "markdownDescription": "Enables the scenario_validate command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the settings_export_nonsecret command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-settings-export-nonsecret",
+          "markdownDescription": "Enables the settings_export_nonsecret command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the settings_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-settings-get",
+          "markdownDescription": "Enables the settings_get command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the settings_import_nonsecret command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-settings-import-nonsecret",
+          "markdownDescription": "Enables the settings_import_nonsecret command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the settings_reset_section command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-settings-reset-section",
+          "markdownDescription": "Enables the settings_reset_section command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the settings_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-settings-update",
+          "markdownDescription": "Enables the settings_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_cancel_counterfactual command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-cancel-counterfactual",
+          "markdownDescription": "Enables the solution_cancel_counterfactual command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_compare command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-compare",
+          "markdownDescription": "Enables the solution_compare command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_create_repair_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-create-repair-request",
+          "markdownDescription": "Enables the solution_create_repair_request command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_explain command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-explain",
+          "markdownDescription": "Enables the solution_explain command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-export",
+          "markdownDescription": "Enables the solution_export command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_export_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-export-cancel",
+          "markdownDescription": "Enables the solution_export_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_export_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-export-preview",
+          "markdownDescription": "Enables the solution_export_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_get_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-get-summary",
+          "markdownDescription": "Enables the solution_get_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_get_view command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-get-view",
+          "markdownDescription": "Enables the solution_get_view command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-list",
+          "markdownDescription": "Enables the solution_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_lock_assignment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-lock-assignment",
+          "markdownDescription": "Enables the solution_lock_assignment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_select command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-select",
+          "markdownDescription": "Enables the solution_select command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_share_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-share-create",
+          "markdownDescription": "Enables the solution_share_create command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_share_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-share-preview",
+          "markdownDescription": "Enables the solution_share_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_start_counterfactual command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-start-counterfactual",
+          "markdownDescription": "Enables the solution_start_counterfactual command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_unlock_assignment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-unlock-assignment",
+          "markdownDescription": "Enables the solution_unlock_assignment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solution_verify command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solution-verify",
+          "markdownDescription": "Enables the solution_verify command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solve_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solve-cancel",
+          "markdownDescription": "Enables the solve_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solve_estimate_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solve-estimate-model",
+          "markdownDescription": "Enables the solve_estimate_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solve_get_backend_options command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solve-get-backend-options",
+          "markdownDescription": "Enables the solve_get_backend_options command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solve_get_diagnostics_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solve-get-diagnostics-summary",
+          "markdownDescription": "Enables the solve_get_diagnostics_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solve_get_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solve-get-job",
+          "markdownDescription": "Enables the solve_get_job command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solve_list_runs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solve-list-runs",
+          "markdownDescription": "Enables the solve_list_runs command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solve_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solve-start",
+          "markdownDescription": "Enables the solve_start command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_apply_proposal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-apply-proposal",
+          "markdownDescription": "Denies the ai_apply_proposal command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_cancel_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-cancel-turn",
+          "markdownDescription": "Denies the ai_cancel_turn command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_create_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-create-conversation",
+          "markdownDescription": "Denies the ai_create_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_delete_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-delete-conversation",
+          "markdownDescription": "Denies the ai_delete_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_delete_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-delete-credential",
+          "markdownDescription": "Denies the ai_delete_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_get_configuration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-get-configuration",
+          "markdownDescription": "Denies the ai_get_configuration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_get_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-get-conversation",
+          "markdownDescription": "Denies the ai_get_conversation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_get_proposal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-get-proposal",
+          "markdownDescription": "Denies the ai_get_proposal command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_get_provider_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-get-provider-catalog",
+          "markdownDescription": "Denies the ai_get_provider_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_list_conversations command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-list-conversations",
+          "markdownDescription": "Denies the ai_list_conversations command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_list_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-list-models",
+          "markdownDescription": "Denies the ai_list_models command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_reject_proposal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-reject-proposal",
+          "markdownDescription": "Denies the ai_reject_proposal command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_send_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-send-turn",
+          "markdownDescription": "Denies the ai_send_turn command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_store_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-store-credential",
+          "markdownDescription": "Denies the ai_store_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ai_test_provider command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ai-test-provider",
+          "markdownDescription": "Denies the ai_test_provider command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_check_for_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-check-for-update",
+          "markdownDescription": "Denies the app_check_for_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_create_support_bundle command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-create-support-bundle",
+          "markdownDescription": "Denies the app_create_support_bundle command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_create_support_bundle_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-create-support-bundle-preview",
+          "markdownDescription": "Denies the app_create_support_bundle_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_get_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-get-capabilities",
+          "markdownDescription": "Denies the app_get_capabilities command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_get_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-get-info",
+          "markdownDescription": "Denies the app_get_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_get_license_inventory command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-get-license-inventory",
+          "markdownDescription": "Denies the app_get_license_inventory command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_get_paths_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-get-paths-summary",
+          "markdownDescription": "Denies the app_get_paths_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_install_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-install-update",
+          "markdownDescription": "Denies the app_install_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_open_data_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-open-data-folder",
+          "markdownDescription": "Denies the app_open_data_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_archive command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-archive",
+          "markdownDescription": "Denies the project_archive command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_backup_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-backup-create",
+          "markdownDescription": "Denies the project_backup_create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_backup_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-backup-preview",
+          "markdownDescription": "Denies the project_backup_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-create",
+          "markdownDescription": "Denies the project_create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-delete",
+          "markdownDescription": "Denies the project_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_duplicate command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-duplicate",
+          "markdownDescription": "Denies the project_duplicate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_export_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-export-create",
+          "markdownDescription": "Denies the project_export_create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_export_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-export-preview",
+          "markdownDescription": "Denies the project_export_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_get_metadata command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-get-metadata",
+          "markdownDescription": "Denies the project_get_metadata command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_import_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-import-apply",
+          "markdownDescription": "Denies the project_import_apply command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_import_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-import-preview",
+          "markdownDescription": "Denies the project_import_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-list",
+          "markdownDescription": "Denies the project_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_operation_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-operation-cancel",
+          "markdownDescription": "Denies the project_operation_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_restore_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-restore-apply",
+          "markdownDescription": "Denies the project_restore_apply command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_restore_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-restore-preview",
+          "markdownDescription": "Denies the project_restore_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_unarchive command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-unarchive",
+          "markdownDescription": "Denies the project_unarchive command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_apply_batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-apply-batch",
+          "markdownDescription": "Denies the scenario_apply_batch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_apply_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-apply-command",
+          "markdownDescription": "Denies the scenario_apply_command command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_get_command_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-get-command-catalog",
+          "markdownDescription": "Denies the scenario_get_command_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_get_entity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-get-entity",
+          "markdownDescription": "Denies the scenario_get_entity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_get_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-get-history",
+          "markdownDescription": "Denies the scenario_get_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_get_rule_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-get-rule-catalog",
+          "markdownDescription": "Denies the scenario_get_rule_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_get_setup_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-get-setup-status",
+          "markdownDescription": "Denies the scenario_get_setup_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_get_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-get-summary",
+          "markdownDescription": "Denies the scenario_get_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_get_view command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-get-view",
+          "markdownDescription": "Denies the scenario_get_view command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_migrate_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-migrate-preview",
+          "markdownDescription": "Denies the scenario_migrate_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_redo command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-redo",
+          "markdownDescription": "Denies the scenario_redo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_search_entities command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-search-entities",
+          "markdownDescription": "Denies the scenario_search_entities command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_undo command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-undo",
+          "markdownDescription": "Denies the scenario_undo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scenario_validate command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scenario-validate",
+          "markdownDescription": "Denies the scenario_validate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the settings_export_nonsecret command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-settings-export-nonsecret",
+          "markdownDescription": "Denies the settings_export_nonsecret command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the settings_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-settings-get",
+          "markdownDescription": "Denies the settings_get command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the settings_import_nonsecret command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-settings-import-nonsecret",
+          "markdownDescription": "Denies the settings_import_nonsecret command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the settings_reset_section command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-settings-reset-section",
+          "markdownDescription": "Denies the settings_reset_section command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the settings_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-settings-update",
+          "markdownDescription": "Denies the settings_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_cancel_counterfactual command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-cancel-counterfactual",
+          "markdownDescription": "Denies the solution_cancel_counterfactual command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_compare command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-compare",
+          "markdownDescription": "Denies the solution_compare command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_create_repair_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-create-repair-request",
+          "markdownDescription": "Denies the solution_create_repair_request command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_explain command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-explain",
+          "markdownDescription": "Denies the solution_explain command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_export command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-export",
+          "markdownDescription": "Denies the solution_export command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_export_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-export-cancel",
+          "markdownDescription": "Denies the solution_export_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_export_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-export-preview",
+          "markdownDescription": "Denies the solution_export_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_get_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-get-summary",
+          "markdownDescription": "Denies the solution_get_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_get_view command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-get-view",
+          "markdownDescription": "Denies the solution_get_view command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-list",
+          "markdownDescription": "Denies the solution_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_lock_assignment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-lock-assignment",
+          "markdownDescription": "Denies the solution_lock_assignment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_select command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-select",
+          "markdownDescription": "Denies the solution_select command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_share_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-share-create",
+          "markdownDescription": "Denies the solution_share_create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_share_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-share-preview",
+          "markdownDescription": "Denies the solution_share_preview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_start_counterfactual command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-start-counterfactual",
+          "markdownDescription": "Denies the solution_start_counterfactual command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_unlock_assignment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-unlock-assignment",
+          "markdownDescription": "Denies the solution_unlock_assignment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solution_verify command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solution-verify",
+          "markdownDescription": "Denies the solution_verify command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solve_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solve-cancel",
+          "markdownDescription": "Denies the solve_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solve_estimate_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solve-estimate-model",
+          "markdownDescription": "Denies the solve_estimate_model command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solve_get_backend_options command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solve-get-backend-options",
+          "markdownDescription": "Denies the solve_get_backend_options command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solve_get_diagnostics_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solve-get-diagnostics-summary",
+          "markdownDescription": "Denies the solve_get_diagnostics_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solve_get_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solve-get-job",
+          "markdownDescription": "Denies the solve_get_job command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solve_list_runs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solve-list-runs",
+          "markdownDescription": "Denies the solve_list_runs command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solve_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solve-start",
+          "markdownDescription": "Denies the solve_start command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
@@ -2209,6 +3193,72 @@
           "type": "string",
           "const": "core:window:deny-unminimize",
           "markdownDescription": "Denies the unminimize command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures the types of dialogs\navailable from the dialog plugin.\n\n#### Granted Permissions\n\nAll dialog types are enabled.\n\n\n\n#### This default permission set includes:\n\n- `allow-message`\n- `allow-save`\n- `allow-open`",
+          "type": "string",
+          "const": "dialog:default",
+          "markdownDescription": "This permission set configures the types of dialogs\navailable from the dialog plugin.\n\n#### Granted Permissions\n\nAll dialog types are enabled.\n\n\n\n#### This default permission set includes:\n\n- `allow-message`\n- `allow-save`\n- `allow-open`"
+        },
+        {
+          "description": "Enables the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:allow-ask",
+          "markdownDescription": "Enables the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)"
+        },
+        {
+          "description": "Enables the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:allow-confirm",
+          "markdownDescription": "Enables the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)"
+        },
+        {
+          "description": "Enables the message command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-message",
+          "markdownDescription": "Enables the message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-open",
+          "markdownDescription": "Enables the open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-save",
+          "markdownDescription": "Enables the save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:deny-ask",
+          "markdownDescription": "Denies the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)"
+        },
+        {
+          "description": "Denies the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:deny-confirm",
+          "markdownDescription": "Denies the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)"
+        },
+        {
+          "description": "Denies the message command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-message",
+          "markdownDescription": "Denies the message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-open",
+          "markdownDescription": "Denies the open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-save",
+          "markdownDescription": "Denies the save command without any pre-configured scope."
         }
       ]
     },

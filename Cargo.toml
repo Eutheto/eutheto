@@ -3,6 +3,10 @@ resolver = "3"
 members = [
   "crates/eutheto-types",
   "crates/eutheto-core",
+  "crates/eutheto-store",
+  "crates/eutheto-command",
+  "crates/eutheto-export",
+  "crates/eutheto-import",
   "crates/eutheto-cli",
   "apps/desktop/src-tauri",
   "xtask",
