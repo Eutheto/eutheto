@@ -1,4 +1,9 @@
+use eutheto_export::{
+    ApplicationMetadata, BackupSections, PortableScenario, ScenarioExportSnapshot,
+    assemble_scenario_export,
+};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
 use std::path::Path;
@@ -10,6 +15,35 @@ fn private_tempdir() -> Result<tempfile::TempDir, Box<dyn Error>> {
     Ok(tempfile::Builder::new()
         .prefix("eutheto-cli-test-")
         .tempdir_in(base)?)
+}
+
+fn write_extension_fixture_bundle(path: &Path) -> Result<String, Box<dyn Error>> {
+    let wrapper: Value = serde_json::from_str(include_str!(
+        "../../../tests/migration/fixtures/portable_v1_scenario.json"
+    ))?;
+    let scenario: PortableScenario = serde_json::from_value(
+        wrapper
+            .get("input")
+            .cloned()
+            .ok_or("portable fixture omitted input")?,
+    )?;
+    let scenario_id = scenario.document.scenario_id.to_string();
+    let bytes = assemble_scenario_export(&ScenarioExportSnapshot {
+        bundle_id: "0195a5e4-7c00-7000-8000-000000000201".parse()?,
+        created_at: "2026-08-31T12:00:00Z".to_owned(),
+        application: ApplicationMetadata {
+            name: "Eutheto CLI process test".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+        },
+        title: scenario.document.metadata.title.clone(),
+        scenario,
+        scenario_revisions: Vec::new(),
+        sections: BackupSections::default(),
+        nonsemantic_extensions: BTreeSet::from(["vendor.example".to_owned()]),
+        manifest_extensions: BTreeMap::new(),
+    })?;
+    fs::write(path, bytes)?;
+    Ok(scenario_id)
 }
 
 #[cfg(windows)]
@@ -412,7 +446,12 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
     let source = private_tempdir()?;
     let imported = private_tempdir()?;
     let restored = private_tempdir()?;
-    let id = create_project(source.path(), "Portable")?;
+    let seed_bundle = source.path().join("extension-seed.eutheto");
+    let id = write_extension_fixture_bundle(&seed_bundle)?;
+    let seed_path = seed_bundle.to_str().ok_or("non-UTF-8 seed path")?;
+    let (seed_output, seed_import) = run_json(source.path(), &["projects", "import", seed_path])?;
+    assert!(seed_output.status.success(), "{seed_import}");
+    assert_eq!(seed_import["result"]["scenarioIds"][0], id);
     let scenario_bundle = source.path().join("scenario.eutheto");
     let backup_bundle = source.path().join("backup.eutheto");
     let (setting_output, _) = run_json(
@@ -447,6 +486,18 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
     assert_eq!(
         import["result"]["scenarioOutcomes"][0]["selectedAction"],
         "same-identity"
+    );
+    assert!(
+        import["result"]["preview"]["preservedExtensions"]
+            .as_array()
+            .is_some_and(|extensions| extensions.contains(&json!("vendor.example")))
+    );
+    let (imported_show_output, imported_show) =
+        run_json(imported.path(), &["scenario", "show", &id])?;
+    assert!(imported_show_output.status.success(), "{imported_show}");
+    assert_eq!(
+        imported_show["result"]["document"]["extensions"]["vendor.example"],
+        json!({"opaque": [1, "two", true]})
     );
     let (review_output, review) =
         run_json(imported.path(), &["projects", "import", scenario_path])?;
@@ -522,6 +573,113 @@ fn scenario_export_inspect_import_and_backup_restore_round_trip() -> Result<(), 
     assert_eq!(
         skipped["result"]["scenarioOutcomes"][0]["selectedAction"],
         "skip"
+    );
+
+    let same_name_id = create_project(imported.path(), "Deterministic fixture")?;
+    assert_ne!(same_name_id, id);
+    let target_only_entity = "018f47f2-e880-7000-8000-000000000099";
+    let target_mutation = imported.path().join("target-only-command.json");
+    fs::write(
+        &target_mutation,
+        serde_json::to_vec(&json!({
+            "type": "addEntity",
+            "payload": {
+                "entityId": target_only_entity,
+                "value": {"id": target_only_entity, "name": "Target-only"}
+            }
+        }))?,
+    )?;
+    let target_mutation_path = target_mutation
+        .to_str()
+        .ok_or("non-UTF-8 target mutation path")?;
+    let (mutation_output, mutation) = run_json(
+        imported.path(),
+        &[
+            "scenario",
+            "apply",
+            &id,
+            "--commands",
+            target_mutation_path,
+            "--expected-revision",
+            "7",
+        ],
+    )?;
+    assert!(mutation_output.status.success(), "{mutation}");
+    assert_eq!(mutation["result"]["newRevision"], 8);
+    let (_, before_replace) = run_json(imported.path(), &["projects", "list"])?;
+    assert_eq!(before_replace["result"].as_array().map(Vec::len), Some(3));
+
+    let mut replace_plan = review["result"]["requiredCollisionPlan"].clone();
+    replace_plan["scenarios"][id.as_str()] = json!("replace");
+    let replace_plan = replace_plan.to_string();
+    let (replace_output, replaced) = run_json(
+        imported.path(),
+        &[
+            "projects",
+            "import",
+            scenario_path,
+            "--collision-plan",
+            &replace_plan,
+        ],
+    )?;
+    assert!(replace_output.status.success(), "{replaced}");
+    assert_eq!(replaced["result"]["scenarioIds"], json!([id]));
+    assert_eq!(
+        replaced["result"]["scenarioOutcomes"][0]["sourceScenarioId"],
+        id
+    );
+    assert_eq!(replaced["result"]["scenarioOutcomes"][0]["scenarioId"], id);
+    assert_eq!(
+        replaced["result"]["scenarioOutcomes"][0]["selectedAction"],
+        "replace"
+    );
+    assert_eq!(
+        replaced["result"]["scenarioOutcomes"][0]["revision"],
+        replaced["result"]["preview"]["scenarios"][0]["sameIdentityRevision"]
+    );
+
+    let (replaced_show_output, replaced_show) =
+        run_json(imported.path(), &["scenario", "show", &id])?;
+    assert!(replaced_show_output.status.success(), "{replaced_show}");
+    assert_eq!(
+        replaced_show["result"]["revision"],
+        replaced["result"]["scenarioOutcomes"][0]["revision"]
+    );
+    assert!(
+        replaced_show["result"]["document"]["domain"]["entities"][target_only_entity].is_null()
+    );
+    assert_eq!(
+        replaced_show["result"]["document"]["metadata"]["title"],
+        "Deterministic fixture"
+    );
+    assert_eq!(
+        replaced_show["result"]["document"]["extensions"]["vendor.example"],
+        json!({"opaque": [1, "two", true]})
+    );
+    let (same_name_show_output, same_name_show) =
+        run_json(imported.path(), &["scenario", "show", &same_name_id])?;
+    assert!(same_name_show_output.status.success(), "{same_name_show}");
+    assert_eq!(
+        same_name_show["result"]["document"]["metadata"]["title"],
+        "Deterministic fixture"
+    );
+    assert_eq!(same_name_show["result"]["revision"], 0);
+    let (_, after_replace) = run_json(imported.path(), &["projects", "list"])?;
+    let after_replace = after_replace["result"]
+        .as_array()
+        .ok_or("project list result is not an array")?;
+    assert_eq!(after_replace.len(), 3);
+    assert_eq!(
+        after_replace
+            .iter()
+            .filter(|project| project["scenarioId"].as_str() == Some(id.as_str()))
+            .count(),
+        1
+    );
+    assert!(
+        after_replace
+            .iter()
+            .any(|project| project["scenarioId"].as_str() == Some(same_name_id.as_str()))
     );
 
     let included = import["result"]["preview"]["includedSections"]

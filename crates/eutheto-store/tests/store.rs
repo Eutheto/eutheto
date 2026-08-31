@@ -3493,6 +3493,37 @@ async fn startup_applies_required_pragmas_schema_and_indexes() -> Result<(), Box
 }
 
 #[tokio::test]
+async fn released_migration_checksum_mismatch_is_rejected() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    drop(store);
+
+    let connection = Connection::open(&path)?;
+    assert_eq!(
+        connection.execute(
+            "UPDATE schema_migrations SET checksum = ?1 WHERE version = 1",
+            ["checksum-for-changed-released-sql"],
+        )?,
+        1
+    );
+    drop(connection);
+
+    assert!(matches!(
+        SqliteScenarioStore::open(&path).await,
+        Err(StoreError::MigrationChanged { version: 1 })
+    ));
+    let connection = Connection::open(&path)?;
+    let retained_checksum: String = connection.query_row(
+        "SELECT checksum FROM schema_migrations WHERE version = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retained_checksum, "checksum-for-changed-released-sql");
+    Ok(())
+}
+
+#[tokio::test]
 async fn newer_database_is_rejected_without_schema_mutation() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");

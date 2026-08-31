@@ -10,6 +10,7 @@
   "scripts": {
     "build": "vue-tsc --noEmit && vite build",
     "dev": "vite",
+    "e2e": "node ./e2e/project-home.persistence.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",

@@ -6,9 +6,9 @@ Thank you for helping build `eutheto`.
 
 ## Current project state and authority
 
-`eutheto` is in Phase 00, repository and reproducible tooling. It does not yet provide domain behavior, a solver, an AI provider, an updater, or a shippable desktop application. Contributions must not imply that deferred behavior exists.
+`eutheto` has completed the Phase 01 core application shell and persistence contract and is entering Phase 02 domain-pack and planning-IR contracts. It does not yet provide production domain behavior, a solver, an AI provider, an updater, or a shippable desktop application. Contributions must not imply that deferred behavior exists.
 
-Work is dependency-gated rather than date-gated. The [roadmap index](docs/roadmap/README.md) defines phase order and repository-wide authority; the [active Phase 00 document](docs/roadmap/00-repository-and-reproducible-tooling.md) defines the current scope, acceptance evidence, non-goals, and exit gate. A later phase may inform a contract, but its production feature cannot be implemented early. When sources conflict, use the authority order in [AGENTS.md](AGENTS.md):
+Work is dependency-gated rather than date-gated. The [roadmap index](docs/roadmap/README.md) defines phase order and repository-wide authority; the [active Phase 02 document](docs/roadmap/02-domain-pack-and-planning-ir-contracts.md) defines the current scope, acceptance evidence, non-goals, and exit gate. A later phase may inform a contract, but its production feature cannot be implemented early. When sources conflict, use the authority order in [AGENTS.md](AGENTS.md):
 
 1. approved security and data-integrity ADRs;
 2. current schemas and conformance tests;
@@ -32,7 +32,7 @@ Use short-lived branches and focused commits. A change is ready for review only 
 
 The Phase 00 contract makes Nix the canonical Linux environment and the language/tool provider on macOS, `Justfile` the human command authority, Cargo the Rust workspace authority, pnpm the JavaScript/TypeScript workspace authority, and `xtask` the owner of cross-platform generation, hashing, assembly, fixtures, licenses, and release manifests. Native pinned Windows tooling remains authoritative for Windows-specific behavior.
 
-The following are **Phase 00 target entry points, not a claim that every command is available in the current checkout**:
+The following are the repository's canonical target entry points, not a claim that every deferred product capability exists:
 
 ```text
 nix develop
@@ -49,7 +49,7 @@ nix flake check
 
 Before running one, inspect the checked-in `Justfile` and `just --list`; a recipe is supported only when it exists there. Do not invent a successful invocation in an issue, pull request, or document. When a recipe exists, use it instead of an ad hoc script so local and CI behavior stay aligned. Shell entry must remain side-effect-free: entering `nix develop` or direnv must not install packages, fetch dependencies, run migrations, build solvers, or generate source files. Bootstrap, installation, generation, and native-worker work require explicit recipes.
 
-Report exactly what you ran and what it proved. A build does not prove product acceptance, a unit test does not prove packaging, and Phase 00 checks do not prove later product behavior.
+Report exactly what you ran and what it proved. A build does not prove product acceptance, a unit test does not prove packaging, and repository checks do not prove deferred product behavior.
 
 ## Architecture and security boundaries
 
@@ -85,4 +85,4 @@ Reviewers evaluate roadmap fit, correctness, architecture and trust boundaries, 
 
 Approval and passing automation do not waive an active phase gate. Merge authority, required ownership review, ADR decisions, recusals, and governance changes follow [GOVERNANCE.md](GOVERNANCE.md). Security-sensitive changes require review of both request and response boundaries and evidence that logs and support artifacts remain redacted.
 
-By participating, contributors agree to follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). The governance and private reporting contacts are deliberately unresolved Phase 00 gates; do not infer an organization, address, or identity from the project name.
+By participating, contributors agree to follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). The governance, private reporting, public CLI, extension, reverse-domain, and signing identities remain deliberately unresolved public-identity gates; do not infer an organization, address, or final identity from the project name or development identifiers.

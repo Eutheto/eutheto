@@ -2,6 +2,11 @@ packages:
   - "apps/*"
   - "packages/*"
 
+allowBuilds:
+  edgedriver: false
+  esbuild: false
+  geckodriver: false
+
 supportedArchitectures:
   os:
     - linux

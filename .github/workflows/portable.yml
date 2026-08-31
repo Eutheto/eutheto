@@ -144,7 +144,7 @@ jobs:
         if: matrix.nix-native
         run: nix develop --no-update-lock-file --command just install
 
-      - name: Run the complete Phase-00 check in the default Nix shell
+      - name: Run the complete Phase-01 check in the default Nix shell
         if: matrix.nix-native && matrix.phase-check == 'full'
         run: nix develop --no-update-lock-file --command just check
 
@@ -202,6 +202,13 @@ jobs:
         run: |
           pnpm --filter @eutheto/desktop run test
           pnpm --filter @eutheto/desktop run tauri build --no-bundle
+
+      - name: Test desktop persistence through WebKit WebDriver
+        if: runner.os == 'Linux'
+        env:
+          NO_AT_BRIDGE: "1"
+          EUTHETO_E2E_PRIVILEGED_NETNS: "1"
+        run: nix develop --no-update-lock-file --command just e2e
 
       - name: Launch the shell under a Linux virtual display
         if: runner.os == 'Linux'

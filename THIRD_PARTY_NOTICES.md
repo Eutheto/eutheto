@@ -526,6 +526,32 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `@babel/helper-validator-identifier` | `7.29.7` | `NOASSERTION` | `https://registry.npmjs.org/@babel/helper-validator-identifier/-/helper-validator-identifier-7.29.7.tgz` |
 | npm | `@babel/parser` | `7.29.8` | `NOASSERTION` | `https://registry.npmjs.org/@babel/parser/-/parser-7.29.8.tgz` |
 | npm | `@babel/types` | `7.29.8` | `NOASSERTION` | `https://registry.npmjs.org/@babel/types/-/types-7.29.8.tgz` |
+| npm | `@esbuild/aix-ppc64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.2.tgz` |
+| npm | `@esbuild/android-arm` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.2.tgz` |
+| npm | `@esbuild/android-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.2.tgz` |
+| npm | `@esbuild/android-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.2.tgz` |
+| npm | `@esbuild/darwin-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.2.tgz` |
+| npm | `@esbuild/darwin-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.2.tgz` |
+| npm | `@esbuild/freebsd-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.2.tgz` |
+| npm | `@esbuild/freebsd-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.2.tgz` |
+| npm | `@esbuild/linux-arm` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.28.2.tgz` |
+| npm | `@esbuild/linux-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.28.2.tgz` |
+| npm | `@esbuild/linux-ia32` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.28.2.tgz` |
+| npm | `@esbuild/linux-loong64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.28.2.tgz` |
+| npm | `@esbuild/linux-mips64el` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.28.2.tgz` |
+| npm | `@esbuild/linux-ppc64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.28.2.tgz` |
+| npm | `@esbuild/linux-riscv64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.2.tgz` |
+| npm | `@esbuild/linux-s390x` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.28.2.tgz` |
+| npm | `@esbuild/linux-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.2.tgz` |
+| npm | `@esbuild/netbsd-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.28.2.tgz` |
+| npm | `@esbuild/netbsd-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.28.2.tgz` |
+| npm | `@esbuild/openbsd-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/openbsd-arm64/-/openbsd-arm64-0.28.2.tgz` |
+| npm | `@esbuild/openbsd-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.28.2.tgz` |
+| npm | `@esbuild/openharmony-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/openharmony-arm64/-/openharmony-arm64-0.28.2.tgz` |
+| npm | `@esbuild/sunos-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.28.2.tgz` |
+| npm | `@esbuild/win32-arm64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.28.2.tgz` |
+| npm | `@esbuild/win32-ia32` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.28.2.tgz` |
+| npm | `@esbuild/win32-x64` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.28.2.tgz` |
 | npm | `@eslint-community/eslint-utils` | `4.10.1` | `NOASSERTION` | `https://registry.npmjs.org/@eslint-community/eslint-utils/-/eslint-utils-4.10.1.tgz` |
 | npm | `@eslint-community/regexpp` | `4.12.2` | `NOASSERTION` | `https://registry.npmjs.org/@eslint-community/regexpp/-/regexpp-4.12.2.tgz` |
 | npm | `@eslint/config-array` | `0.23.5` | `NOASSERTION` | `https://registry.npmjs.org/@eslint/config-array/-/config-array-0.23.5.tgz` |
@@ -630,6 +656,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `detect-libc` | `2.1.2` | `NOASSERTION` | `https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz` |
 | npm | `entities` | `7.0.1` | `NOASSERTION` | `https://registry.npmjs.org/entities/-/entities-7.0.1.tgz` |
 | npm | `es-module-lexer` | `2.3.2` | `NOASSERTION` | `https://registry.npmjs.org/es-module-lexer/-/es-module-lexer-2.3.2.tgz` |
+| npm | `esbuild` | `0.28.2` | `NOASSERTION` | `https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz` |
 | npm | `escape-string-regexp` | `4.0.0` | `NOASSERTION` | `https://registry.npmjs.org/escape-string-regexp/-/escape-string-regexp-4.0.0.tgz` |
 | npm | `eslint` | `10.9.1` | `NOASSERTION` | `https://registry.npmjs.org/eslint/-/eslint-10.9.1.tgz` |
 | npm | `eslint-plugin-vue` | `10.10.0` | `NOASSERTION` | `https://registry.npmjs.org/eslint-plugin-vue/-/eslint-plugin-vue-10.10.0.tgz` |
@@ -658,6 +685,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `fsevents` | `2.3.3` | `NOASSERTION` | `https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz` |
 | npm | `glob-parent` | `5.1.2` | `NOASSERTION` | `https://registry.npmjs.org/glob-parent/-/glob-parent-5.1.2.tgz` |
 | npm | `glob-parent` | `6.0.2` | `NOASSERTION` | `https://registry.npmjs.org/glob-parent/-/glob-parent-6.0.2.tgz` |
+| npm | `has-flag` | `4.0.0` | `NOASSERTION` | `https://registry.npmjs.org/has-flag/-/has-flag-4.0.0.tgz` |
 | npm | `ignore` | `5.3.2` | `NOASSERTION` | `https://registry.npmjs.org/ignore/-/ignore-5.3.2.tgz` |
 | npm | `ignore` | `7.0.6` | `NOASSERTION` | `https://registry.npmjs.org/ignore/-/ignore-7.0.6.tgz` |
 | npm | `imurmurhash` | `0.1.4` | `NOASSERTION` | `https://registry.npmjs.org/imurmurhash/-/imurmurhash-0.1.4.tgz` |
@@ -665,6 +693,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `is-glob` | `4.0.3` | `NOASSERTION` | `https://registry.npmjs.org/is-glob/-/is-glob-4.0.3.tgz` |
 | npm | `is-number` | `7.0.0` | `NOASSERTION` | `https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz` |
 | npm | `isexe` | `2.0.0` | `NOASSERTION` | `https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz` |
+| npm | `jiti` | `2.7.0` | `NOASSERTION` | `https://registry.npmjs.org/jiti/-/jiti-2.7.0.tgz` |
 | npm | `json-buffer` | `3.0.1` | `NOASSERTION` | `https://registry.npmjs.org/json-buffer/-/json-buffer-3.0.1.tgz` |
 | npm | `json-schema-traverse` | `0.4.1` | `NOASSERTION` | `https://registry.npmjs.org/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz` |
 | npm | `json-stable-stringify-without-jsonify` | `1.0.1` | `NOASSERTION` | `https://registry.npmjs.org/json-stable-stringify-without-jsonify/-/json-stable-stringify-without-jsonify-1.0.1.tgz` |
@@ -719,12 +748,14 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `source-map-js` | `1.2.1` | `NOASSERTION` | `https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz` |
 | npm | `stackback` | `0.0.2` | `NOASSERTION` | `https://registry.npmjs.org/stackback/-/stackback-0.0.2.tgz` |
 | npm | `std-env` | `4.2.0` | `NOASSERTION` | `https://registry.npmjs.org/std-env/-/std-env-4.2.0.tgz` |
+| npm | `supports-color` | `8.1.1` | `NOASSERTION` | `https://registry.npmjs.org/supports-color/-/supports-color-8.1.1.tgz` |
 | npm | `tinybench` | `2.9.0` | `NOASSERTION` | `https://registry.npmjs.org/tinybench/-/tinybench-2.9.0.tgz` |
 | npm | `tinyexec` | `1.3.0` | `NOASSERTION` | `https://registry.npmjs.org/tinyexec/-/tinyexec-1.3.0.tgz` |
 | npm | `tinyglobby` | `0.2.17` | `NOASSERTION` | `https://registry.npmjs.org/tinyglobby/-/tinyglobby-0.2.17.tgz` |
 | npm | `tinyrainbow` | `3.1.1` | `NOASSERTION` | `https://registry.npmjs.org/tinyrainbow/-/tinyrainbow-3.1.1.tgz` |
 | npm | `to-regex-range` | `5.0.1` | `NOASSERTION` | `https://registry.npmjs.org/to-regex-range/-/to-regex-range-5.0.1.tgz` |
 | npm | `ts-api-utils` | `2.5.0` | `NOASSERTION` | `https://registry.npmjs.org/ts-api-utils/-/ts-api-utils-2.5.0.tgz` |
+| npm | `tsx` | `4.23.13` | `NOASSERTION` | `https://registry.npmjs.org/tsx/-/tsx-4.23.13.tgz` |
 | npm | `type-check` | `0.4.0` | `NOASSERTION` | `https://registry.npmjs.org/type-check/-/type-check-0.4.0.tgz` |
 | npm | `typescript` | `6.0.3` | `NOASSERTION` | `https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz` |
 | npm | `typescript-eslint` | `8.68.0` | `NOASSERTION` | `https://registry.npmjs.org/typescript-eslint/-/typescript-eslint-8.68.0.tgz` |
@@ -741,8 +772,9 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `why-is-node-running` | `2.3.0` | `NOASSERTION` | `https://registry.npmjs.org/why-is-node-running/-/why-is-node-running-2.3.0.tgz` |
 | npm | `word-wrap` | `1.2.5` | `NOASSERTION` | `https://registry.npmjs.org/word-wrap/-/word-wrap-1.2.5.tgz` |
 | npm | `xml-name-validator` | `5.0.0` | `NOASSERTION` | `https://registry.npmjs.org/xml-name-validator/-/xml-name-validator-5.0.0.tgz` |
+| npm | `yaml` | `2.9.0` | `NOASSERTION` | `https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz` |
 | npm | `yocto-queue` | `0.1.0` | `NOASSERTION` | `https://registry.npmjs.org/yocto-queue/-/yocto-queue-0.1.0.tgz` |
 
 ## Review state
 
-733 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+765 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.

@@ -235,9 +235,49 @@ fuzz-check: fuzz-build
 bench:
     {{ error("benchmarks are unavailable until Phase 03 approves the OR-Tools pin and a real primitive benchmark corpus") }}
 
-# Run packaged desktop E2E tests after the Phase-11 packaging gate is complete.
+# Build and exercise real Linux desktop persistence through WebKit WebDriver.
 e2e:
-    {{ error("desktop E2E is unavailable until Phase 11 defines supported packaged targets and WebDriver prerequisites") }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != "Linux" ]]; then
+      printf 'error: desktop WebDriver E2E is supported on Linux only\n' >&2
+      exit 1
+    fi
+
+    e2e_root="$(mktemp -d "${TMPDIR:-/tmp}/eutheto-e2e.XXXXXX")"
+    trap 'rm -rf -- "$e2e_root"' EXIT
+    export XDG_CACHE_HOME="$e2e_root/cache"
+    export XDG_CONFIG_HOME="$e2e_root/config"
+    export XDG_DATA_HOME="$e2e_root/data"
+    export XDG_RUNTIME_DIR="$e2e_root/runtime"
+    export XDG_STATE_HOME="$e2e_root/state"
+    mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_RUNTIME_DIR" "$XDG_STATE_HOME"
+    chmod 700 "$XDG_RUNTIME_DIR"
+
+    pnpm --filter @eutheto/desktop run tauri build --debug --no-bundle
+    e2e_command=(
+      "$(command -v env)"
+      "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"
+      "EUTHETO_NATIVE_DRIVER=$(command -v WebKitWebDriver)"
+      "$(command -v xvfb-run)" -a --server-args="-screen 0 1280x720x24"
+      "$(command -v eutheto-desktop-runtime)"
+      "$(command -v pnpm)" --filter @eutheto/desktop run e2e
+    )
+    unshare_bin="$(command -v unshare)"
+    bash_bin="$(command -v bash)"
+    ip_bin="$(command -v ip)"
+    if [[ "${EUTHETO_E2E_PRIVILEGED_NETNS:-0}" == "1" ]]; then
+      sudo_bin="$(command -v sudo)"
+      setpriv_bin="$(command -v setpriv)"
+      "$sudo_bin" -E "$unshare_bin" --net -- \
+        "$bash_bin" -ceu \
+          '"$1" link set lo up; exec "$2" --reuid "$SUDO_UID" --regid "$SUDO_GID" --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- "${@:3}"' \
+          bash "$ip_bin" "$setpriv_bin" "${e2e_command[@]}"
+    else
+      "$unshare_bin" --user --map-root-user --net -- \
+        "$bash_bin" -ceu '"$1" link set lo up; shift; exec "$@"' \
+          bash "$ip_bin" "${e2e_command[@]}"
+    fi
 
 # Enforce Rust advisory policy, including the reviewed deny.toml exceptions.
 rust-advisories:

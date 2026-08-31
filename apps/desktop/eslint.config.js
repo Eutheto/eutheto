@@ -123,7 +123,7 @@ export default withVueTs(
   },
   {
     name: "eutheto/node-globals",
-    files: ["*.config.{js,ts}", "**/*.test.ts"],
+    files: ["*.config.{js,ts}", "**/*.test.ts", "e2e/**/*.mjs"],
     languageOptions: {
       globals: nodeGlobals,
     },

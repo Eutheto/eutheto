@@ -7,10 +7,10 @@ license.workspace = true
 publish.workspace = true
 build = "build.rs"
 
-# `dev.eutheto.phase00.desktop` is a non-public Phase-00 development identifier.
+# `dev.eutheto.phase01.desktop` is a non-public Phase-01 development identifier.
 # It is not the gated production reverse-domain application identifier.
 [package.metadata.eutheto]
-development-identifier = "dev.eutheto.phase00.desktop"
+development-identifier = "dev.eutheto.phase01.desktop"
 
 [lints]
 workspace = true

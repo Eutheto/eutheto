@@ -575,6 +575,18 @@ Stop and write an ADR if UI needs DB access, a migration cannot preserve scenari
 - Confirm Tauri data/path APIs per target, minimum capability manifest, CSP, WebView2 strategy ownership and credential-store interface seam; secrets are not implemented here.
 - Any schema released from this phase establishes migration fixtures and cannot be edited in place.
 
+## Completion evidence
+
+Phase 01 was locally revalidated on 2026-08-31 with the repository-owned commands:
+
+- `just test-phase01` passed the core, store, command, import/export, CLI, and native Tauri Phase 01 suites.
+- `just check` passed generated drift, protocol and fixture validation, DCO self-tests, formatting, linting, type checking, and all workspace tests.
+- `nix flake check --no-update-lock-file` built all compatible local flake checks.
+- `nix develop --no-update-lock-file --command just e2e` built the real unbundled Tauri application, created a project through the Vue client, started a new application process and WebDriver session, and loaded the project from the isolated persistent SQLite library.
+- The four approved portable-data fuzz targets completed bounded 30-second runs with their checked-in seed corpora under `nightly-2026-08-28`.
+
+These local runs establish the Phase 01 behavior described above. Hosted cross-platform checks for the change remain required before merge; local evidence is not a substitute for those protected-branch checks. Public CLI, extension, reverse-domain, governance/security-contact, signing, and publication identities remain unresolved at their named roadmap gates.
+
 ## Exit gate
 
-Phase 01 exits only when all exact exit criteria and eight scenario examples pass through real storage/client boundaries, with transactional evidence for every destructive failure. Proceed to [Phase 02](02-domain-pack-and-planning-ir-contracts.md).
+Phase 01 exits only when all exact exit criteria and all ten scenario examples pass through real storage/client boundaries, with transactional evidence for every destructive failure. Proceed to [Phase 02](02-domain-pack-and-planning-ir-contracts.md).

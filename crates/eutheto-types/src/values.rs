@@ -715,6 +715,30 @@ mod tests {
     }
 
     #[test]
+    fn explicit_scenario_zone_controls_resolution_independently_of_host_time_zone()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let local = LocalWallTime::parse("2026-07-15T12:00:00")?;
+        let chicago = resolve_local_time(
+            local,
+            &IanaTimeZone::parse("America/Chicago")?,
+            GapPolicy::Reject,
+            OverlapPolicy::Earlier,
+        )?;
+        let tokyo = resolve_local_time(
+            local,
+            &IanaTimeZone::parse("Asia/Tokyo")?,
+            GapPolicy::Reject,
+            OverlapPolicy::Earlier,
+        )?;
+
+        assert_eq!(chicago.instant.to_string(), "2026-07-15T17:00:00Z");
+        assert_eq!(chicago.offset_seconds, -18_000);
+        assert_eq!(tokyo.instant.to_string(), "2026-07-15T03:00:00Z");
+        assert_eq!(tokyo.offset_seconds, 32_400);
+        Ok(())
+    }
+
+    #[test]
     fn chicago_fall_fold_selects_each_instant() -> Result<(), Box<dyn std::error::Error>> {
         let zone = IanaTimeZone::parse("America/Chicago")?;
         let local = LocalWallTime::parse("2026-11-01T01:30:00")?;
