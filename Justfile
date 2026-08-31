@@ -256,6 +256,9 @@ e2e:
 
     pnpm --filter @eutheto/desktop run tauri build --debug --no-bundle
     e2e_command=(
+      "$(command -v env)"
+      "EUTHETO_TAURI_DRIVER=$(command -v tauri-driver)"
+      "EUTHETO_NATIVE_DRIVER=$(command -v WebKitWebDriver)"
       "$(command -v xvfb-run)" -a --server-args="-screen 0 1280x720x24"
       "$(command -v eutheto-desktop-runtime)"
       "$(command -v pnpm)" --filter @eutheto/desktop run e2e
