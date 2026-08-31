@@ -4,9 +4,9 @@
 
 ## Current support status
 
-`eutheto` is in Phase 00, repository and reproducible tooling. There is no public product release and therefore no supported release series, security-update branch, solver service, updater, hosted account system, or production security response commitment. Source on the current development branch is bootstrap work, not a supported binary.
+`eutheto` has entered Phase 02, domain-pack and planning-IR contracts. There is no public product release and therefore no supported release series, security-update branch, solver service, updater, hosted account system, or production security response commitment. Source on the current development branch is unreleased work, not a supported binary.
 
-Security and data integrity remain release constraints now. The [roadmap index](docs/roadmap/README.md), [active Phase 00 document](docs/roadmap/00-repository-and-reproducible-tooling.md), and approved security/data-integrity ADRs govern work in that order of authority described there. Phase gates cannot be waived by labeling incomplete behavior experimental.
+Security and data integrity remain release constraints now. The [roadmap index](docs/roadmap/README.md), [active Phase 02 document](docs/roadmap/02-domain-pack-and-planning-ir-contracts.md), and approved security/data-integrity ADRs govern work in the authority order described there. Phase gates cannot be waived by labeling incomplete behavior experimental.
 
 When releases become supported, this section must list exact supported versions, update channels, and end-of-support rules. Until then, do not infer support from a tag, artifact, branch, package name, or local build.
 
@@ -14,7 +14,7 @@ When releases become supported, this section must list exact supported versions,
 
 The canonical hosting organization, repository URL, private security-reporting contact, and accountable security responders are unresolved roadmap gates. The project will not invent an email address or direct reports to an unmonitored recipient.
 
-- **Owner:** the Phase 00 security and governance decisions required by the roadmap.
+- **Owner:** the security, governance, and public-identity decisions required by the roadmap.
 - **Closure criterion:** an approved ADR identifies accountable responders and a monitored private intake channel; defines access, backup coverage, conflicts and recusals, encryption and retention expectations, acknowledgment and coordination policy; and updates this file at the canonical repository with exact instructions.
 
 **Do not publish a suspected vulnerability.** Do not place vulnerability details, proof-of-concept code, affected data, credentials, logs, screenshots, or exploit steps in a public issue, discussion, pull request, commit, chat room, or social-media post. A public request for someone to contact you can itself reveal timing or target information and is not the project's reporting process.

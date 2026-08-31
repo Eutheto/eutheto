@@ -4,7 +4,7 @@
 
 The planned platform will validate those requirements, translate them into a solver-neutral planning model, route the model to a compatible backend, independently verify every candidate against the original domain meaning, and present the result in human language.
 
-> **Project status:** the [Phase-00](docs/roadmap/00-repository-and-reproducible-tooling.md) repository and reproducible-tooling foundation is implemented. The repository now has a real CLI and desktop status shell, but [Phase 01](docs/roadmap/01-core-application-shell-and-persistence.md), domain modeling and solving, and release artifacts remain unimplemented.
+> **Project status:** the [Phase 00](docs/roadmap/00-repository-and-reproducible-tooling.md) tooling foundation and [Phase 01](docs/roadmap/01-core-application-shell-and-persistence.md) core application shell and persistence contract are implemented. [Phase 02](docs/roadmap/02-domain-pack-and-planning-ir-contracts.md) domain-pack and planning-IR contracts are the active scope; production domains, solving, and release artifacts remain unimplemented.
 
 ## Product direction
 
@@ -92,27 +92,29 @@ See [`docs/roadmap/assumptions.md`](docs/roadmap/assumptions.md) for dated packa
 
 ## Current repository contents
 
-Phase 00 established a working, deliberately narrow foundation:
+Phases 00–01 established a working, deliberately narrow application foundation:
 
 - a locked Nix flake with default, full, and release development shells, plus
   `direnv` integration;
-- a real five-member Cargo workspace containing `eutheto-types`,
-  `eutheto-core`, `eutheto-cli`, the Tauri crate, and `xtask`;
-- a pnpm workspace and minimal Vue 3/Vite/Tauri development shell whose only
-  application behavior reports the Phase-00 foundation status through a typed,
-  capability-scoped Tauri command;
-- a non-final `optimizer` CLI whose `status` command reports that same
-  foundation status;
+- a real Cargo workspace with typed values and errors, transactional SQLite
+  persistence, revisioned commands and history, portable import/export and
+  backup/restore services, a working CLI, the Tauri adapter, and `xtask`;
+- a pnpm workspace and Vue 3/Vite/Tauri development application whose project
+  home lists, creates, duplicates, archives, restores, and deletes projects
+  through generated capability-scoped commands backed by the Rust service;
+- a non-final `optimizer` CLI with real Phase 01 project, scenario, portable
+  data, backup, and restore behavior and typed unavailable responses for
+  deferred capabilities;
 - checked-in protocol definitions and fixtures, deterministic generation and
-  drift checks, fixture validation, license inventory generation, and SPDX SBOM
-  generation owned by `xtask`;
+  drift checks, fixture validation, bounded portable-data fuzz targets, real
+  unbundled Linux Tauri persistence E2E, license inventory generation, and SPDX
+  SBOM generation owned by repository commands;
 - the Apache-2.0 legal and contribution baseline, architecture decisions,
-  security documentation, and pinned Phase-00 CI foundations.
+  security documentation, and pinned CI foundations.
 
-This is development infrastructure and a real application boundary, not an
-optimizer implementation. Phase 01 application services and persistence, all
-domain packs and solver backends, and installable or signed release artifacts
-remain future roadmap work.
+This is a real local application and persistence boundary, not yet an optimizer.
+Domain packs, planning compilation, solver backends, verification, explanations,
+and installable or signed release artifacts remain future roadmap work.
 
 ## Quick start
 
@@ -137,23 +139,25 @@ just cli
 just desktop-dev
 ```
 
-`just cli` runs the non-final foundation-status CLI. `just desktop-dev` runs
-the minimal Vue/Vite application inside the Tauri development shell; it does
-not provide scenarios, persistence, domain planning, or solving.
+`just cli` runs the non-final working CLI. `just desktop-dev` runs the persisted
+Vue project home inside the Tauri development shell; it does not provide domain
+planning or solving. On Linux, `just e2e` builds the unbundled Tauri application
+and exercises project persistence across a new application process in an
+isolated local-data directory.
 
 Run `just` to list every supported command. In particular,
 `just generate-check`, `just protocol-check`, and `just fixtures-check` verify
 checked-in generated and protocol artifacts, while `just licenses` and
-`just sbom` produce the Phase-00 supply-chain inventories.
+`just sbom` produce the Phase 01 supply-chain inventories.
 
 ## Contributing
 
 Read [`AGENTS.md`](AGENTS.md) before changing the repository. It defines source authority, phase discipline, architecture boundaries, generated-code rules, security and privacy constraints, and verification expectations for human and automated contributors.
 
-Implementation beyond the repository foundation begins with Phase 01. Changes
-must preserve the applicable roadmap issue IDs and exit gates and avoid
-claiming later-phase production behavior. Contributions should prefer complete
-vertical paths over mocks, stubs, or speculative infrastructure.
+Implementation now proceeds through Phase 02. Changes must preserve the
+applicable roadmap issue IDs and exit gates and avoid claiming later-phase
+production behavior. Contributions should prefer complete vertical paths over
+mocks, stubs, or speculative infrastructure.
 
 The project is licensed under the Apache License 2.0; see [`LICENSE`](LICENSE)
 and [`NOTICE`](NOTICE). Contributions use DCO sign-off as described in
@@ -169,8 +173,8 @@ The project, Rust crate, npm package, and project-owned media-type namespaces ar
 - npm packages: `@eutheto/*`;
 - media types: `eutheto/...`.
 
-The Phase-00 CLI executable uses the working name `optimizer`, but its final
+The development CLI executable uses the working name `optimizer`, but its final
 public name is unresolved. Reverse-domain desktop IDs, the portable project
 extension, hosting organization, governance/security contacts, and signing
-identities also remain explicit roadmap decisions. Working examples such as
-`.optplan` are not public commitments.
+identities also remain explicit roadmap decisions. Development identifiers are
+not public commitments.

@@ -1642,32 +1642,12 @@ async fn project_delete(
     }
 }
 
-async fn preview_portable(
+async fn preview_portable_bytes(
     state: &DesktopState,
-    app_handle: AppHandle,
     request: PortablePreviewRequest,
+    bytes: Vec<u8>,
     restore: bool,
 ) -> ApiResult<PortablePreviewDto> {
-    let dialog_title = if restore {
-        "Choose an Eutheto backup to restore"
-    } else {
-        "Choose an Eutheto file to import"
-    };
-    let bytes = native_file_task(move || {
-        let selected = app_handle
-            .dialog()
-            .file()
-            .set_title(dialog_title)
-            .add_filter("Eutheto portable file", &["eutheto"])
-            .blocking_pick_file()
-            .ok_or(NativeFileError::Cancelled)?;
-        let path = selected
-            .into_path()
-            .map_err(|_| NativeFileError::Conversion)
-            .and_then(require_portable_path)?;
-        read_bounded_portable(&path)
-    })
-    .await?;
     let query = if restore {
         AppQuery::PreviewRestore {
             bytes,
@@ -1696,6 +1676,35 @@ async fn preview_portable(
         )
         .into()),
     }
+}
+
+async fn preview_portable(
+    state: &DesktopState,
+    app_handle: AppHandle,
+    request: PortablePreviewRequest,
+    restore: bool,
+) -> ApiResult<PortablePreviewDto> {
+    let dialog_title = if restore {
+        "Choose an Eutheto backup to restore"
+    } else {
+        "Choose an Eutheto file to import"
+    };
+    let bytes = native_file_task(move || {
+        let selected = app_handle
+            .dialog()
+            .file()
+            .set_title(dialog_title)
+            .add_filter("Eutheto portable file", &["eutheto"])
+            .blocking_pick_file()
+            .ok_or(NativeFileError::Cancelled)?;
+        let path = selected
+            .into_path()
+            .map_err(|_| NativeFileError::Conversion)
+            .and_then(require_portable_path)?;
+        read_bounded_portable(&path)
+    })
+    .await?;
+    preview_portable_bytes(state, request, bytes, restore).await
 }
 
 #[tauri::command]
@@ -2666,17 +2675,21 @@ pub fn run() -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use eutheto_export::{CancellationSignal, FixedExclusion};
-    use eutheto_import::{SafetyBackupEvidence, SupplementalCollisionAction};
+    use eutheto_import::{CollisionAction, SafetyBackupEvidence, SupplementalCollisionAction};
+    use std::collections::BTreeMap;
     use std::error::Error;
     use std::sync::Arc;
 
     use eutheto_core::{
-        AppDependencies, AppPaths, BackupAssetSelection, DeferredCapability, EuthetoApp,
+        AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
+        BackupAssetSelection, DeferredCapability, EuthetoApp,
     };
     use eutheto_types::{
-        ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, CommandId, CommandResult,
-        PersonId, ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId, Revision,
-        SafeDiagnosticValue, ScenarioViewDto, SystemClock, SystemIdGenerator,
+        ActorRef, AddEntity, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError,
+        CommandEnvelope, CommandId, CommandResult, CommandSource, DomainPackRef, PersonId,
+        ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId, Revision,
+        SafeDiagnosticValue, ScenarioCommand, ScenarioSettings, ScenarioViewDto, SystemClock,
+        SystemIdGenerator,
     };
     use serde::de::DeserializeOwned;
     use serde_json::{Value, json};
@@ -2686,10 +2699,11 @@ mod tests {
         PortablePreviewRequest, PreparedPortableCache, PreparedPortableKind,
         PreparedPortableOutput, ProjectListRequest, ProjectScopeDto, REGISTERED_COMMANDS,
         backup_summary, core_unavailable, map_app_error, map_native_file_error, native_file_task,
-        project_archive, project_create, project_delete, project_import_apply, project_list,
-        project_list_impl, project_restore_apply, project_unarchive, read_bounded_portable,
-        revision_diagnostic_value, scenario_apply_command, scenario_get_view, scenario_redo,
-        scenario_undo, selected_basename, suggested_portable_filename,
+        preview_portable_bytes, project_archive, project_create, project_delete,
+        project_import_apply, project_list, project_list_impl, project_restore_apply,
+        project_unarchive, read_bounded_portable, revision_diagnostic_value,
+        scenario_apply_command, scenario_get_view, scenario_redo, scenario_undo, selected_basename,
+        suggested_portable_filename,
     };
 
     type IpcResult = Result<tauri::ipc::InvokeResponseBody, Value>;
@@ -3167,6 +3181,339 @@ mod tests {
         };
         assert_eq!(deferred.category, ApiErrorCategoryDto::Unsupported);
         assert_eq!(deferred.code, "capability.solve_unavailable");
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn native_portable_commands_replace_by_identity_and_persist() -> Result<(), Box<dyn Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let ids = SystemIdGenerator;
+        let settings: ScenarioSettings = serde_json::from_value(json!({
+            "timeZone": "UTC",
+            "locale": "en-US",
+            "units": "metric",
+            "horizon": {
+                "start": "2026-09-01T00:00:00Z",
+                "end": "2026-10-01T00:00:00Z"
+            },
+            "gapPolicy": "reject",
+            "overlapPolicy": "earlier"
+        }))?;
+        let title = "Portable identity collision";
+
+        let source = EuthetoApp::open(AppDependencies {
+            paths: AppPaths {
+                database: directory.path().join("source.sqlite3"),
+                safety_backups: directory.path().join("source-backups"),
+            },
+            clock: Arc::new(SystemClock),
+            ids: Arc::new(SystemIdGenerator),
+            cancellation: CancellationSignal::default(),
+        })
+        .await
+        .map_err(|error| format!("source app setup failed: {error:?}"))?;
+        let source_scenario_id = match source
+            .execute(AppCommand::CreateProject {
+                request_id: RequestId::new(&ids)?,
+                title: title.to_owned(),
+                description: "Portable command boundary source".to_owned(),
+                domain_pack: DomainPackRef {
+                    id: "official.test".parse()?,
+                    schema_version: 1,
+                },
+                settings: settings.clone(),
+            })
+            .await
+            .map_err(|error| format!("source project setup failed: {error:?}"))?
+        {
+            AppCommandResult::Project(project) => project.scenario_id,
+            result => return Err(format!("unexpected source project result: {result:?}").into()),
+        };
+        let initial_bytes = match source
+            .query(AppQuery::ExportScenario(source_scenario_id))
+            .await
+            .map_err(|error| format!("initial source export failed: {error:?}"))?
+        {
+            AppQueryResult::Bundle { bytes, .. } => bytes,
+            result => return Err(format!("unexpected initial export result: {result:?}").into()),
+        };
+
+        let target_dependencies = AppDependencies {
+            paths: AppPaths {
+                database: directory.path().join("target.sqlite3"),
+                safety_backups: directory.path().join("target-backups"),
+            },
+            clock: Arc::new(SystemClock),
+            ids: Arc::new(SystemIdGenerator),
+            cancellation: CancellationSignal::default(),
+        };
+        let target_app = EuthetoApp::open(target_dependencies.clone())
+            .await
+            .map_err(|error| format!("target app setup failed: {error:?}"))?;
+        let target_state = DesktopState {
+            app: target_app,
+            cache_dir: directory.path().join("target-cache"),
+            backup_dir: directory.path().join("target-backups"),
+            prepared_outputs: Arc::default(),
+        };
+        let target_desktop = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![
+                project_create,
+                project_import_apply,
+                project_list,
+                scenario_get_view,
+            ])
+            .manage(target_state.clone())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
+        let target_webview =
+            tauri::WebviewWindowBuilder::new(&target_desktop, "main", tauri::WebviewUrl::default())
+                .build()?;
+
+        let unrelated: ApiResponseDto<ProjectMetadataDto> = invoke_ok(
+            &target_webview,
+            "project_create",
+            &json!({
+                "requestId": RequestId::new(&ids)?,
+                "title": title,
+                "description": "Same title, different identity",
+                "domainPack": {
+                    "id": "official.test",
+                    "schemaVersion": 1
+                },
+                "settings": settings
+            }),
+        )?;
+        let unrelated_scenario_id = unrelated.result.scenario_id;
+        assert_ne!(unrelated_scenario_id, source_scenario_id);
+
+        let selected_path = directory.path().join("selected.eutheto");
+        std::fs::write(&selected_path, initial_bytes)?;
+        let first_preview_request_id = RequestId::new(&ids)?;
+        let first_preview_request: PortablePreviewRequest = serde_json::from_value(json!({
+            "requestId": first_preview_request_id,
+            "options": {
+                "restoreMode": "import-scenario",
+                "includeResults": false,
+                "includeAssets": false
+            }
+        }))?;
+        let first_preview_bytes = read_bounded_portable(&selected_path)
+            .map_err(|error| format!("initial portable read failed: {error:?}"))?;
+        let first_preview = preview_portable_bytes(
+            &target_state,
+            first_preview_request,
+            first_preview_bytes,
+            false,
+        )
+        .await
+        .map_err(|error| format!("initial portable preview failed: {error:?}"))?;
+        assert_eq!(first_preview.request_id, first_preview_request_id);
+        assert_eq!(first_preview.result.scenarios.len(), 1);
+        assert_eq!(
+            first_preview.result.scenarios[0].scenario_id,
+            source_scenario_id
+        );
+        assert!(!first_preview.result.scenarios[0].collides);
+        let first_preview_id = first_preview.result.preview_id;
+
+        let first_apply_request_id = RequestId::new(&ids)?;
+        let first_applied: ApiResponseDto<Value> = invoke_ok(
+            &target_webview,
+            "project_import_apply",
+            &json!({
+                "requestId": first_apply_request_id,
+                "previewId": first_preview_id,
+                "collisionPlan": eutheto_import::CollisionPlan::default()
+            }),
+        )?;
+        assert_eq!(first_applied.request_id, first_apply_request_id);
+        assert_eq!(
+            first_applied.result["scenarioIds"],
+            json!([source_scenario_id])
+        );
+
+        let source_entity_id = PersonId::new(&ids)?;
+        let source_entity = json!({
+            "id": source_entity_id.to_string(),
+            "name": "Authoritative portable entity"
+        });
+        let source_mutation = source
+            .execute(AppCommand::ApplyScenario {
+                request_id: RequestId::new(&ids)?,
+                envelope: CommandEnvelope {
+                    command_id: CommandId::new(&ids)?,
+                    scenario_id: source_scenario_id,
+                    expected_revision: Revision::INITIAL,
+                    actor: ActorRef {
+                        actor_id: Some("desktop.portable.test".to_owned()),
+                        display_name: "Desktop Portable Test".to_owned(),
+                    },
+                    source: CommandSource::System,
+                    command: ScenarioCommand::AddEntity(AddEntity {
+                        entity_id: source_entity_id,
+                        value: source_entity.clone(),
+                    }),
+                },
+                truncate_redo: false,
+            })
+            .await
+            .map_err(|error| format!("source mutation failed: {error:?}"))?;
+        assert!(matches!(
+            &source_mutation,
+            AppCommandResult::ScenarioCommand(result)
+                if result.new_revision == Revision::new(1)
+        ));
+        let replacement_bytes = match source
+            .query(AppQuery::ExportScenario(source_scenario_id))
+            .await
+            .map_err(|error| format!("replacement source export failed: {error:?}"))?
+        {
+            AppQueryResult::Bundle { bytes, .. } => bytes,
+            result => {
+                return Err(format!("unexpected replacement export result: {result:?}").into());
+            }
+        };
+
+        std::fs::write(&selected_path, replacement_bytes)?;
+        let replace_preview_request_id = RequestId::new(&ids)?;
+        let replace_preview_request: PortablePreviewRequest = serde_json::from_value(json!({
+            "requestId": replace_preview_request_id,
+            "options": {
+                "restoreMode": "import-scenario",
+                "includeResults": false,
+                "includeAssets": false
+            }
+        }))?;
+        let replace_preview_bytes = read_bounded_portable(&selected_path)
+            .map_err(|error| format!("replacement portable read failed: {error:?}"))?;
+        let replace_preview = preview_portable_bytes(
+            &target_state,
+            replace_preview_request,
+            replace_preview_bytes,
+            false,
+        )
+        .await
+        .map_err(|error| format!("replace portable preview failed: {error:?}"))?;
+        assert_eq!(replace_preview.request_id, replace_preview_request_id);
+        assert_eq!(replace_preview.result.scenarios.len(), 1);
+        let collision = &replace_preview.result.scenarios[0];
+        assert_eq!(collision.scenario_id, source_scenario_id);
+        assert!(collision.collides);
+        assert_eq!(collision.source_revision, Revision::new(1));
+        assert_eq!(collision.same_identity_revision, Revision::new(1));
+        assert!(collision.same_identity_revision_warning.is_none());
+        let replace_preview_id = replace_preview.result.preview_id;
+        let replace_request_id = RequestId::new(&ids)?;
+        let replaced: ApiResponseDto<Value> = invoke_ok(
+            &target_webview,
+            "project_import_apply",
+            &json!({
+                "requestId": replace_request_id,
+                "previewId": replace_preview_id,
+                "collisionPlan": eutheto_import::CollisionPlan {
+                    scenarios: BTreeMap::from([(
+                        source_scenario_id,
+                        CollisionAction::Replace
+                    )]),
+                    supplemental: BTreeMap::new()
+                }
+            }),
+        )?;
+        assert_eq!(replaced.request_id, replace_request_id);
+        assert_eq!(replaced.result["scenarioIds"], json!([source_scenario_id]));
+
+        let consumed = invoke_ipc(
+            &target_webview,
+            "project_import_apply",
+            &json!({
+                "requestId": RequestId::new(&ids)?,
+                "previewId": replace_preview_id,
+                "collisionPlan": eutheto_import::CollisionPlan::default()
+            }),
+        )?;
+        let consumed_error: ApiErrorDto = match consumed {
+            Ok(_) => return Err("consumed portable preview unexpectedly applied twice".into()),
+            Err(error) => serde_json::from_value(error)?,
+        };
+        assert_eq!(consumed_error.code, "portable.preview_not_found");
+
+        drop(target_webview);
+        drop(target_desktop);
+        drop(target_state);
+
+        let reopened_app = EuthetoApp::open(target_dependencies)
+            .await
+            .map_err(|error| format!("target reopen failed: {error:?}"))?;
+        let reopened_desktop = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![project_list, scenario_get_view])
+            .manage(DesktopState {
+                app: reopened_app,
+                cache_dir: directory.path().join("reopened-cache"),
+                backup_dir: directory.path().join("target-backups"),
+                prepared_outputs: Arc::default(),
+            })
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
+        let reopened_webview = tauri::WebviewWindowBuilder::new(
+            &reopened_desktop,
+            "main",
+            tauri::WebviewUrl::default(),
+        )
+        .build()?;
+
+        let listed: ApiResponseDto<Vec<ProjectSummaryDto>> = invoke_ok(
+            &reopened_webview,
+            "project_list",
+            &json!({
+                "requestId": RequestId::new(&ids)?,
+                "scope": "active"
+            }),
+        )?;
+        assert_eq!(listed.result.len(), 2);
+        assert!(
+            listed
+                .result
+                .iter()
+                .any(|project| project.scenario_id == source_scenario_id)
+        );
+        assert!(
+            listed
+                .result
+                .iter()
+                .any(|project| project.scenario_id == unrelated_scenario_id)
+        );
+
+        let imported: ApiResponseDto<ScenarioViewDto> = invoke_ok(
+            &reopened_webview,
+            "scenario_get_view",
+            &json!({
+                "requestId": RequestId::new(&ids)?,
+                "scenarioId": source_scenario_id
+            }),
+        )?;
+        assert_eq!(imported.result.document.metadata.title, title);
+        assert_eq!(
+            imported
+                .result
+                .document
+                .domain
+                .entities
+                .get(&source_entity_id),
+            Some(&source_entity)
+        );
+
+        let same_title: ApiResponseDto<ScenarioViewDto> = invoke_ok(
+            &reopened_webview,
+            "scenario_get_view",
+            &json!({
+                "requestId": RequestId::new(&ids)?,
+                "scenarioId": unrelated_scenario_id
+            }),
+        )?;
+        assert_eq!(same_title.result.document.metadata.title, title);
+        assert_eq!(same_title.result.revision, Revision::INITIAL);
+        assert!(same_title.result.document.domain.entities.is_empty());
         Ok(())
     }
 

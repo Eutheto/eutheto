@@ -1674,11 +1674,17 @@ fn portable_scenario_outcomes(
         .map(|scenario| {
             let action = plan.scenarios.get(&scenario.scenario_id);
             let skipped = scenario.collides && matches!(action, Some(CollisionAction::Skip));
-            let same_identity = !scenario.collides
-                || matches!(mode, RestoreMode::ReplaceLibrary)
-                || matches!(action, Some(CollisionAction::Replace));
+            let replaced = scenario.collides && matches!(action, Some(CollisionAction::Replace));
+            let same_identity =
+                !scenario.collides || matches!(mode, RestoreMode::ReplaceLibrary) || replaced;
             let (selected_action, revision, warning) = if skipped {
                 ("skip", None, None)
+            } else if replaced {
+                (
+                    "replace",
+                    Some(scenario.same_identity_revision),
+                    scenario.same_identity_revision_warning.as_deref(),
+                )
             } else if same_identity {
                 (
                     "same-identity",

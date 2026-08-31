@@ -4,9 +4,9 @@
 
 ## Purpose and present state
 
-This document defines how repository changes and project decisions are reviewed. `eutheto` is currently in Phase 00, repository and reproducible tooling. Governance must not be used to waive phase prerequisites, security invariants, compatibility obligations, or exit evidence, and it must not imply that a later product capability or a public release exists.
+This document defines how repository changes and project decisions are reviewed. `eutheto` has entered Phase 02, domain-pack and planning-IR contracts. Governance must not be used to waive phase prerequisites, security invariants, compatibility obligations, or exit evidence, and it must not imply that a later product capability or a public release exists.
 
-The [roadmap index](docs/roadmap/README.md) and [active Phase 00 document](docs/roadmap/00-repository-and-reproducible-tooling.md) are binding. The authority order is:
+The [roadmap index](docs/roadmap/README.md) and [active Phase 02 document](docs/roadmap/02-domain-pack-and-planning-ir-contracts.md) are binding. The authority order is:
 
 1. approved security and data-integrity ADRs;
 2. current schemas and conformance tests;
@@ -26,9 +26,9 @@ Participation is based on contribution and responsibility, not employment, affil
 - **Code owners** are maintainers or designated reviewers recorded in `CODEOWNERS` for sensitive paths. Ownership means required review responsibility, not unilateral authority over unrelated areas.
 - **Release stewards** and **security responders** are separately designated roles with least-privilege access. They do not exist merely because someone is a maintainer, and their appointment does not itself resolve signing identity or private-contact gates.
 
-The initial maintainer roster and governance contact are unresolved Phase 00 gates. This document names no person, organization, or address by implication.
+The initial maintainer roster and governance contact remain unresolved named roadmap gates. This document names no person, organization, or address by implication.
 
-- **Owner:** the Phase 00 governance decision required by the roadmap.
+- **Owner:** the governance and public-identity decisions required by the roadmap.
 - **Closure criterion:** an approved ADR names consenting initial maintainers, their ownership areas, appointment/removal rules, the canonical governance contact, required private channels, and the repository records those decisions consistently.
 
 Until that gate closes, existing approved roadmap decisions remain authoritative, but no new proposal may be represented as a project-wide governance decision merely because it appears in a branch or receives informal agreement.

@@ -16,7 +16,7 @@ use eutheto_import::{
 use eutheto_store::Failpoint;
 use eutheto_store::{SqliteScenarioStore, StagedLibraryApply};
 use eutheto_types::{
-    ActorRef, AddEntity, AppError, CommandBatch, CommandEnvelope, CommandId, CommandSource,
+    ActorRef, AddEntity, AppError, Clock, CommandBatch, CommandEnvelope, CommandId, CommandSource,
     DirectoryAvailabilityLabel, DomainPackRef, EventPayload, EventTopic, FixedClock,
     FixedIdGenerator, GapPolicy, Horizon, IanaTimeZone, IdGenerationError, IdGenerator, LocaleTag,
     OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PersonId, PortableAsset, RequestId, Revision,
@@ -26,7 +26,10 @@ use eutheto_types::{
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::sync::Arc;
+use std::future::{Future, poll_fn};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
+use std::task::Poll;
 use tempfile::TempDir;
 use uuid::Uuid;
 trait BoxedResult<T> {
@@ -61,6 +64,47 @@ impl IdGenerator for CancellingIdGenerator {
     fn next_uuid(&self) -> Result<Uuid, IdGenerationError> {
         self.cancellation.cancel();
         Ok(self.id)
+    }
+}
+
+struct BlockingFirstClock {
+    now: Rfc3339Timestamp,
+    armed: AtomicBool,
+    calls_after_arm: AtomicUsize,
+    entered: Arc<Barrier>,
+    release: Arc<Barrier>,
+}
+
+impl BlockingFirstClock {
+    fn new(now: Rfc3339Timestamp) -> Self {
+        Self {
+            now,
+            armed: AtomicBool::new(false),
+            calls_after_arm: AtomicUsize::new(0),
+            entered: Arc::new(Barrier::new(2)),
+            release: Arc::new(Barrier::new(2)),
+        }
+    }
+
+    fn arm(&self) {
+        self.calls_after_arm.store(0, Ordering::SeqCst);
+        self.armed.store(true, Ordering::SeqCst);
+    }
+
+    fn calls_after_arm(&self) -> usize {
+        self.calls_after_arm.load(Ordering::SeqCst)
+    }
+}
+
+impl Clock for BlockingFirstClock {
+    fn now(&self) -> Rfc3339Timestamp {
+        if self.armed.load(Ordering::SeqCst)
+            && self.calls_after_arm.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            self.entered.wait();
+            self.release.wait();
+        }
+        self.now
     }
 }
 
@@ -202,6 +246,7 @@ async fn create_edit_reopen_and_stale_conflict_use_the_application_service()
     let mut changes = app.subscribe(EventTopic::ScenarioChanged).await.boxed()?;
 
     let first = add_entity_envelope(scenario_id, Revision::INITIAL, "Ada")?;
+    let first_command_id = first.command_id;
     let initiating_request_id = request_id()?;
     let committed = app
         .execute(AppCommand::ApplyScenario {
@@ -254,6 +299,141 @@ async fn create_edit_reopen_and_stale_conflict_use_the_application_service()
             .boxed()?,
         AppQueryResult::Validation(report) if report.issues.is_empty()
     ));
+    let metadata = reopened
+        .query(AppQuery::ProjectMetadata(scenario_id))
+        .await
+        .boxed()?;
+    assert!(matches!(
+        metadata,
+        AppQueryResult::Project(project)
+            if project.scenario_id == scenario_id
+                && project.title == "Roster"
+                && project.description == "integration project"
+                && project.revision == Revision::new(1)
+                && project.created_at == timestamp("2026-01-10T12:00:00Z")?
+                && project.updated_at == timestamp("2026-01-10T12:00:00Z")?
+                && project.archived_at.is_none()
+    ));
+    let history = reopened
+        .query(AppQuery::History(scenario_id))
+        .await
+        .boxed()?;
+    assert!(matches!(
+        history,
+        AppQueryResult::History(entries)
+            if entries.len() == 1
+                && entries[0].id == first_command_id
+                && entries[0].revision_before == Revision::INITIAL
+                && entries[0].revision_after == Revision::new(1)
+                && entries[0].actor.actor_id.as_deref() == Some("test.actor")
+                && entries[0].actor.display_name == "Integration Test"
+                && entries[0].source == CommandSource::System
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_mutations_serialize_per_scenario_without_a_global_lock()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let clock = Arc::new(BlockingFirstClock::new(timestamp("2026-01-10T12:00:00Z")?));
+    let mut app_dependencies = dependencies(&directory)?;
+    app_dependencies.clock = clock.clone();
+    let app = EuthetoApp::open(app_dependencies).await.boxed()?;
+    let first_scenario = create_project(&app, "Contended scenario").await.boxed()?;
+    let independent_scenario = create_project(&app, "Independent scenario").await.boxed()?;
+    let first_command = add_entity_envelope(first_scenario, Revision::INITIAL, "First mutation")?;
+    let same_scenario_command =
+        add_entity_envelope(first_scenario, Revision::new(1), "Serialized mutation")?;
+    let independent_command = add_entity_envelope(
+        independent_scenario,
+        Revision::INITIAL,
+        "Independent mutation",
+    )?;
+    let entered = Arc::clone(&clock.entered);
+    let release = Arc::clone(&clock.release);
+
+    clock.arm();
+    let first_app = app.clone();
+    let first_request_id = request_id()?;
+    let first_task = tokio::spawn(async move {
+        first_app
+            .execute(AppCommand::ApplyScenario {
+                request_id: first_request_id,
+                envelope: first_command,
+                truncate_redo: false,
+            })
+            .await
+    });
+    tokio::task::spawn_blocking(move || {
+        entered.wait();
+    })
+    .await?;
+
+    let mut same_scenario = Box::pin(app.execute(AppCommand::ApplyScenario {
+        request_id: request_id()?,
+        envelope: same_scenario_command,
+        truncate_redo: false,
+    }));
+    let mut same_scenario_result = None;
+    poll_fn(|context| {
+        if let Poll::Ready(result) = same_scenario.as_mut().poll(context) {
+            same_scenario_result = Some(result);
+        }
+        Poll::Ready(())
+    })
+    .await;
+    let same_scenario_serialized = same_scenario_result.is_none() && clock.calls_after_arm() == 1;
+
+    let calls_before_independent = clock.calls_after_arm();
+    let mut independent = Box::pin(app.execute(AppCommand::ApplyScenario {
+        request_id: request_id()?,
+        envelope: independent_command,
+        truncate_redo: false,
+    }));
+    let mut independent_result = None;
+    poll_fn(|context| {
+        if let Poll::Ready(result) = independent.as_mut().poll(context) {
+            independent_result = Some(result);
+        }
+        Poll::Ready(())
+    })
+    .await;
+    let independent_made_progress = clock.calls_after_arm() > calls_before_independent;
+    if independent_made_progress && independent_result.is_none() {
+        independent_result = Some(independent.await);
+    }
+
+    tokio::task::spawn_blocking(move || {
+        release.wait();
+    })
+    .await?;
+    let first_result = first_task.await?;
+    if same_scenario_result.is_none() {
+        same_scenario_result = Some(same_scenario.await);
+    }
+
+    if !same_scenario_serialized {
+        return Err("a contending same-scenario mutation reached the clock before release".into());
+    }
+    if !independent_made_progress {
+        return Err("an independent scenario mutation was blocked by a global lock".into());
+    }
+    first_result.boxed()?;
+    match independent_result {
+        Some(result) => result.boxed()?,
+        None => return Err("the independent scenario mutation did not complete".into()),
+    };
+    match same_scenario_result {
+        Some(result) => result.boxed()?,
+        None => return Err("the same-scenario mutation did not complete after release".into()),
+    };
+    let first_view = scenario_view(&app, first_scenario).await.boxed()?;
+    let independent_view = scenario_view(&app, independent_scenario).await.boxed()?;
+    assert_eq!(first_view.revision, Revision::new(2));
+    assert_eq!(first_view.document.domain.entities.len(), 2);
+    assert_eq!(independent_view.revision, Revision::new(1));
+    assert_eq!(independent_view.document.domain.entities.len(), 1);
     Ok(())
 }
 
@@ -387,6 +567,72 @@ async fn batch_undo_and_redo_survive_restart() -> Result<(), Box<dyn Error>> {
         .await
         .boxed()?;
     assert!(matches!(history, AppQueryResult::History(entries) if entries.len() == 1));
+    Ok(())
+}
+
+#[tokio::test]
+async fn branch_truncation_requires_explicit_application_confirmation() -> Result<(), Box<dyn Error>>
+{
+    let directory = private_tempdir()?;
+    let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
+    let scenario_id = create_project(&app, "Explicit branch truncation")
+        .await
+        .boxed()?;
+    app.execute(AppCommand::ApplyScenario {
+        request_id: request_id()?,
+        envelope: add_entity_envelope(scenario_id, Revision::INITIAL, "Original branch")?,
+        truncate_redo: false,
+    })
+    .await
+    .boxed()?;
+    app.execute(AppCommand::Undo {
+        request_id: request_id()?,
+        scenario_id,
+        expected_revision: Revision::new(1),
+    })
+    .await
+    .boxed()?;
+
+    let replacement = add_entity_envelope(scenario_id, Revision::new(2), "Replacement branch")?;
+    let unconfirmed = app
+        .execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: replacement.clone(),
+            truncate_redo: false,
+        })
+        .await;
+    assert!(matches!(
+        unconfirmed,
+        Err(AppError::Validation(report))
+            if report.issues.len() == 1
+                && report.issues[0].code == "history.redo_branch_requires_truncation"
+                && report.issues[0].field_path.as_deref() == Some("/truncateRedo")
+    ));
+    let unchanged = scenario_view(&app, scenario_id).await.boxed()?;
+    assert_eq!(unchanged.revision, Revision::new(2));
+    assert!(unchanged.document.domain.entities.is_empty());
+
+    app.execute(AppCommand::ApplyScenario {
+        request_id: request_id()?,
+        envelope: replacement,
+        truncate_redo: true,
+    })
+    .await
+    .boxed()?;
+    let truncated = scenario_view(&app, scenario_id).await.boxed()?;
+    assert_eq!(truncated.revision, Revision::new(3));
+    assert_eq!(truncated.document.domain.entities.len(), 1);
+    assert!(matches!(
+        app.execute(AppCommand::Redo {
+            request_id: request_id()?,
+            scenario_id,
+            expected_revision: Revision::new(3),
+        })
+        .await,
+        Err(AppError::Validation(report))
+            if report.issues.len() == 1
+                && report.issues[0].code == "history.redo_unavailable"
+    ));
     Ok(())
 }
 

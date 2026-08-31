@@ -6,9 +6,9 @@
 
 This policy covers the name **eutheto**, the stylized `eutheto` name, and any logo or other source-identifying artwork later adopted by the project (together, the “Project Marks”). It does not claim that a logo has already been adopted, that any mark is registered, or that a registration has been filed or granted.
 
-The project's legal owner or trademark steward, canonical hosting organization, permission contact, final visual identity, and registration strategy are unresolved governance and identity gates in the [roadmap index](docs/roadmap/README.md) and [active Phase 00 document](docs/roadmap/00-repository-and-reproducible-tooling.md). Rights, if any, remain with their lawful owner; this repository does not invent or transfer ownership.
+The project's legal owner or trademark steward, canonical hosting organization, permission contact, final visual identity, and registration strategy are unresolved governance and identity gates in the [roadmap index](docs/roadmap/README.md). Rights, if any, remain with their lawful owner; this repository does not invent or transfer ownership.
 
-- **Owner:** the Phase 00 identity and governance decisions required by the roadmap.
+- **Owner:** the identity and governance decisions required by the roadmap.
 - **Closure criterion:** approved records identify the lawful steward and permission contact, establish any official mark and brand assets, document applicable registrations without overstatement, and update this policy and repository notices consistently.
 
 Until that gate closes, there is no project channel able to grant special trademark permission. Do not treat silence, a contribution acceptance, or software-license compliance as permission.

@@ -95,7 +95,7 @@ jobs:
           fuzz_rustc=$(rustup which --toolchain "$FUZZ_TOOLCHAIN" rustc)
           fuzz_rustdoc=$(rustup which --toolchain "$FUZZ_TOOLCHAIN" rustdoc)
           commit_date=$($fuzz_rustc --version --verbose | sed -n 's/^commit-date: //p')
-          [[ "$commit_date" == '2026-08-28' ]]
+          [[ "$commit_date" == '2026-08-27' ]]
 
           {
             printf 'FUZZ_CARGO=%s\n' "$fuzz_cargo"

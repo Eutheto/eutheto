@@ -2,19 +2,19 @@
 
 # Contributing repository automation
 
-This file applies to changes under `.github/`. The repository-wide [contribution guide](../CONTRIBUTING.md), [agent instructions](../AGENTS.md), active [Phase 00 contract](../docs/roadmap/00-repository-and-reproducible-tooling.md), and [security policy](../SECURITY.md) remain authoritative.
+This file applies to changes under `.github/`. The repository-wide [contribution guide](../CONTRIBUTING.md), [agent instructions](../AGENTS.md), active [Phase 02 contract](../docs/roadmap/02-domain-pack-and-planning-ir-contracts.md), and [security policy](../SECURITY.md) remain authoritative.
 
 ## Before changing automation
 
 1. Identify the active phase, work-package or issue ID and the exact acceptance evidence the change serves.
 2. Use the checked-in `Justfile`, Nix environment, and `xtask` entry points. A workflow must call the same repository command a contributor can run; it must not hide a second build or generation convention in YAML.
-3. Preserve closed gates. A job that cannot yet run must say `unavailable` or `deferred` and must not emit passing evidence. Phase 00 must not claim solver, packaged desktop E2E, signing, updater, benchmark, fuzz, publication, or production-identity evidence that does not exist.
+3. Preserve closed gates. A job that cannot yet run must say `unavailable` or `deferred` and must not emit passing evidence. Do not claim solver, packaged desktop E2E, signing, updater, benchmark, publication, or production-identity evidence that does not exist. Phase 01 fuzz and unbundled Linux Tauri E2E jobs report only completed executions.
 4. Keep changes narrow. Do not combine a workflow policy change with unrelated dependency or generated-output drift.
 5. Treat `CODEOWNERS` as the ownership map. While only one active maintainer exists, do not create an impossible self-approval gate; restore required independent ownership review when a second qualified maintainer is active.
 
 ## Workflow requirements
 
-The required Phase-00 workflow files are `pr.yml`, `portable.yml`, `security.yml`, `benchmark.yml`, `fuzz.yml`, `release.yml`, and `dependency-update.yml`. The portable workflow owns the current unbundled desktop launch smoke. Packaged desktop E2E remains deferred to the release phases.
+The required repository workflow files are `pr.yml`, `portable.yml`, `security.yml`, `benchmark.yml`, `fuzz.yml`, `release.yml`, and `dependency-update.yml`. The portable workflow owns the current unbundled Linux Tauri E2E and desktop launch smoke. Packaged desktop E2E remains deferred to the release phases.
 
 Every workflow change must satisfy all applicable rules:
 
