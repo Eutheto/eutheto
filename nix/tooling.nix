@@ -125,6 +125,30 @@ let
   };
   pnpm = pnpmFromRegistry;
 
+  tauriDriverVersion = "2.0.6";
+  tauriDriver = pkgs.rustPlatform.buildRustPackage {
+    pname = "tauri-driver";
+    version = tauriDriverVersion;
+
+    src = pkgs.fetchCrate {
+      pname = "tauri-driver";
+      version = tauriDriverVersion;
+      hash = "sha256-fTCkEs4NLBW0khaHL4jpVNkrbQg22YPsRMjfJNqnCWA=";
+    };
+    cargoHash = "sha256-MThAcU+U8PyBGauh3dy7ZRvRX9INmOEeghIlQEGLAPs=";
+
+    meta = {
+      description = "WebDriver intermediary for Tauri applications";
+      homepage = "https://github.com/tauri-apps/tauri";
+      license = with lib.licenses; [
+        asl20
+        mit
+      ];
+      mainProgram = "tauri-driver";
+      platforms = lib.platforms.linux;
+    };
+  };
+
   llvm = pkgs.llvmPackages;
 
   executableTools = [
@@ -194,7 +218,11 @@ let
 
   linuxTools = [
     pkgs.patchelf
+    pkgs.util-linux
+    pkgs.iproute2
     pkgs.xvfb-run
+    pkgs.webkitgtk_4_1
+    tauriDriver
     desktopRuntime
   ];
   linuxLibraries = [
