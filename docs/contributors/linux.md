@@ -8,7 +8,7 @@ Follow [`development.md`](development.md) for the `direnv` and no-`direnv` entry
 
 ## Desktop libraries supplied by Nix
 
-The default shell supplies the GTK3/Tauri development and runtime set, including GLib, GTK3, WebKitGTK 4.1, libsoup 3, librsvg, the current Tauri AppIndicator dependency, `pkg-config`, and an X virtual server. It also constructs `PKG_CONFIG_PATH` and the Linux runtime library path from those declared packages.
+The default shell supplies the GTK3/Tauri development and runtime set, including GLib, GTK3, WebKitGTK 4.1, libsoup 3, librsvg, the current Tauri AppIndicator dependency, `pkg-config`, and an X virtual server. It also constructs `PKG_CONFIG_PATH` and the Linux runtime library path from those declared packages. The canonical `just desktop-dev` recipe launches through a repository-pinned [`nixGL`](https://github.com/nix-community/nixGL) wrapper so WebKitGTK receives a graphics userspace compatible with the Nix libraries instead of mixing them with ambient distribution libraries.
 
 After entering `nix develop`, verify the key package contracts without consulting ambient distro packages:
 
@@ -21,6 +21,14 @@ pkg-config --modversion librsvg-2.0
 ```
 
 A missing `.pc` file inside the Nix shell is a flake/tooling defect or an unsupported lock state; installing a global `-dev` package is not the canonical fix. Confirm that the command was run inside the shell (`EUTHETO_SHELL` is set), then report the failed `pkg-config` query and selected Nix system.
+
+## Automatic graphics runtime
+
+No separate `nixGL` installation or command prefix is required. On Linux, `just desktop-dev` selects the pinned Mesa wrapper for Intel, AMD, and Nouveau graphics. On `x86_64-linux` with the proprietary NVIDIA kernel module loaded, it instead selects the matching NVIDIA wrapper at command execution time. That host-selected NVIDIA path may populate the Nix cache on first launch; entering `nix develop` remains side-effect-free. macOS and native Windows keep their platform-native launch paths.
+
+The wrapper deliberately runs inside the development shell. Reversing that order allows the shell's `LD_LIBRARY_PATH` to replace the wrapper's graphics runtime and can reproduce WebKitGTK `EGL_BAD_PARAMETER` failures. Do not prepend `/usr/lib`, preload Mesa drivers, or install distribution development packages to alter the canonical path.
+
+The upstream proprietary NVIDIA wrapper is `x86_64-linux`-only. `aarch64-linux` uses the Mesa path and therefore requires a Mesa-supported driver such as Nouveau; a proprietary NVIDIA aarch64 desktop remains outside the currently verified development-host contract.
 
 ## Wayland and X11 diagnostics
 

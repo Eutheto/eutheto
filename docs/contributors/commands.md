@@ -67,7 +67,7 @@ Never hand-edit a generated product. Change its authoritative input, run `just g
 | --- | --- |
 | `just cli` | Runs `optimizer status`, the real but explicitly non-final Phase-00 CLI behavior. |
 | `just ui-dev` | Starts the Vue/Vite development server without the native shell. |
-| `just desktop-dev` | Starts the Tauri development shell. Native WebView prerequisites apply. |
+| `just desktop-dev` | Starts the Tauri development shell. Linux launches through the pinned automatic graphics wrapper; macOS and native Windows use their platform-native WebView paths. |
 | `just cli-build` | Builds the locked `eutheto-cli` package. |
 | `just ui-build` | Type-checks and builds the Vue/Vite frontend through its package script. |
 | `just desktop-build` | Builds the native Phase-00 Tauri shell with release bundling disabled. This does not claim installer, updater, signing, or public application-identity readiness. |

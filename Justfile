@@ -5,6 +5,7 @@ fuzz_toolchain := "nightly-2026-08-28"
 fuzz_dir := "crates/eutheto-import/fuzz"
 fuzz_artifacts := env_var_or_default("FUZZ_ARTIFACTS", ".cache/fuzz-artifacts")
 fuzz_corpus := env_var_or_default("FUZZ_CORPUS", ".cache/fuzz-corpus")
+desktop_runtime := if os() == "linux" { "eutheto-desktop-runtime" } else { "" }
 
 # Show the canonical repository commands.
 default:
@@ -156,7 +157,7 @@ ui-dev:
 
 # Run the Tauri development shell.
 desktop-dev:
-    pnpm --filter @eutheto/desktop run tauri dev
+    {{ desktop_runtime }} pnpm --filter @eutheto/desktop run tauri dev
 
 # Build the Phase-01 CLI.
 cli-build:

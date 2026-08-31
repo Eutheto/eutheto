@@ -1,4 +1,8 @@
-{ pkgs, src }:
+{
+  pkgs,
+  src,
+  tooling,
+}:
 {
   required-files = pkgs.runCommand "eutheto-required-files" { } ''
     set -eu
@@ -238,4 +242,7 @@
     done
     touch "$out"
   '';
+}
+// pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+  desktop-runtime = tooling.desktopRuntime;
 }

@@ -53,6 +53,7 @@ Related delivery files: [Performance and Solver UX Targets](performance-and-solv
 | Item | Latest observed | Controlling recommendation | Reason and owner |
 |---|---:|---:|---|
 | nixpkgs | `nixos-unstable` snapshot identifies as 26.11 | **`nixos-25.11`** | The 26.11 unstable snapshot dropped `x86_64-darwin`, which Phase 00 still requires alongside the other three flake systems. `nixos-25.11` is the newest line verified compatible with that four-system evaluation contract, not a claim about the newest nixpkgs generally. Re-evaluate when a newer supported line restores `x86_64-darwin` or project support policy closes that target. |
+| nixGL | `b6105297e6f0cd041670c3e8628394d4ee247ed5` | **Locked flake input following repository nixpkgs** | Non-NixOS Linux cannot use Nix-built WebKitGTK reliably with ambient Mesa/NVIDIA userspace. The canonical desktop recipe applies the locked Mesa wrapper automatically and performs host-version NVIDIA selection only when the explicit launch command runs. Phase 0 owns the development wrapper; Phase 11/12 separately owns packaged runtime evidence. |
 | Rust | 1.98.0 | **1.97.1** | Rust 1.98.0 has a P-critical trait-object vtable miscompilation; re-evaluate when 1.98.1 or newer fixed stable exists and passes Phase 0/12 target suites. [Rust releases](https://blog.rust-lang.org/releases/) and [issue #161441](https://github.com/rust-lang/rust/issues/161441). |
 | Node.js | 26.8.1 Current | **24.20.0 LTS** | Production uses current LTS; re-evaluate Node 26 when it becomes LTS. Phase 0 owns engines/Nix. [Node distributions](https://nodejs.org/dist/). |
 | pnpm | 11.24.0 | **11.24.0** | Direct registry current stable supports Node `>=22.13`; replaces blueprint/report pnpm-10 guidance. Phase 0 owns lock/integrity and Nix availability. [npm](https://www.npmjs.com/package/pnpm). |
@@ -60,6 +61,12 @@ Related delivery files: [Performance and Solver UX Targets](performance-and-solv
 | protobuf/protoc | 36.0 | **Match pinned OR-Tools 9.15 protobuf/proto contract** | Do not blindly use newest protoc; Phase 3 closes generation and handshake compatibility. [protobuf v36.0](https://github.com/protocolbuffers/protobuf/releases/tag/v36.0). |
 | OR-Tools | 9.15 | **9.15 after K.3 gates** | Platform build, benchmark, CMake, linkage, protocol, SBOM/license, callback, and assumption-core gates remain. Phase 3 owns pin; Phase 11/12 owns exact artifacts. [release](https://github.com/google/or-tools/releases/tag/v9.15). |
 | Pumpkin | 0.5.0 | **0.5.0 after K.4 gates** | Actual support matrix, dedicated-thread ownership, cooperative cancellation/time limits, verifier/contracts, and benchmarks precede auto-routing. Phase 8 owns. [crates.io](https://crates.io/crates/pumpkin-solver). |
+
+### Linux graphics runtime provenance
+
+The `nixGL` input is locked to revision `b6105297e6f0cd041670c3e8628394d4ee247ed5` and follows the repository's `nixpkgs` input. Its verified wrapper contract is: `nixGLIntel` supplies Mesa for Intel, AMD, and Nouveau; `auto.nixGLDefault` chooses the proprietary NVIDIA wrapper when `/proc/driver/nvidia/version` identifies a loaded NVIDIA module and otherwise chooses Mesa. The automatic NVIDIA derivation is necessarily impure because its userspace version must exactly match the host kernel module; `just desktop-dev` defers that selection until the explicit launch so shell entry and non-desktop commands remain pure and side-effect-free.
+
+The upstream NVIDIA download path is x86-64-only. The locked flake therefore supports the Mesa path on both Linux systems and proprietary NVIDIA only on `x86_64-linux`; a proprietary NVIDIA `aarch64-linux` desktop is not claimed. Sources reverified on 2026-08-29: [`nixGL` README](https://github.com/nix-community/nixGL/blob/b6105297e6f0cd041670c3e8628394d4ee247ed5/README.md), [`flake.nix`](https://github.com/nix-community/nixGL/blob/b6105297e6f0cd041670c3e8628394d4ee247ed5/flake.nix), and [`nixGL.nix`](https://github.com/nix-community/nixGL/blob/b6105297e6f0cd041670c3e8628394d4ee247ed5/nixGL.nix).
 
 ### Node 24.20.0 Nix provenance
 
