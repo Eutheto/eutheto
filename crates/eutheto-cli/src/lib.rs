@@ -2950,6 +2950,11 @@ mod tests {
     #[test]
     fn injected_cancellation_prevents_export_publication_and_leaves_no_temp()
     -> Result<(), Box<dyn Error>> {
+        #[cfg(windows)]
+        let directory = tempfile::tempdir_in(
+            dirs::data_local_dir().ok_or("Windows local data directory is unavailable")?,
+        )?;
+        #[cfg(not(windows))]
         let directory = tempfile::tempdir()?;
         let data_dir = directory.path().to_string_lossy().into_owned();
         let mut create_stdout = Vec::new();
@@ -2971,7 +2976,13 @@ mod tests {
             &mut create_stdout,
             &mut create_stderr,
         );
-        assert_eq!(created, CliExitCode::Success);
+        assert_eq!(
+            created,
+            CliExitCode::Success,
+            "create stdout: {}; create stderr: {}",
+            String::from_utf8_lossy(&create_stdout),
+            String::from_utf8_lossy(&create_stderr)
+        );
         assert!(create_stderr.is_empty());
         let response: serde_json::Value = serde_json::from_slice(&create_stdout)?;
         let scenario_id = response["result"]["scenarioId"]

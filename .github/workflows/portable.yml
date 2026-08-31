@@ -212,7 +212,7 @@ jobs:
           nix develop --no-update-lock-file --command \
             timeout --signal=TERM 10s xvfb-run -a \
               --server-args="-screen 0 1280x720x24" \
-              .cache/cargo-target/release/eutheto-desktop \
+              eutheto-desktop-runtime .cache/cargo-target/release/eutheto-desktop \
               > "$RUNNER_TEMP/eutheto-desktop.log" 2>&1
           status=$?
           set -e
