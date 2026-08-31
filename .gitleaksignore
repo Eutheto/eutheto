@@ -1,6 +1,9 @@
 # Synthetic credential-shape fixtures intentionally exercise export rejection.
 70023a486de8825abb6e2983697e3ee106cc6c73:crates/eutheto-types/src/portable.rs:private-key:685
 70023a486de8825abb6e2983697e3ee106cc6c73:crates/eutheto-types/src/portable.rs:private-key:687
+a652ebed984c38be75620cfaf056ae49a33fdc77:crates/eutheto-types/src/portable.rs:private-key:685
+a652ebed984c38be75620cfaf056ae49a33fdc77:crates/eutheto-types/src/portable.rs:private-key:687
 
 # Typed UUID map key; not an API credential.
 70023a486de8825abb6e2983697e3ee106cc6c73:crates/eutheto-export/src/lib.rs:generic-api-key:2868
+a652ebed984c38be75620cfaf056ae49a33fdc77:crates/eutheto-export/src/lib.rs:generic-api-key:2868
