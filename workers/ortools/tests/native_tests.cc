@@ -429,10 +429,15 @@ void TestRealSolveOrderingAndMapping() {
 
 int main() {
   try {
+    std::cerr << "running TestSha256\n";
     TestSha256();
+    std::cerr << "running TestFrameBoundariesAndWire\n";
     TestFrameBoundariesAndWire();
+    std::cerr << "running TestHandshake\n";
     TestHandshake();
+    std::cerr << "running TestSolveRejections\n";
     TestSolveRejections();
+    std::cerr << "running TestRealSolveOrderingAndMapping\n";
     TestRealSolveOrderingAndMapping();
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {

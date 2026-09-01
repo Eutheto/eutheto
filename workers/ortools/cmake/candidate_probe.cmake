@@ -531,6 +531,7 @@ execute_process(
   RESULT_VARIABLE ctest_result
   OUTPUT_FILE "${evidence_dir}/ctest.log"
   ERROR_FILE "${evidence_dir}/ctest.log"
+  TIMEOUT 120
   COMMAND_ECHO STDOUT
   ENCODING UTF-8
 )
