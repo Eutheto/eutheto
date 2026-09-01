@@ -53,6 +53,7 @@ fn handshake_request() -> Result<ParentFrame, ProtocolFault> {
             protocol_minor: policy.protocol_minor(),
             core_version: "0.1.0".to_owned(),
             expected_backend_id: "ortools-cp-sat".to_owned(),
+            expected_manifest_sha256: Bytes::copy_from_slice(&MANIFEST),
             required_capabilities: vec![
                 Capability::CpSat as i32,
                 Capability::SolutionProjection as i32,
@@ -1043,6 +1044,20 @@ fn handshake_mismatches_fail_before_solve() -> Result<(), ProtocolFault> {
             field: "core_version"
         }))
     ));
+    for expected_manifest_sha256 in [Bytes::from_static(&[0; 31]), Bytes::from_static(&[0; 32])] {
+        let mut invalid_manifest = handshake_request()?;
+        if let Some(parent_frame::Body::HandshakeRequest(request)) = &mut invalid_manifest.body {
+            request.expected_manifest_sha256 = expected_manifest_sha256;
+        }
+        let mut manifest_state = ParentProtocol::new(expectations()?);
+        assert!(matches!(
+            manifest_state.on_parent_frame(&invalid_manifest),
+            Err(ProtocolFault::State(StateFault::InvalidHandshake(
+                "expected_manifest_sha256"
+            )))
+        ));
+        assert_eq!(manifest_state.phase(), ParentPhase::Failed);
+    }
 
     assert_handshake_rejected(|success| {
         success.protocol_minor = success.protocol_minor.saturating_add(1);
@@ -1060,7 +1075,7 @@ fn handshake_mismatches_fail_before_solve() -> Result<(), ProtocolFault> {
 }
 
 #[test]
-fn unimplemented_protocol_minor_is_rejected_at_construction() {
+fn protocol_minor_must_exactly_match_v1_1() {
     assert!(
         HandshakeExpectations::new(
             1,
@@ -1074,8 +1089,25 @@ fn unimplemented_protocol_minor_is_rejected_at_construction() {
             [Capability::CpSat, Capability::SolutionProjection],
             [Capability::CpSat, Capability::SolutionProjection],
         )
-        .is_err()
+        .is_ok()
     );
+    for minor in [0, 2] {
+        assert!(
+            HandshakeExpectations::new(
+                1,
+                minor,
+                "eutheto-ortools-worker",
+                "0.1.0",
+                "ortools-cp-sat",
+                "9.15.6755",
+                "0.1.0",
+                MANIFEST,
+                [Capability::CpSat, Capability::SolutionProjection],
+                [Capability::CpSat, Capability::SolutionProjection],
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

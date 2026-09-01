@@ -1,12 +1,14 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
 use prost::{Message, bytes::Bytes};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -23,10 +25,78 @@ pub(crate) const RUST_BINDING_PATH: &str =
     "crates/eutheto-protocol/src/generated/eutheto.worker.v1.rs";
 pub(crate) const CPP_HEADER_PATH: &str = "protocol/generated/cpp/solver-worker.pb.h";
 pub(crate) const CPP_SOURCE_PATH: &str = "protocol/generated/cpp/solver-worker.pb.cc";
+pub(crate) const CPP_POLICY_HEADER_PATH: &str = "protocol/generated/cpp/protocol-policy.h";
 pub(crate) const DESCRIPTOR_PATH: &str = "protocol/generated/eutheto.worker.v1.descriptor.pb";
 const OWNED_PROTOCOL_ROOTS: &[&str] = &["protocol/generated", "protocol/golden"];
 
 pub(crate) type GeneratedOutput = (String, Vec<u8>);
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CppPolicy {
+    applied_parameters_hash: CppAppliedParametersHash,
+    #[serde(rename = "compatibility")]
+    _compatibility: Value,
+    field_limits: BTreeMap<String, CppFieldLimit>,
+    frame_classes: BTreeMap<String, CppFrameClass>,
+    framing: CppFraming,
+    limits: CppLimits,
+    #[serde(rename = "package")]
+    _package: String,
+    #[serde(rename = "protocol")]
+    _protocol: String,
+    version: CppProtocolVersion,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CppAppliedParametersHash {
+    algorithm: String,
+    domain_separator: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CppFieldLimit {
+    max_bytes: Option<usize>,
+    max_count: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CppFrameClass {
+    max_payload_bytes: usize,
+    #[serde(rename = "routes")]
+    _routes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CppFraming {
+    length_prefix_bytes: usize,
+    length_prefix_order: String,
+    min_payload_bytes: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CppLimits {
+    events_per_second: usize,
+    events_per_session: usize,
+    frames_per_session: usize,
+    max_nesting_depth: usize,
+    max_repeated_field_items: usize,
+    max_stderr_bytes: usize,
+    max_string_bytes: usize,
+    max_worker_threads: usize,
+    total_session_bytes: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CppProtocolVersion {
+    major: u32,
+    minor: u32,
+}
 
 pub(crate) fn generated_files(repo_root: &Path) -> Result<Vec<GeneratedOutput>> {
     let protoc = protoc_path()?;
@@ -201,6 +271,10 @@ fn generate_once(
             ),
         ),
         (
+            CPP_POLICY_HEADER_PATH.to_owned(),
+            generate_cpp_policy_header(repo_root)?,
+        ),
+        (
             CPP_SOURCE_PATH.to_owned(),
             with_source_header(
                 b"//",
@@ -217,6 +291,137 @@ fn generate_once(
     files.extend(golden_fixtures()?);
     files.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(files)
+}
+
+#[allow(clippy::too_many_lines)]
+fn generate_cpp_policy_header(repo_root: &Path) -> Result<Vec<u8>> {
+    let source = fs::read(repo_root.join("protocol/version.json"))
+        .context("failed to read protocol policy for C++ projection")?;
+    let policy: CppPolicy = serde_json::from_slice(&source)
+        .context("failed to decode protocol policy for C++ projection")?;
+    ensure!(
+        policy.applied_parameters_hash.algorithm == "sha256",
+        "C++ policy projection requires the SHA-256 applied-parameter hash"
+    );
+    let domain_separator = policy.applied_parameters_hash.domain_separator.as_bytes();
+    ensure!(
+        domain_separator == b"eutheto.applied-solve-parameters.v1\0",
+        "C++ policy projection requires the exact 36-byte applied-parameter domain separator"
+    );
+    ensure!(
+        policy.framing.length_prefix_order == "big-endian",
+        "C++ policy projection requires big-endian framing"
+    );
+
+    let mut output = String::from(
+        "#pragma once\n\n#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <string_view>\n\nnamespace eutheto::worker::v1::policy {\n\n",
+    );
+    writeln!(
+        output,
+        "inline constexpr std::uint32_t kProtocolMajor = {};",
+        policy.version.major
+    )?;
+    writeln!(
+        output,
+        "inline constexpr std::uint32_t kProtocolMinor = {};",
+        policy.version.minor
+    )?;
+    writeln!(
+        output,
+        "inline constexpr std::size_t kLengthPrefixBytes = {};",
+        policy.framing.length_prefix_bytes
+    )?;
+    writeln!(
+        output,
+        "inline constexpr std::size_t kMinPayloadBytes = {};",
+        policy.framing.min_payload_bytes
+    )?;
+    output.push_str("inline constexpr bool kLengthPrefixBigEndian = true;\n\n");
+
+    for (name, class) in &policy.frame_classes {
+        write_size_constant(
+            &mut output,
+            &format!("k{}MaxPayloadBytes", cpp_pascal_case(name)?),
+            class.max_payload_bytes,
+        )?;
+    }
+    output.push('\n');
+    for (name, value) in [
+        ("kEventsPerSecond", policy.limits.events_per_second),
+        ("kEventsPerSession", policy.limits.events_per_session),
+        ("kFramesPerSession", policy.limits.frames_per_session),
+        ("kMaxNestingDepth", policy.limits.max_nesting_depth),
+        (
+            "kMaxRepeatedFieldItems",
+            policy.limits.max_repeated_field_items,
+        ),
+        ("kMaxStderrBytes", policy.limits.max_stderr_bytes),
+        ("kMaxStringBytes", policy.limits.max_string_bytes),
+        ("kMaxWorkerThreads", policy.limits.max_worker_threads),
+        ("kTotalSessionBytes", policy.limits.total_session_bytes),
+    ] {
+        write_size_constant(&mut output, name, value)?;
+    }
+    output.push('\n');
+    for (field, limit) in &policy.field_limits {
+        let field = field.strip_prefix("eutheto.worker.v1.").with_context(|| {
+            format!("field limit `{field}` is outside the worker protocol package")
+        })?;
+        let (suffix, value) = match (limit.max_bytes, limit.max_count) {
+            (Some(value), None) => ("MaxBytes", value),
+            (None, Some(value)) => ("MaxCount", value),
+            _ => bail!("field limit `{field}` must define exactly one cap"),
+        };
+        write_size_constant(
+            &mut output,
+            &format!("k{}{suffix}", cpp_pascal_case(field)?),
+            value,
+        )?;
+    }
+    output.push('\n');
+    writeln!(
+        output,
+        "inline constexpr std::string_view kAppliedParametersHashAlgorithm = \"{}\";",
+        policy.applied_parameters_hash.algorithm
+    )?;
+    writeln!(
+        output,
+        "inline constexpr std::array<std::uint8_t, {}>",
+        domain_separator.len()
+    )?;
+    output.push_str("    kAppliedParametersHashDomainSeparator = {\n");
+    for chunk in domain_separator.chunks(12) {
+        output.push_str("        ");
+        for byte in chunk {
+            write!(output, "0x{byte:02x}, ")?;
+        }
+        output.push('\n');
+    }
+    output.push_str("    };\n\n}  // namespace eutheto::worker::v1::policy\n");
+    Ok(with_source_header(
+        b"//",
+        "C++ protocol policy projection",
+        output.as_bytes(),
+    ))
+}
+
+fn write_size_constant(output: &mut String, name: &str, value: usize) -> std::fmt::Result {
+    writeln!(output, "inline constexpr std::size_t {name} = {value};")
+}
+
+fn cpp_pascal_case(value: &str) -> Result<String> {
+    let mut result = String::new();
+    for word in value.split(['.', '_']) {
+        ensure!(
+            !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_alphanumeric()),
+            "policy name `{value}` cannot be projected to a C++ identifier"
+        );
+        let mut bytes = word.bytes();
+        let first = bytes.next().context("policy identifier word is empty")?;
+        result.push(char::from(first.to_ascii_uppercase()));
+        result.extend(bytes.map(char::from));
+    }
+    Ok(result)
 }
 
 fn run_protoc<const N: usize>(protoc: &Path, current_dir: &Path, args: [String; N]) -> Result<()> {
@@ -294,13 +499,14 @@ fn fixture_frames() -> Vec<(&'static str, FixtureFrame)> {
             FixtureFrame::Parent(ParentFrame {
                 body: Some(parent_frame::Body::HandshakeRequest(HandshakeRequest {
                     protocol_major: 1,
-                    protocol_minor: 0,
+                    protocol_minor: 1,
                     core_version: "0.1.0".to_owned(),
                     expected_backend_id: "ortools-cp-sat".to_owned(),
                     required_capabilities: vec![
                         Capability::CpSat as i32,
                         Capability::SolutionProjection as i32,
                     ],
+                    expected_manifest_sha256: Bytes::from_static(&[0x11; 32]),
                 })),
             }),
         ),
@@ -310,7 +516,7 @@ fn fixture_frames() -> Vec<(&'static str, FixtureFrame)> {
                 body: Some(worker_frame::Body::HandshakeResponse(HandshakeResponse {
                     outcome: Some(handshake_response::Outcome::Success(HandshakeSuccess {
                         protocol_major: 1,
-                        protocol_minor: 0,
+                        protocol_minor: 1,
                         worker_identity: "eutheto-ortools-worker".to_owned(),
                         worker_version: "0.1.0".to_owned(),
                         backend_id: "ortools-cp-sat".to_owned(),
@@ -338,7 +544,7 @@ fn fixture_frames() -> Vec<(&'static str, FixtureFrame)> {
                         code: HandshakeErrorCode::UnsupportedProtocolMajor as i32,
                         message: "unsupported protocol major 2".to_owned(),
                         supported_protocol_major: Some(1),
-                        supported_protocol_minor: Some(0),
+                        supported_protocol_minor: Some(1),
                     })),
                 })),
             }),
@@ -507,6 +713,7 @@ fn render_parent_frame(frame: &ParentFrame) -> Result<Value> {
             "handshakeRequest": {
                 "coreVersion": request.core_version,
                 "expectedBackendId": request.expected_backend_id,
+                "expectedManifestSha256": hex_bytes(&request.expected_manifest_sha256),
                 "protocolMajor": request.protocol_major,
                 "protocolMinor": request.protocol_minor,
                 "requiredCapabilities": capability_names(&request.required_capabilities)?
@@ -937,6 +1144,7 @@ mod tests {
             serde_json::json!(10_000)
         );
         let generated = super::generated_files(&root)?;
+        assert_eq!(generated.len(), 23);
         assert!(
             generated
                 .iter()
@@ -949,6 +1157,33 @@ mod tests {
                 .count(),
             18
         );
+        let policy_header = generated
+            .iter()
+            .find(|(path, _)| path == super::CPP_POLICY_HEADER_PATH)
+            .ok_or_else(|| anyhow::anyhow!("generated C++ policy header is missing"))?;
+        let policy_source = std::str::from_utf8(&policy_header.1)?;
+        assert!(policy_source.contains("inline constexpr std::uint32_t kProtocolMinor = 1;"));
+        assert!(policy_source.contains("kAppliedParametersHashDomainSeparator"));
+        assert!(policy_source.contains("inline constexpr std::size_t kMaxWorkerThreads = 10000;"));
+        for (field, limit) in policy["field_limits"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("field limit policy is not an object"))?
+        {
+            let field = field
+                .strip_prefix("eutheto.worker.v1.")
+                .ok_or_else(|| anyhow::anyhow!("field limit is outside the protocol package"))?;
+            let suffix = if limit.get("max_bytes").is_some() {
+                "MaxBytes"
+            } else {
+                "MaxCount"
+            };
+            let constant = format!("k{}{suffix}", super::cpp_pascal_case(field)?);
+            assert!(
+                policy_source.contains(&constant),
+                "generated C++ policy header is missing `{constant}`"
+            );
+        }
+
         let rust_binding = generated
             .iter()
             .find(|(path, _)| path == super::RUST_BINDING_PATH)
@@ -956,6 +1191,7 @@ mod tests {
         let rust_source = std::str::from_utf8(&rust_binding.1)?;
         assert!(rust_source.contains("pub cp_model_proto: ::prost::bytes::Bytes"));
         assert!(!rust_source.contains("pub cp_model_proto: ::prost::alloc::vec::Vec<u8>"));
+        assert!(rust_source.contains("pub expected_manifest_sha256: ::prost::bytes::Bytes"));
 
         let handshake_request = generated
             .iter()
@@ -965,6 +1201,14 @@ mod tests {
         assert_eq!(
             request["handshakeRequest"]["requiredCapabilities"],
             serde_json::json!(["CAPABILITY_CP_SAT", "CAPABILITY_SOLUTION_PROJECTION"])
+        );
+        assert_eq!(
+            request["handshakeRequest"]["protocolMinor"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            request["handshakeRequest"]["expectedManifestSha256"],
+            serde_json::json!("1111111111111111111111111111111111111111111111111111111111111111")
         );
 
         let handshake_response = generated
@@ -983,6 +1227,14 @@ mod tests {
                 "CAPABILITY_SOLUTION_STATS",
                 "CAPABILITY_DETERMINISTIC_TIME"
             ])
+        );
+        assert_eq!(
+            response["handshakeResponse"]["success"]["protocolMinor"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            response["handshakeResponse"]["success"]["manifestSha256"],
+            request["handshakeRequest"]["expectedManifestSha256"]
         );
         Ok(())
     }

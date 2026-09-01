@@ -58,6 +58,7 @@ const EXPECTED_FIXTURES: &[&str] = &[
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VersionContract {
+    applied_parameters_hash: AppliedParametersHash,
     compatibility: Compatibility,
     field_limits: BTreeMap<String, FieldLimit>,
     frame_classes: BTreeMap<String, FrameClass>,
@@ -66,6 +67,13 @@ struct VersionContract {
     package: String,
     protocol: String,
     version: ProtocolVersion,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AppliedParametersHash {
+    algorithm: String,
+    domain_separator: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,8 +165,17 @@ fn validate_policy(contract: &VersionContract) -> Result<()> {
     );
     ensure!(contract.version.major == 1, "protocol major must remain 1");
     ensure!(
-        contract.version.minor == 0,
-        "initial v1 protocol minor must remain 0"
+        contract.version.minor == 1,
+        "current v1 protocol minor must remain 1"
+    );
+    ensure!(
+        contract.applied_parameters_hash.algorithm == "sha256",
+        "applied-parameter hash algorithm must remain SHA-256"
+    );
+    ensure!(
+        contract.applied_parameters_hash.domain_separator.as_bytes()
+            == b"eutheto.applied-solve-parameters.v1\0",
+        "applied-parameter hash domain separator must remain the exact 36-byte v1 value"
     );
     ensure!(
         contract.compatibility.accepted_protocol_majors == [contract.version.major],
@@ -314,6 +331,11 @@ fn validate_exact_field_limits(contract: &VersionContract) -> Result<()> {
         (
             "eutheto.worker.v1.HandshakeRequest.expected_backend_id",
             Some(128),
+            None,
+        ),
+        (
+            "eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256",
+            Some(32),
             None,
         ),
         (
@@ -771,6 +793,7 @@ fn validate_field_signatures(messages: &[DescriptorProto]) -> Result<()> {
                     Type::Enum,
                     ".eutheto.worker.v1.Capability",
                 ),
+                scalar("expected_manifest_sha256", 16, Type::Bytes),
             ],
         ),
         (
@@ -1036,6 +1059,7 @@ fn validate_stable_tags(messages: &[DescriptorProto]) -> Result<()> {
                 ("core_version", 3),
                 ("expected_backend_id", 4),
                 ("required_capabilities", 5),
+                ("expected_manifest_sha256", 16),
             ],
         ),
         ("HandshakeResponse", &[("success", 1), ("error", 2)]),
@@ -1176,7 +1200,7 @@ fn validate_stable_tags(messages: &[DescriptorProto]) -> Result<()> {
     let expected_reserved: &[(&str, &[(i32, i32)])] = &[
         ("ParentFrame", &[(3, 16)]),
         ("WorkerFrame", &[(7, 16)]),
-        ("HandshakeRequest", &[(6, 16)]),
+        ("HandshakeRequest", &[(6, 16), (17, 32)]),
         ("HandshakeResponse", &[(3, 16)]),
         ("HandshakeSuccess", &[(10, 32)]),
         ("HandshakeError", &[(5, 16)]),

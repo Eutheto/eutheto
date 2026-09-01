@@ -2480,6 +2480,7 @@ class HandshakeRequest final : public ::google::protobuf::Message
     kRequiredCapabilitiesFieldNumber = 5,
     kCoreVersionFieldNumber = 3,
     kExpectedBackendIdFieldNumber = 4,
+    kExpectedManifestSha256FieldNumber = 16,
     kProtocolMajorFieldNumber = 1,
     kProtocolMinorFieldNumber = 2,
   };
@@ -2532,6 +2533,21 @@ class HandshakeRequest final : public ::google::protobuf::Message
   ::std::string* PROTOBUF_NONNULL _internal_mutable_expected_backend_id();
 
   public:
+  // bytes expected_manifest_sha256 = 16;
+  void clear_expected_manifest_sha256() ;
+  const ::std::string& expected_manifest_sha256() const;
+  template <typename Arg_ = const ::std::string&, typename... Args_>
+  void set_expected_manifest_sha256(Arg_&& arg, Args_... args);
+  ::std::string* PROTOBUF_NONNULL mutable_expected_manifest_sha256();
+  [[nodiscard]] ::std::string* PROTOBUF_NULLABLE release_expected_manifest_sha256();
+  void set_allocated_expected_manifest_sha256(::std::string* PROTOBUF_NULLABLE value);
+
+  private:
+  const ::std::string& _internal_expected_manifest_sha256() const;
+  PROTOBUF_ALWAYS_INLINE void _internal_set_expected_manifest_sha256(const ::std::string& value);
+  ::std::string* PROTOBUF_NONNULL _internal_mutable_expected_manifest_sha256();
+
+  public:
   // uint32 protocol_major = 1;
   void clear_protocol_major() ;
   ::uint32_t protocol_major() const;
@@ -2556,7 +2572,7 @@ class HandshakeRequest final : public ::google::protobuf::Message
  private:
   class _Internal;
   friend class ::google::protobuf::internal::TcParser;
-  static const ::google::protobuf::internal::TcParseTable<3, 5,
+  static const ::google::protobuf::internal::TcParseTable<3, 6,
                                    0, 74,
                                    2>
       _table_;
@@ -2582,6 +2598,7 @@ class HandshakeRequest final : public ::google::protobuf::Message
     ::google::protobuf::internal::CachedSize _required_capabilities_cached_byte_size_;
     ::google::protobuf::internal::ArenaStringPtr core_version_;
     ::google::protobuf::internal::ArenaStringPtr expected_backend_id_;
+    ::google::protobuf::internal::ArenaStringPtr expected_manifest_sha256_;
     ::uint32_t protocol_major_;
     ::uint32_t protocol_minor_;
     PROTOBUF_TSAN_DECLARE_MEMBER
@@ -5516,7 +5533,7 @@ inline void HandshakeRequest::clear_protocol_major() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.protocol_major_ = 0u;
   ClearHasBit(_impl_._has_bits_[0],
-                  0x00000008U);
+                  0x00000010U);
 }
 inline ::uint32_t HandshakeRequest::protocol_major() const {
   // @@protoc_insertion_point(field_get:eutheto.worker.v1.HandshakeRequest.protocol_major)
@@ -5524,7 +5541,7 @@ inline ::uint32_t HandshakeRequest::protocol_major() const {
 }
 inline void HandshakeRequest::set_protocol_major(::uint32_t value) {
   _internal_set_protocol_major(value);
-  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  SetHasBit(_impl_._has_bits_[0], 0x00000010U);
   // @@protoc_insertion_point(field_set:eutheto.worker.v1.HandshakeRequest.protocol_major)
 }
 inline ::uint32_t HandshakeRequest::_internal_protocol_major() const {
@@ -5541,7 +5558,7 @@ inline void HandshakeRequest::clear_protocol_minor() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.protocol_minor_ = 0u;
   ClearHasBit(_impl_._has_bits_[0],
-                  0x00000010U);
+                  0x00000020U);
 }
 inline ::uint32_t HandshakeRequest::protocol_minor() const {
   // @@protoc_insertion_point(field_get:eutheto.worker.v1.HandshakeRequest.protocol_minor)
@@ -5549,7 +5566,7 @@ inline ::uint32_t HandshakeRequest::protocol_minor() const {
 }
 inline void HandshakeRequest::set_protocol_minor(::uint32_t value) {
   _internal_set_protocol_minor(value);
-  SetHasBit(_impl_._has_bits_[0], 0x00000010U);
+  SetHasBit(_impl_._has_bits_[0], 0x00000020U);
   // @@protoc_insertion_point(field_set:eutheto.worker.v1.HandshakeRequest.protocol_minor)
 }
 inline ::uint32_t HandshakeRequest::_internal_protocol_minor() const {
@@ -5739,6 +5756,71 @@ inline ::google::protobuf::RepeatedField<int>* PROTOBUF_NONNULL
 HandshakeRequest::_internal_mutable_required_capabilities() {
   ::google::protobuf::internal::TSanRead(&_impl_);
   return &_impl_.required_capabilities_;
+}
+
+// bytes expected_manifest_sha256 = 16;
+inline void HandshakeRequest::clear_expected_manifest_sha256() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.expected_manifest_sha256_.ClearToEmpty();
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000008U);
+}
+inline const ::std::string& HandshakeRequest::expected_manifest_sha256() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256)
+  return _internal_expected_manifest_sha256();
+}
+template <typename Arg_, typename... Args_>
+PROTOBUF_ALWAYS_INLINE void HandshakeRequest::set_expected_manifest_sha256(Arg_&& arg, Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  _impl_.expected_manifest_sha256_.SetBytes(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256)
+}
+inline ::std::string* PROTOBUF_NONNULL HandshakeRequest::mutable_expected_manifest_sha256()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  ::std::string* _s = _internal_mutable_expected_manifest_sha256();
+  // @@protoc_insertion_point(field_mutable:eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256)
+  return _s;
+}
+inline const ::std::string& HandshakeRequest::_internal_expected_manifest_sha256() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.expected_manifest_sha256_.Get();
+}
+inline void HandshakeRequest::_internal_set_expected_manifest_sha256(const ::std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.expected_manifest_sha256_.Set(value, GetArena());
+}
+inline ::std::string* PROTOBUF_NONNULL HandshakeRequest::_internal_mutable_expected_manifest_sha256() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.expected_manifest_sha256_.Mutable( GetArena());
+}
+inline ::std::string* PROTOBUF_NULLABLE HandshakeRequest::release_expected_manifest_sha256() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256)
+  if (!CheckHasBit(_impl_._has_bits_[0], 0x00000008U)) {
+    return nullptr;
+  }
+  ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
+  auto* released = _impl_.expected_manifest_sha256_.Release();
+  if (::google::protobuf::internal::DebugHardenForceCopyDefaultString()) {
+    _impl_.expected_manifest_sha256_.Set("", GetArena());
+  }
+  return released;
+}
+inline void HandshakeRequest::set_allocated_expected_manifest_sha256(::std::string* PROTOBUF_NULLABLE value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (value != nullptr) {
+    SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  } else {
+    ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
+  }
+  _impl_.expected_manifest_sha256_.SetAllocated(value, GetArena());
+  if (::google::protobuf::internal::DebugHardenForceCopyDefaultString() && _impl_.expected_manifest_sha256_.IsDefault()) {
+    _impl_.expected_manifest_sha256_.Set("", GetArena());
+  }
+  // @@protoc_insertion_point(field_set_allocated:eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256)
 }
 
 // -------------------------------------------------------------------

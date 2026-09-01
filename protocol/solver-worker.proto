@@ -47,8 +47,12 @@ message HandshakeRequest {
   string expected_backend_id = 4;
   // Every listed capability must be present for handshake success.
   repeated Capability required_capabilities = 5;
+  // Exactly 32 raw bytes: SHA-256 of the installed manifest after the parent
+  // validates that manifest and its worker executable.
+  bytes expected_manifest_sha256 = 16;
 
   reserved 6 to 15;
+  reserved 17 to 31;
 }
 
 message HandshakeResponse {
@@ -69,7 +73,8 @@ message HandshakeSuccess {
   string backend_id = 5;
   string ortools_version = 6;
   string adapter_version = 7;
-  // Exactly 32 raw bytes: SHA-256 of the canonical installed worker manifest.
+  // Exact untrusted echo of the requested 32-byte manifest SHA-256, used only
+  // for correlation; the echo establishes no trust in the manifest or worker.
   bytes manifest_sha256 = 8;
   repeated Capability capabilities = 9;
 

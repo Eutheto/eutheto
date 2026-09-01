@@ -12,6 +12,8 @@ pub const POLICY_JSON: &str = include_str!("../../../protocol/version.json");
 pub const SUFFICIENT_ASSUMPTIONS_ENABLED: bool = false;
 /// Pinned OR-Tools 9.15 `num_workers` upper bound.
 pub const MAX_ORTOOLS_WORKER_THREADS: u32 = 10_000;
+pub(crate) const APPLIED_PARAMETERS_HASH_ALGORITHM: &str = "sha256";
+pub(crate) const APPLIED_PARAMETERS_DOMAIN: &[u8; 36] = b"eutheto.applied-solve-parameters.v1\0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameClass {
@@ -50,6 +52,7 @@ const WORKER_EVENT_ROUTES: &[&str] = &[
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolPolicy {
+    applied_parameters_hash: AppliedParametersHashPolicy,
     protocol: String,
     compatibility: CompatibilityPolicy,
     package: String,
@@ -59,6 +62,13 @@ pub struct ProtocolPolicy {
     limits: GlobalLimits,
     #[serde(default)]
     field_limits: BTreeMap<String, FieldLimit>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct AppliedParametersHashPolicy {
+    algorithm: String,
+    domain_separator: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -236,6 +246,13 @@ impl ProtocolPolicy {
     }
 
     fn validate(&self) -> Result<(), ProtocolFault> {
+        if self.applied_parameters_hash.algorithm != APPLIED_PARAMETERS_HASH_ALGORITHM
+            || self.applied_parameters_hash.domain_separator.as_bytes() != APPLIED_PARAMETERS_DOMAIN
+        {
+            return Err(ProtocolFault::Policy(
+                "applied-parameter hash policy does not match the runtime".to_owned(),
+            ));
+        }
         if self.package != PROTOCOL_PACKAGE || self.protocol != PROTOCOL_IDENTITY {
             return Err(ProtocolFault::Policy(
                 "protocol or package identity does not match the runtime".to_owned(),
@@ -400,7 +417,13 @@ mod tests {
                 1,
             ),
             POLICY_JSON.replacen("typed_handshake_error_then_close", "silently_continue", 1),
-            POLICY_JSON.replacen("\"minor\": 0", "\"minor\": 0, \"unexpected\": true", 1),
+            POLICY_JSON.replacen("\"minor\": 1", "\"minor\": 1, \"unexpected\": true", 1),
+            POLICY_JSON.replacen("\"algorithm\": \"sha256\"", "\"algorithm\": \"sha512\"", 1),
+            POLICY_JSON.replacen(
+                "eutheto.applied-solve-parameters.v1",
+                "eutheto.applied-solve-parameters.v2",
+                1,
+            ),
         ] {
             assert!(ProtocolPolicy::parse(&invalid).is_err());
         }

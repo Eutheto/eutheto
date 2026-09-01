@@ -15,7 +15,7 @@
       "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
       "ortoolsVersion": "9.15.6755",
       "protocolMajor": 1,
-      "protocolMinor": 0,
+      "protocolMinor": 1,
       "workerIdentity": "eutheto-ortools-worker",
       "workerVersion": "0.1.0"
     }

@@ -1,4 +1,8 @@
 {
+  "applied_parameters_hash": {
+    "algorithm": "sha256",
+    "domain_separator": "eutheto.applied-solve-parameters.v1\u0000"
+  },
   "compatibility": {
     "accepted_protocol_majors": [
       1
@@ -32,6 +36,9 @@
     },
     "eutheto.worker.v1.HandshakeRequest.expected_backend_id": {
       "max_bytes": 128
+    },
+    "eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256": {
+      "max_bytes": 32
     },
     "eutheto.worker.v1.HandshakeRequest.required_capabilities": {
       "max_count": 64
@@ -148,6 +155,6 @@
   "protocol": "eutheto.solver-worker",
   "version": {
     "major": 1,
-    "minor": 0
+    "minor": 1
   }
 }

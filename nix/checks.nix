@@ -31,6 +31,7 @@
       pnpm-workspace.yaml \
       protocol/solver-worker.proto \
       protocol/version.json \
+      protocol/generated/cpp/protocol-policy.h \
       protocol/generated/cpp/solver-worker.pb.cc \
       protocol/generated/cpp/solver-worker.pb.h \
       protocol/generated/eutheto.worker.v1.descriptor.pb \
@@ -174,7 +175,11 @@
         manifest = json.load(stream)
     assert manifest["protocol"] == "eutheto.solver-worker"
     assert manifest["package"] == "eutheto.worker.v1"
-    assert manifest["version"] == {"major": 1, "minor": 0}
+    assert manifest["version"] == {"major": 1, "minor": 1}
+    assert manifest["applied_parameters_hash"] == {
+        "algorithm": "sha256",
+        "domain_separator": "eutheto.applied-solve-parameters.v1\0",
+    }
     assert manifest["compatibility"]["accepted_protocol_majors"] == [1]
     assert manifest["compatibility"]["unknown_major_action"] == "typed_handshake_error_then_close"
     framing = manifest["framing"]
@@ -198,6 +203,9 @@
         "max_worker_threads": 10000,
         "total_session_bytes": 512 * 1024 * 1024,
     }
+    assert manifest["field_limits"]["eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256"] == {
+        "max_bytes": 32,
+    }
 
     schema = (protocol / "solver-worker.proto").read_text(encoding="utf-8")
     if 'syntax = "proto3";' not in schema or "package eutheto.worker.v1;" not in schema:
@@ -205,6 +213,23 @@
     for message in ("ParentFrame", "WorkerFrame", "HandshakeRequest", "SolveRequest", "Finished"):
         if f"message {message} " not in schema:
             raise SystemExit(f"solver-worker.proto is missing {message}")
+    generated = protocol / "generated"
+    expected_generated = {
+        "generated/cpp/protocol-policy.h",
+        "generated/cpp/solver-worker.pb.cc",
+        "generated/cpp/solver-worker.pb.h",
+        "generated/eutheto.worker.v1.descriptor.pb",
+    }
+    actual_generated = {
+        path.relative_to(protocol).as_posix()
+        for path in generated.rglob("*")
+        if path.is_file()
+    }
+    if actual_generated != expected_generated:
+        raise SystemExit("generated protocol file inventory does not match the authoritative set")
+    rust_binding = root / "crates/eutheto-protocol/src/generated/eutheto.worker.v1.rs"
+    if not rust_binding.is_file():
+        raise SystemExit("generated Rust protocol binding is missing")
 
     golden = protocol / "golden"
     required = {

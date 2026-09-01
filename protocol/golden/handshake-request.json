@@ -2,8 +2,9 @@
   "handshakeRequest": {
     "coreVersion": "0.1.0",
     "expectedBackendId": "ortools-cp-sat",
+    "expectedManifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
     "protocolMajor": 1,
-    "protocolMinor": 0,
+    "protocolMinor": 1,
     "requiredCapabilities": [
       "CAPABILITY_CP_SAT",
       "CAPABILITY_SOLUTION_PROJECTION"

@@ -11,6 +11,7 @@ const REQUIRED_TRACKED_INPUTS_AND_OUTPUTS: &[&str] = &[
     "protocol/solver-worker.proto",
     "protocol/version.json",
     "crates/eutheto-protocol/src/generated/eutheto.worker.v1.rs",
+    "protocol/generated/cpp/protocol-policy.h",
     "protocol/generated/cpp/solver-worker.pb.cc",
     "protocol/generated/cpp/solver-worker.pb.h",
     "protocol/generated/eutheto.worker.v1.descriptor.pb",

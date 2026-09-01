@@ -4,7 +4,9 @@ use prost::bytes::Bytes;
 use semver::Version;
 use sha2::{Digest, Sha256};
 
-use crate::limits::{ProtocolPolicy, SUFFICIENT_ASSUMPTIONS_ENABLED, checked_in_policy};
+use crate::limits::{
+    APPLIED_PARAMETERS_DOMAIN, ProtocolPolicy, SUFFICIENT_ASSUMPTIONS_ENABLED, checked_in_policy,
+};
 use crate::stderr::is_unsafe_control;
 use crate::wire::handshake_response::Outcome;
 use crate::wire::{
@@ -217,7 +219,6 @@ pub struct StartedObservation {
     pub request_id: String,
     pub model_fingerprint: [u8; 32],
 }
-const APPLIED_PARAMETERS_DOMAIN: &[u8; 36] = b"eutheto.applied-solve-parameters.v1\0";
 
 /// Fully expanded solve parameters hashed by both protocol endpoints.
 #[allow(clippy::struct_excessive_bools)]
@@ -743,6 +744,12 @@ impl ParentProtocol {
         validate_semver("core_version", &handshake.core_version)?;
         if handshake.expected_backend_id.as_str() != self.expectations.backend_id.as_str() {
             return Err(StateFault::InvalidHandshake("backend_id").into());
+        }
+        if handshake.expected_manifest_sha256.len() != 32
+            || handshake.expected_manifest_sha256.as_ref()
+                != self.expectations.manifest_sha256.as_slice()
+        {
+            return Err(StateFault::InvalidHandshake("expected_manifest_sha256").into());
         }
         let required = validate_capability_values(&handshake.required_capabilities)?;
         if required != self.expectations.required_capabilities {

@@ -68,6 +68,10 @@ pub struct HandshakeRequest {
     /// Every listed capability must be present for handshake success.
     #[prost(enumeration = "Capability", repeated, tag = "5")]
     pub required_capabilities: ::prost::alloc::vec::Vec<i32>,
+    /// Exactly 32 raw bytes: SHA-256 of the installed manifest after the parent
+    /// validates that manifest and its worker executable.
+    #[prost(bytes = "bytes", tag = "16")]
+    pub expected_manifest_sha256: ::prost::bytes::Bytes,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HandshakeResponse {
@@ -101,7 +105,8 @@ pub struct HandshakeSuccess {
     pub ortools_version: ::prost::alloc::string::String,
     #[prost(string, tag = "7")]
     pub adapter_version: ::prost::alloc::string::String,
-    /// Exactly 32 raw bytes: SHA-256 of the canonical installed worker manifest.
+    /// Exact untrusted echo of the requested 32-byte manifest SHA-256, used only
+    /// for correlation; the echo establishes no trust in the manifest or worker.
     #[prost(bytes = "bytes", tag = "8")]
     pub manifest_sha256: ::prost::bytes::Bytes,
     #[prost(enumeration = "Capability", repeated, tag = "9")]
