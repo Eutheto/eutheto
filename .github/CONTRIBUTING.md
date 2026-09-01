@@ -2,7 +2,7 @@
 
 # Contributing repository automation
 
-This file applies to changes under `.github/`. The repository-wide [contribution guide](../CONTRIBUTING.md), [agent instructions](../AGENTS.md), active [Phase 02 contract](../docs/roadmap/02-domain-pack-and-planning-ir-contracts.md), and [security policy](../SECURITY.md) remain authoritative.
+This file applies to changes under `.github/`. The repository-wide [contribution guide](../CONTRIBUTING.md), [agent instructions](../AGENTS.md), active [Phase 03 contract](../docs/roadmap/03-ortools-worker-vertical-slice.md), and [security policy](../SECURITY.md) remain authoritative.
 
 ## Before changing automation
 
