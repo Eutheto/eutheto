@@ -397,13 +397,13 @@ enum PhaseState {
         request_id: String,
         model_fingerprint: [u8; 32],
         requested_projections: Vec<u64>,
-        applied_parameters_sha256: [u8; 32],
+        applied_parameters: NormalizedAppliedParameters,
     },
     Running {
         request_id: String,
         model_fingerprint: [u8; 32],
         requested_projections: Vec<u64>,
-        applied_parameters_sha256: [u8; 32],
+        applied_parameters: NormalizedAppliedParameters,
     },
     Terminal(TerminalEvidence),
     Eof(TerminalEvidence),
@@ -465,6 +465,42 @@ impl ParentProtocol {
         self.absorb_failure(result)
     }
 
+    /// Tightens the validated worker wall-time cap before the solve frame is written.
+    ///
+    /// This is valid only after a solve request entered [`ParentPhase::Started`]. It changes no
+    /// model, projection, or solver setting and keeps terminal parameter-hash validation aligned
+    /// with the exact request written to the worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns a state fault when called out of order or when the new cap is zero or greater than
+    /// the already validated cap.
+    pub fn tighten_started_wall_time_millis(
+        &mut self,
+        wall_time_millis: u64,
+    ) -> Result<(), ProtocolFault> {
+        let state = self.state_name();
+        let result = match &mut self.phase {
+            PhaseState::Started {
+                applied_parameters, ..
+            } if wall_time_millis > 0
+                && wall_time_millis <= applied_parameters.wall_time_millis =>
+            {
+                applied_parameters.wall_time_millis = wall_time_millis;
+                Ok(())
+            }
+            PhaseState::Started { .. } => {
+                Err(StateFault::InvalidSolveRequest("resource_limits.wall_time_millis").into())
+            }
+            _ => Err(StateFault::UnexpectedParent {
+                state,
+                message: "wall-time-tightening",
+            }
+            .into()),
+        };
+        self.absorb_failure(result)
+    }
+
     fn on_parent_frame_inner(&mut self, frame: &ParentFrame) -> Result<(), ProtocolFault> {
         let body = frame.body.as_ref().ok_or(StateFault::MissingParentBody)?;
         match (&self.phase, body) {
@@ -479,7 +515,7 @@ impl ParentProtocol {
                     request_id: solve.request_id.clone(),
                     model_fingerprint: validated.model_fingerprint,
                     requested_projections: validated.requested_projections,
-                    applied_parameters_sha256: validated.applied_parameters_sha256,
+                    applied_parameters: validated.applied_parameters,
                 };
                 Ok(())
             }
@@ -545,7 +581,7 @@ impl ParentProtocol {
                     request_id,
                     model_fingerprint,
                     requested_projections: _,
-                    applied_parameters_sha256: _,
+                    applied_parameters: _,
                 },
                 worker_frame::Body::Started(started),
             ) => {
@@ -559,13 +595,13 @@ impl ParentProtocol {
                         request_id,
                         model_fingerprint,
                         requested_projections,
-                        applied_parameters_sha256,
+                        applied_parameters,
                     } => {
                         self.phase = PhaseState::Running {
                             request_id,
                             model_fingerprint,
                             requested_projections,
-                            applied_parameters_sha256,
+                            applied_parameters,
                         };
                         take_started_observation(&mut frame)
                     }
@@ -639,16 +675,18 @@ impl ParentProtocol {
                     request_id,
                     model_fingerprint,
                     requested_projections,
-                    applied_parameters_sha256,
+                    applied_parameters,
                 },
                 worker_frame::Body::Finished(finished),
             ) => {
                 validate_request_id(request_id, &finished.request_id)?;
+                let expected_applied_parameters_sha256 =
+                    applied_parameters_sha256(applied_parameters);
                 validate_finished(
                     finished,
                     model_fingerprint,
                     requested_projections,
-                    applied_parameters_sha256,
+                    &expected_applied_parameters_sha256,
                     &self.negotiated_capabilities,
                 )?;
                 compact_finished_frame(&mut frame);
@@ -1053,7 +1091,7 @@ fn validate_capability_values(values: &[i32]) -> Result<BTreeSet<i32>, ProtocolF
 
 struct ValidatedSolveRequest {
     requested_projections: Vec<u64>,
-    applied_parameters_sha256: [u8; 32],
+    applied_parameters: NormalizedAppliedParameters,
     model_fingerprint: [u8; 32],
 }
 
@@ -1132,7 +1170,7 @@ fn validate_solve_request(
     Ok(ValidatedSolveRequest {
         requested_projections: requested,
         model_fingerprint: expected_model_fingerprint,
-        applied_parameters_sha256: applied_parameters_sha256(&normalized_parameters),
+        applied_parameters: normalized_parameters,
     })
 }
 

@@ -245,6 +245,7 @@ pub async fn supervise(
     request: SessionRequest,
     budget: SolveBudgetView,
 ) -> Result<SessionCompletion, SessionFailure> {
+    let remaining_at_entry = budget.remaining_duration();
     let policy = match checked_in_policy() {
         Ok(policy) => policy,
         Err(error) => return Err(prelaunch_failure(error.into())),
@@ -338,9 +339,12 @@ pub async fn supervise(
         WorkerPipes { stdin, stdout },
         &budget,
         policy,
-        expectations,
-        handshake,
-        &request.solve,
+        ProtocolSession {
+            remaining_at_entry,
+            expectations,
+            handshake,
+            solve: &request.solve,
+        },
     )
     .await;
     match execution {
@@ -387,15 +391,26 @@ struct WorkerPipes {
     stdout: tokio::process::ChildStdout,
 }
 
+struct ProtocolSession<'a> {
+    remaining_at_entry: Duration,
+    expectations: HandshakeExpectations,
+    handshake: ParentFrame,
+    solve: &'a SolveRequest,
+}
+
 async fn execute_session(
     child: &mut Box<dyn ChildWrapper>,
     pipes: WorkerPipes,
     budget: &SolveBudgetView,
     policy: &ProtocolPolicy,
-    expectations: HandshakeExpectations,
-    handshake: ParentFrame,
-    solve: &SolveRequest,
+    session: ProtocolSession<'_>,
 ) -> Result<CompletedSession, SupervisorError> {
+    let ProtocolSession {
+        remaining_at_entry,
+        expectations,
+        handshake,
+        solve,
+    } = session;
     let WorkerPipes {
         mut stdin,
         mut stdout,
@@ -425,13 +440,20 @@ async fn execute_session(
     let observation = protocol.on_worker_frame(first.0)?;
     match observation {
         WorkerObservation::HandshakeAccepted => {
-            let parent_solve = ParentFrame {
+            let mut parent_solve = ParentFrame {
                 body: Some(parent_frame::Body::SolveRequest(solve.clone())),
             };
             protocol.on_parent_frame(&parent_solve)?;
+            let Some(parent_frame::Body::SolveRequest(dispatch_solve)) = &mut parent_solve.body
+            else {
+                unreachable!("the solve frame was constructed immediately above");
+            };
+            let wall_time_millis =
+                finalize_solve_for_dispatch(dispatch_solve, budget, remaining_at_entry)?;
+            protocol.tighten_started_wall_time_millis(wall_time_millis)?;
             budgeted(
                 budget,
-                write_solve_request_frame_async(&mut stdin, solve, policy),
+                write_solve_request_frame_async(&mut stdin, dispatch_solve, policy),
             )
             .await
             .map_err(map_budgeted_protocol)?;
@@ -959,6 +981,54 @@ fn budget_checkpoint(budget: &SolveBudgetView) -> Result<(), SupervisorError> {
     }
 }
 
+fn finalize_solve_for_dispatch(
+    solve: &mut SolveRequest,
+    budget: &SolveBudgetView,
+    remaining_at_entry: Duration,
+) -> Result<u64, SupervisorError> {
+    let Some(resource_limits) = solve.resource_limits.as_mut() else {
+        return Err(
+            ProtocolFault::from(eutheto_protocol::StateFault::InvalidSolveRequest(
+                "resource_limits",
+            ))
+            .into(),
+        );
+    };
+    if resource_limits.wall_time_millis == 0 {
+        return Err(
+            ProtocolFault::from(eutheto_protocol::StateFault::InvalidSolveRequest(
+                "resource_limits.wall_time_millis",
+            ))
+            .into(),
+        );
+    }
+
+    let snapshot = budget.snapshot();
+    if snapshot.cancelled {
+        return Err(SupervisorError::Cancelled);
+    }
+    let remaining_now = budget.remaining_duration();
+    if snapshot.expired || remaining_now.is_zero() {
+        return Err(SupervisorError::DeadlineExceeded);
+    }
+    let elapsed_before_dispatch = remaining_at_entry.saturating_sub(remaining_now);
+    let remaining_worker_limit = Duration::from_millis(resource_limits.wall_time_millis)
+        .saturating_sub(elapsed_before_dispatch)
+        .min(remaining_now);
+    let wall_time_millis = match u64::try_from(remaining_worker_limit.as_millis()) {
+        Ok(value) if value > 0 => value,
+        Ok(_) => return Err(SupervisorError::DeadlineExceeded),
+        Err(_) => {
+            return Err(ProtocolFault::Policy(
+                "worker dispatch budget exceeds the protocol duration range".to_owned(),
+            )
+            .into());
+        }
+    };
+    resource_limits.wall_time_millis = wall_time_millis;
+    Ok(wall_time_millis)
+}
+
 async fn budgeted<F, T, E>(budget: &SolveBudgetView, future: F) -> Result<T, BudgetedError<E>>
 where
     F: Future<Output = Result<T, E>>,
@@ -1013,9 +1083,11 @@ mod tests {
 
     use super::{
         BudgetedError, OutputAccounting, SupervisorError, VerifiedExecutable, budgeted,
-        private_worker_tempdir, stage_verified_executable, worker_command,
+        finalize_solve_for_dispatch, private_worker_tempdir, stage_verified_executable,
+        worker_command,
     };
     use eutheto_protocol::checked_in_policy;
+    use eutheto_protocol::wire::{ResourceLimits, SolveRequest as WorkerSolveRequest};
     use eutheto_types::{
         CancellationToken, DurationMillis, FixedMonotonicClock, ParentSolveBudget,
     };
@@ -1115,6 +1187,102 @@ mod tests {
         })
         .await;
         assert!(matches!(result, Err(BudgetedError::Cancelled)));
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_uses_smaller_of_backend_cap_and_current_parent_budget() -> Result<(), Box<dyn Error>>
+    {
+        let clock = FixedMonotonicClock::default();
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(1_000)?,
+            Arc::new(clock.clone()),
+            CancellationToken::new(),
+        )?;
+        clock.advance(Duration::from_millis(250))?;
+
+        let mut solve = WorkerSolveRequest {
+            resource_limits: Some(ResourceLimits {
+                wall_time_millis: 900,
+                memory_bytes: None,
+                worker_threads: 1,
+            }),
+            ..WorkerSolveRequest::default()
+        };
+        let wall_time_millis =
+            finalize_solve_for_dispatch(&mut solve, &parent.phase_view(), Duration::from_secs(1))?;
+        assert_eq!(wall_time_millis, 650);
+        assert_eq!(
+            solve
+                .resource_limits
+                .as_ref()
+                .ok_or("missing dispatch resource limits")?
+                .wall_time_millis,
+            650
+        );
+
+        solve
+            .resource_limits
+            .as_mut()
+            .ok_or("missing mutable resource limits")?
+            .wall_time_millis = 500;
+        let wall_time_millis =
+            finalize_solve_for_dispatch(&mut solve, &parent.phase_view(), Duration::from_secs(1))?;
+        assert_eq!(wall_time_millis, 250);
+        Ok(())
+    }
+
+    #[test]
+    fn submillisecond_dispatch_budget_stops_before_zero_limit_frame() -> Result<(), Box<dyn Error>>
+    {
+        let clock = FixedMonotonicClock::default();
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(1)?,
+            Arc::new(clock.clone()),
+            CancellationToken::new(),
+        )?;
+        clock.advance(Duration::from_micros(999))?;
+        let mut solve = WorkerSolveRequest {
+            resource_limits: Some(ResourceLimits {
+                wall_time_millis: 1,
+                memory_bytes: None,
+                worker_threads: 1,
+            }),
+            ..WorkerSolveRequest::default()
+        };
+        assert!(matches!(
+            finalize_solve_for_dispatch(&mut solve, &parent.phase_view(), Duration::from_millis(1),),
+            Err(SupervisorError::DeadlineExceeded)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn zero_original_worker_limit_remains_a_protocol_fault() -> Result<(), Box<dyn Error>> {
+        let clock = FixedMonotonicClock::default();
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(1_000)?,
+            Arc::new(clock),
+            CancellationToken::new(),
+        )?;
+        let mut solve = WorkerSolveRequest {
+            resource_limits: Some(ResourceLimits {
+                wall_time_millis: 0,
+                memory_bytes: None,
+                worker_threads: 1,
+            }),
+            ..WorkerSolveRequest::default()
+        };
+        assert!(matches!(
+            finalize_solve_for_dispatch(&mut solve, &parent.phase_view(), Duration::from_secs(1),),
+            Err(SupervisorError::Protocol(
+                eutheto_protocol::ProtocolFault::State(
+                    eutheto_protocol::StateFault::InvalidSolveRequest(
+                        "resource_limits.wall_time_millis"
+                    )
+                )
+            ))
+        ));
         Ok(())
     }
 

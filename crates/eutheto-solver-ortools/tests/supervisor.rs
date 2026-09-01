@@ -50,7 +50,7 @@ async fn request(mode: &str, progress: bool) -> Result<SessionRequest, Box<dyn E
             cp_model_proto: model,
             parameters: Some(SolveParameters::default()),
             resource_limits: Some(ResourceLimits {
-                wall_time_millis: 1_000,
+                wall_time_millis: 30_000,
                 memory_bytes: None,
                 worker_threads: 1,
             }),

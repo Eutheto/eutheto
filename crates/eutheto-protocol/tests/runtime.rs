@@ -375,6 +375,49 @@ fn every_legal_parent_transition_reaches_consistent_completion() -> Result<(), P
 }
 
 #[test]
+fn tightened_wall_time_becomes_the_terminal_parameter_contract() -> Result<(), ProtocolFault> {
+    let mut protocol = solve_ready_protocol()?;
+    protocol.on_parent_frame(&solve_request())?;
+    protocol.tighten_started_wall_time_millis(500)?;
+    protocol.on_worker_frame(started("request-1"))?;
+
+    let mut terminal = finished("request-1");
+    let Some(worker_frame::Body::Finished(finished)) = &mut terminal.body else {
+        return Err(StateFault::MissingWorkerBody.into());
+    };
+    finished.applied_parameters_sha256 =
+        Bytes::copy_from_slice(&applied_parameters_sha256(&NormalizedAppliedParameters {
+            wall_time_millis: 500,
+            worker_threads: 1,
+            random_seed: 1,
+            stop_after_first_feasible: false,
+            emit_intermediate_solutions: true,
+            log_search_progress: false,
+            deterministic_test_profile: true,
+        }));
+
+    assert_eq!(
+        protocol.on_worker_frame(terminal)?,
+        WorkerObservation::Terminal
+    );
+    Ok(())
+}
+
+#[test]
+fn wall_time_tightening_rejects_zero_and_increases() -> Result<(), ProtocolFault> {
+    let mut zero = solve_ready_protocol()?;
+    zero.on_parent_frame(&solve_request())?;
+    assert!(zero.tighten_started_wall_time_millis(0).is_err());
+    assert_eq!(zero.phase(), ParentPhase::Failed);
+
+    let mut increase = solve_ready_protocol()?;
+    increase.on_parent_frame(&solve_request())?;
+    assert!(increase.tighten_started_wall_time_millis(1_001).is_err());
+    assert_eq!(increase.phase(), ParentPhase::Failed);
+    Ok(())
+}
+
+#[test]
 fn stale_repeated_and_out_of_order_frames_are_absorbing() -> Result<(), ProtocolFault> {
     let mut before_started = solve_ready_protocol()?;
     before_started.on_parent_frame(&solve_request())?;
