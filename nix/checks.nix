@@ -52,6 +52,7 @@
 
   exact-pins-and-json = pkgs.runCommand "eutheto-exact-pins-and-json" { } ''
     set -eu
+    test "$("${tooling.protobuf}/bin/protoc" --version)" = "libprotoc 33.1"
     ${pkgs.python3}/bin/python3 - "${src}" <<'PY'
     import json
     import pathlib
