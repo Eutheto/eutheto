@@ -12,8 +12,10 @@ eutheto-domain-ir = { path = "../../eutheto-domain-ir", version = "=0.1.0" }
 eutheto-export = { path = "../../eutheto-export", version = "=0.1.0" }
 eutheto-import = { path = "..", version = "=0.1.0" }
 eutheto-planning-ir = { path = "../../eutheto-planning-ir", version = "=0.1.0" }
+eutheto-protocol = { path = "../../eutheto-protocol", version = "=0.1.0" }
 eutheto-types = { path = "../../eutheto-types", version = "=0.1.0" }
 libfuzzer-sys = "=0.4.13"
+prost = "=0.14.4"
 serde_json = "=1.0.151"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
@@ -69,6 +71,13 @@ bench = false
 [[bin]]
 name = "component_graph"
 path = "fuzz_targets/component_graph.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "worker_frame"
+path = "fuzz_targets/worker_frame.rs"
 test = false
 doc = false
 bench = false

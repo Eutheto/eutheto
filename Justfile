@@ -223,7 +223,7 @@ fuzz-check: fuzz-build
             exit 1
         fi
     done
-    targets=(scenario_envelope bundle migration_chain bundle_remap planning_ir integer_expression projection component_graph)
+    targets=(scenario_envelope bundle migration_chain bundle_remap planning_ir integer_expression projection component_graph worker_frame)
     if [[ "$scratch_corpus" == "$scratch_artifacts" || "$scratch_corpus" == "$scratch_artifacts/"* || "$scratch_artifacts" == "$scratch_corpus/"* ]]; then
         printf 'error: fuzz corpus and artifact scratch paths must not overlap\n' >&2
         exit 1
