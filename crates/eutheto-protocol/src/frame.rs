@@ -1,4 +1,5 @@
 use std::io::{self, Read, Write};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use prost::{Message, bytes::Bytes};
 
@@ -155,6 +156,54 @@ pub fn write_solve_request_frame<W: Write>(
     request: &SolveRequest,
     policy: &ProtocolPolicy,
 ) -> Result<(), ProtocolFault> {
+    let prepared = prepare_solve_request(request, policy)?;
+    let mut scratch = prepared.scratch()?;
+    write_all(writer, &prepared.frame_prefix, "writing solve frame prefix")?;
+    write_solve_fields(writer, request, prepared.solve_length, &mut scratch)
+}
+
+/// Asynchronously streams one solve-request frame without constructing a
+/// second model-sized frame buffer.
+///
+/// This shares all length, schema-drift, and scratch-allocation preparation
+/// with [`write_solve_request_frame`]. The model and fingerprint slices are
+/// written directly to the supplied Tokio writer.
+///
+/// # Errors
+///
+/// Returns the same preparation faults as the synchronous writer, or an I/O
+/// fault from the asynchronous writer.
+pub async fn write_solve_request_frame_async<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &SolveRequest,
+    policy: &ProtocolPolicy,
+) -> Result<(), ProtocolFault> {
+    let prepared = prepare_solve_request(request, policy)?;
+    let mut scratch = prepared.scratch()?;
+    write_all_async(writer, &prepared.frame_prefix, "writing solve frame prefix").await?;
+    write_solve_fields_async(writer, request, prepared.solve_length, &mut scratch).await
+}
+
+struct PreparedSolveRequest {
+    solve_length: usize,
+    frame_prefix: [u8; 4],
+    scratch_capacity: usize,
+}
+
+impl PreparedSolveRequest {
+    fn scratch(&self) -> Result<Vec<u8>, ProtocolFault> {
+        let mut scratch = Vec::new();
+        scratch
+            .try_reserve_exact(self.scratch_capacity)
+            .map_err(|_| FrameFault::Allocation)?;
+        Ok(scratch)
+    }
+}
+
+fn prepare_solve_request(
+    request: &SolveRequest,
+    policy: &ProtocolPolicy,
+) -> Result<PreparedSolveRequest, ProtocolFault> {
     let solve_length = manual_solve_request_length(request)?;
     if solve_length != request.encoded_len() {
         return Err(FrameFault::SchemaDrift.into());
@@ -164,10 +213,9 @@ pub fn write_solve_request_frame<W: Write>(
         .and_then(|length| length.checked_add(solve_length))
         .ok_or(FrameFault::LengthOverflow)?;
     validate_length(payload_length, FrameClass::SolveRequest, policy)?;
-    let prefix = u32::try_from(payload_length)
+    let frame_prefix = u32::try_from(payload_length)
         .map_err(|_| FrameFault::LengthOverflow)?
         .to_be_bytes();
-
     let scratch_capacity = request
         .parameters
         .as_ref()
@@ -186,12 +234,19 @@ pub fn write_solve_request_frame<W: Write>(
                 .as_ref()
                 .map_or(0, Message::encoded_len),
         );
-    let mut scratch = Vec::new();
-    scratch
-        .try_reserve_exact(scratch_capacity)
-        .map_err(|_| FrameFault::Allocation)?;
+    Ok(PreparedSolveRequest {
+        solve_length,
+        frame_prefix,
+        scratch_capacity,
+    })
+}
 
-    write_all(writer, &prefix, "writing solve frame prefix")?;
+fn write_solve_fields<W: Write>(
+    writer: &mut W,
+    request: &SolveRequest,
+    solve_length: usize,
+    scratch: &mut Vec<u8>,
+) -> Result<(), ProtocolFault> {
     write_all(writer, &[0x12], "writing parent solve tag")?;
     write_varint(writer, solve_length, "writing parent solve length")?;
     if !request.request_id.is_empty() {
@@ -206,13 +261,13 @@ pub fn write_solve_request_frame<W: Write>(
         write_length_delimited(writer, 0x12, &request.cp_model_proto, "writing solve model")?;
     }
     if let Some(parameters) = &request.parameters {
-        write_nested(writer, 0x1a, parameters, &mut scratch)?;
+        write_nested(writer, 0x1a, parameters, scratch)?;
     }
     for projection in &request.projections {
-        write_nested(writer, 0x22, projection, &mut scratch)?;
+        write_nested(writer, 0x22, projection, scratch)?;
     }
     if let Some(resource_limits) = &request.resource_limits {
-        write_nested(writer, 0x2a, resource_limits, &mut scratch)?;
+        write_nested(writer, 0x2a, resource_limits, scratch)?;
     }
     if !request.model_fingerprint.is_empty() {
         write_length_delimited(
@@ -221,6 +276,48 @@ pub fn write_solve_request_frame<W: Write>(
             &request.model_fingerprint,
             "writing solve fingerprint",
         )?;
+    }
+    Ok(())
+}
+
+async fn write_solve_fields_async<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    request: &SolveRequest,
+    solve_length: usize,
+    scratch: &mut Vec<u8>,
+) -> Result<(), ProtocolFault> {
+    write_all_async(writer, &[0x12], "writing parent solve tag").await?;
+    write_varint_async(writer, solve_length, "writing parent solve length").await?;
+    if !request.request_id.is_empty() {
+        write_length_delimited_async(
+            writer,
+            0x0a,
+            request.request_id.as_bytes(),
+            "writing solve request ID",
+        )
+        .await?;
+    }
+    if !request.cp_model_proto.is_empty() {
+        write_length_delimited_async(writer, 0x12, &request.cp_model_proto, "writing solve model")
+            .await?;
+    }
+    if let Some(parameters) = &request.parameters {
+        write_nested_async(writer, 0x1a, parameters, scratch).await?;
+    }
+    for projection in &request.projections {
+        write_nested_async(writer, 0x22, projection, scratch).await?;
+    }
+    if let Some(resource_limits) = &request.resource_limits {
+        write_nested_async(writer, 0x2a, resource_limits, scratch).await?;
+    }
+    if !request.model_fingerprint.is_empty() {
+        write_length_delimited_async(
+            writer,
+            0x32,
+            &request.model_fingerprint,
+            "writing solve fingerprint",
+        )
+        .await?;
     }
     Ok(())
 }
@@ -358,6 +455,19 @@ fn write_nested<W: Write, M: Message>(
     write_length_delimited(writer, tag, scratch, "writing nested solve field")
 }
 
+async fn write_nested_async<W: AsyncWrite + Unpin, M: Message>(
+    writer: &mut W,
+    tag: u8,
+    message: &M,
+    scratch: &mut Vec<u8>,
+) -> Result<(), ProtocolFault> {
+    scratch.clear();
+    message
+        .encode(&mut *scratch)
+        .map_err(|error| FrameFault::Encode(error.to_string()))?;
+    write_length_delimited_async(writer, tag, scratch, "writing nested solve field").await
+}
+
 fn write_length_delimited<W: Write>(
     writer: &mut W,
     tag: u8,
@@ -367,6 +477,17 @@ fn write_length_delimited<W: Write>(
     write_all(writer, &[tag], operation)?;
     write_varint(writer, value.len(), operation)?;
     write_all(writer, value, operation)
+}
+
+async fn write_length_delimited_async<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    tag: u8,
+    value: &[u8],
+    operation: &'static str,
+) -> Result<(), ProtocolFault> {
+    write_all_async(writer, &[tag], operation).await?;
+    write_varint_async(writer, value.len(), operation).await?;
+    write_all_async(writer, value, operation).await
 }
 
 fn write_varint<W: Write>(
@@ -388,6 +509,25 @@ fn write_varint<W: Write>(
     write_all(writer, &encoded[..length], operation)
 }
 
+async fn write_varint_async<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    mut value: usize,
+    operation: &'static str,
+) -> Result<(), ProtocolFault> {
+    let mut encoded = [0u8; 10];
+    let mut length = 0;
+    loop {
+        let low = u8::try_from(value & 0x7f).map_err(|_| FrameFault::LengthOverflow)?;
+        value >>= 7;
+        encoded[length] = if value == 0 { low } else { low | 0x80 };
+        length += 1;
+        if value == 0 {
+            break;
+        }
+    }
+    write_all_async(writer, &encoded[..length], operation).await
+}
+
 const fn varint_length(mut value: usize) -> usize {
     let mut length = 1;
     while value >= 0x80 {
@@ -406,6 +546,20 @@ fn write_all<W: Write>(
         operation,
         kind: error.kind(),
     })
+}
+
+async fn write_all_async<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    bytes: &[u8],
+    operation: &'static str,
+) -> Result<(), ProtocolFault> {
+    writer
+        .write_all(bytes)
+        .await
+        .map_err(|error| ProtocolFault::Io {
+            operation,
+            kind: error.kind(),
+        })
 }
 
 fn validate_length(
@@ -466,12 +620,18 @@ fn read_until_eof<R: Read>(
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
 
     use prost::{Message, bytes::Bytes};
     use prost_types::FileDescriptorSet;
     use prost_types::field_descriptor_proto::{Label, Type};
+    use tokio::io::AsyncWrite;
 
-    use super::{encode_frame, encode_frame_allocating, inspect_frame, write_solve_request_frame};
+    use super::{
+        encode_frame, encode_frame_allocating, inspect_frame, write_solve_request_frame,
+        write_solve_request_frame_async,
+    };
     use crate::limits::{DESCRIPTOR_BYTES, FrameClass};
     use crate::wire::{
         ParentFrame, ProjectionRequest, ResourceLimits, SolveParameters, SolveRequest, parent_frame,
@@ -652,6 +812,68 @@ mod tests {
         };
         write_solve_request_frame(&mut spy, &request, checked_in_policy()?)?;
         assert!(spy.observed_direct_model_write);
+        Ok(())
+    }
+
+    struct AsyncPointerSpy {
+        model_pointer: usize,
+        model_length: usize,
+        observed_direct_model_write: bool,
+        output: Vec<u8>,
+    }
+
+    impl AsyncWrite for AsyncPointerSpy {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            if bytes.as_ptr() as usize == self.model_pointer && bytes.len() == self.model_length {
+                self.observed_direct_model_write = true;
+            }
+            self.output.extend_from_slice(bytes);
+            Poll::Ready(Ok(bytes.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn async_solve_stream_matches_sync_and_borrows_model_segment() -> Result<(), ProtocolFault>
+    {
+        let model = Bytes::from(vec![0x5a; 1024 * 1024]);
+        let request = SolveRequest {
+            request_id: "async-request".to_owned(),
+            cp_model_proto: model.clone(),
+            parameters: Some(SolveParameters {
+                random_seed: Some(7),
+                ..SolveParameters::default()
+            }),
+            resource_limits: Some(ResourceLimits {
+                wall_time_millis: 50,
+                memory_bytes: None,
+                worker_threads: 1,
+            }),
+            model_fingerprint: Bytes::from_static(&[0x33; 32]),
+            ..SolveRequest::default()
+        };
+        let mut expected = Vec::new();
+        write_solve_request_frame(&mut expected, &request, checked_in_policy()?)?;
+        let mut writer = AsyncPointerSpy {
+            model_pointer: model.as_ptr() as usize,
+            model_length: model.len(),
+            observed_direct_model_write: false,
+            output: Vec::new(),
+        };
+        write_solve_request_frame_async(&mut writer, &request, checked_in_policy()?).await?;
+        assert_eq!(writer.output, expected);
+        assert!(writer.observed_direct_model_write);
         Ok(())
     }
 

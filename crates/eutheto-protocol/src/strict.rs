@@ -338,10 +338,21 @@ impl WireSchema {
                 )
             })?;
             let number_value = tag >> 3;
-            if number_value == 0
-                || number_value > 536_870_911
-                || (19_000..=19_999).contains(&number_value)
-            {
+            if (19_000..=19_999).contains(&number_value) {
+                let number = u32::try_from(number_value).map_err(|_| {
+                    wire_fault(
+                        message_name,
+                        base_offset + tag_offset,
+                        WireViolation::InvalidFieldNumber,
+                    )
+                })?;
+                return Err(wire_fault(
+                    message_name,
+                    base_offset + tag_offset,
+                    WireViolation::ReservedField(number),
+                ));
+            }
+            if number_value == 0 || number_value > 536_870_911 {
                 return Err(wire_fault(
                     message_name,
                     base_offset + tag_offset,

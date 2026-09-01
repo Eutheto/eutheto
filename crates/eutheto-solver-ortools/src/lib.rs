@@ -1,0 +1,1147 @@
+#![forbid(unsafe_code)]
+
+use std::collections::VecDeque;
+use std::fmt;
+use std::future::Future;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
+use std::time::{Duration, Instant};
+
+use eutheto_protocol::frame::{decode_worker_frame, encode_frame, write_solve_request_frame_async};
+use eutheto_protocol::wire::{
+    Capability, HandshakeRequest, ParentFrame, SolveRequest, WorkerFrame, parent_frame,
+    worker_frame,
+};
+use eutheto_protocol::{
+    BoundedStderr, CompletedSession, FrameClass, FrameFault, HandshakeExpectations, ParentProtocol,
+    ProtocolFault, ProtocolPolicy, WorkerObservation, checked_in_policy,
+};
+use eutheto_types::SolveBudgetView;
+#[cfg(windows)]
+use process_wrap::tokio::JobObject;
+#[cfg(unix)]
+use process_wrap::tokio::ProcessGroup;
+use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
+use prost::bytes::Bytes;
+use sha2::{Digest, Sha256};
+use tempfile::TempDir;
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::task::JoinHandle;
+
+/// The fixed interval allowed for graceful Unix process-group termination.
+pub const TERMINATION_GRACE: Duration = Duration::from_millis(250);
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const HASH_BUFFER_BYTES: usize = 64 * 1024;
+
+/// An executable whose exact bytes and manifest correlation were supplied by a
+/// trusted manifest-validation boundary.
+#[derive(Clone)]
+pub struct VerifiedExecutable {
+    path: PathBuf,
+    executable_sha256: [u8; 32],
+    manifest_sha256: [u8; 32],
+}
+
+impl VerifiedExecutable {
+    /// Checks path shape and executable bytes without following a final symlink.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe identity error when the path is not absolute, is a
+    /// symlink or non-regular file, cannot be read, or hashes differently.
+    pub async fn verify(
+        path: impl Into<PathBuf>,
+        executable_sha256: [u8; 32],
+        manifest_sha256: [u8; 32],
+    ) -> Result<Self, ExecutableIdentityError> {
+        let path = path.into();
+        verify_path_and_digest(&path, &executable_sha256).await?;
+        Ok(Self {
+            path,
+            executable_sha256,
+            manifest_sha256,
+        })
+    }
+
+    /// Returns the caller-supplied manifest digest used for handshake correlation.
+    #[must_use]
+    pub const fn manifest_sha256(&self) -> &[u8; 32] {
+        &self.manifest_sha256
+    }
+}
+
+impl fmt::Debug for VerifiedExecutable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VerifiedExecutable { identity: [redacted] }")
+    }
+}
+
+/// Safe failures while checking an executable identity.
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum ExecutableIdentityError {
+    #[error("worker executable path is not absolute")]
+    NotAbsolute,
+    #[error("worker executable path is a symbolic link")]
+    SymbolicLink,
+    #[error("worker executable is not a regular file")]
+    NotRegularFile,
+    #[error("worker executable identity could not be read: {0:?}")]
+    Io(io::ErrorKind),
+    #[error("worker executable digest does not match its approved identity")]
+    DigestMismatch,
+}
+
+/// Expected immutable identity and capability surface for one worker binary.
+#[derive(Clone, Debug)]
+pub struct WorkerIdentity {
+    pub worker_identity: String,
+    pub worker_version: String,
+    pub backend_id: String,
+    pub ortools_version: String,
+    pub adapter_version: String,
+    pub required_capabilities: Vec<Capability>,
+    pub advertised_capabilities: Vec<Capability>,
+}
+
+/// Complete inputs for one fresh worker process and one solve session.
+#[derive(Clone)]
+pub struct SessionRequest {
+    pub executable: VerifiedExecutable,
+    pub identity: WorkerIdentity,
+    pub core_version: String,
+    pub solve: SolveRequest,
+}
+
+impl fmt::Debug for SessionRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionRequest")
+            .field("executable", &"[redacted]")
+            .field(
+                "required_capability_count",
+                &self.identity.required_capabilities.len(),
+            )
+            .field("solve", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Why a session stopped, without filesystem identity or worker diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SafeStopReason {
+    Completed,
+    HandshakeRejected,
+    Cancelled,
+    DeadlineExceeded,
+    ProtocolViolation,
+    OutputLimit,
+    Io,
+    WorkerExit,
+}
+
+/// A fully corroborated normal protocol outcome and bounded sanitized stderr.
+///
+/// Solve terminal evidence remains untrusted: this type conveys no candidate
+/// feasibility, model validity, or domain validity.
+#[derive(Debug)]
+pub struct SessionCompletion {
+    pub evidence: CompletedSession,
+    pub stderr: BoundedStderr,
+    pub stop_reason: SafeStopReason,
+}
+
+/// A failed session after process-tree termination and reaping was attempted.
+#[derive(Debug)]
+pub struct SessionFailure {
+    pub error: SupervisorError,
+    pub stderr: BoundedStderr,
+    pub stop_reason: SafeStopReason,
+}
+
+impl fmt::Display for SessionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for SessionFailure {}
+
+/// Safe supervisor diagnostics. Paths, digests, and stderr are deliberately not
+/// included in its `Display` representation.
+#[derive(Debug, Error)]
+pub enum SupervisorError {
+    #[error(transparent)]
+    Executable(#[from] ExecutableIdentityError),
+    #[error(transparent)]
+    Protocol(#[from] ProtocolFault),
+    #[error("worker process operation failed during {operation}: {kind:?}")]
+    Io {
+        operation: &'static str,
+        kind: io::ErrorKind,
+    },
+    #[error("worker stdout exceeded the checked-in frame count limit")]
+    FrameCountLimit,
+    #[error("worker stdout exceeded the checked-in event count limit")]
+    EventCountLimit,
+    #[error("worker stdout exceeded the checked-in session byte limit")]
+    SessionByteLimit,
+    #[error("worker progress/incumbent rate exceeded the checked-in limit")]
+    EventRateLimit,
+    #[error("solve was explicitly cancelled")]
+    Cancelled,
+    #[error("the original parent solve deadline elapsed")]
+    DeadlineExceeded,
+    #[error("worker exited without a portable exit code")]
+    MissingExitCode,
+    #[error("stderr drain task did not complete")]
+    StderrDrain,
+}
+
+impl SupervisorError {
+    fn stop_reason(&self) -> SafeStopReason {
+        match self {
+            Self::Cancelled => SafeStopReason::Cancelled,
+            Self::DeadlineExceeded => SafeStopReason::DeadlineExceeded,
+            Self::FrameCountLimit
+            | Self::EventCountLimit
+            | Self::SessionByteLimit
+            | Self::EventRateLimit
+            | Self::Protocol(ProtocolFault::Frame(FrameFault::Oversized { .. })) => {
+                SafeStopReason::OutputLimit
+            }
+            Self::Protocol(_) => SafeStopReason::ProtocolViolation,
+            Self::MissingExitCode => SafeStopReason::WorkerExit,
+            Self::Executable(_) | Self::Io { .. } | Self::StderrDrain => SafeStopReason::Io,
+        }
+    }
+
+    fn graceful_stop(&self) -> bool {
+        matches!(self, Self::Cancelled | Self::DeadlineExceeded)
+    }
+}
+
+/// Launches a fresh no-argument worker and supervises exactly one protocol session.
+///
+/// The supplied budget remains tied to its original parent deadline across
+/// executable revalidation, launch, handshake, request streaming, solve, EOF,
+/// and process exit.
+///
+/// # Errors
+///
+/// Returns a safe failure after terminating and reaping the worker tree when
+/// executable validation, process I/O, protocol validation, cancellation, or
+/// the parent deadline prevents a corroborated completion.
+#[allow(clippy::too_many_lines)]
+pub async fn supervise(
+    request: SessionRequest,
+    budget: SolveBudgetView,
+) -> Result<SessionCompletion, SessionFailure> {
+    let policy = match checked_in_policy() {
+        Ok(policy) => policy,
+        Err(error) => return Err(prelaunch_failure(error.into())),
+    };
+    if let Err(error) = budget_checkpoint(&budget) {
+        return Err(prelaunch_failure(error));
+    }
+
+    let expectations = match expectations(&request) {
+        Ok(value) => value,
+        Err(error) => return Err(prelaunch_failure(error.into())),
+    };
+    let handshake = handshake_frame(&request, policy);
+    let directory = match private_worker_tempdir() {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(prelaunch_failure(io_error(
+                "creating private worker directory",
+                &error,
+            )));
+        }
+    };
+    let staged_executable = match budgeted(
+        &budget,
+        stage_verified_executable(&request.executable, directory.path()),
+    )
+    .await
+    {
+        Ok(path) => path,
+        Err(BudgetedError::Cancelled) => {
+            return Err(prelaunch_failure(SupervisorError::Cancelled));
+        }
+        Err(BudgetedError::DeadlineExceeded) => {
+            return Err(prelaunch_failure(SupervisorError::DeadlineExceeded));
+        }
+        Err(BudgetedError::Inner(error)) => {
+            return Err(prelaunch_failure(error.into()));
+        }
+    };
+    if let Err(error) = budget_checkpoint(&budget) {
+        return Err(prelaunch_failure(error));
+    }
+    let mut command = worker_command(&staged_executable, directory.path());
+    let child = match command.spawn() {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(prelaunch_failure(io_error("spawning worker", &error)));
+        }
+    };
+    let mut process = ProcessGuard::new(child, directory);
+    if let Err(error) = budget_checkpoint(&budget) {
+        return cleanup_failure(process, None, error).await;
+    }
+    let Some(stdin) = process.child_mut().stdin().take() else {
+        return cleanup_failure(
+            process,
+            None,
+            SupervisorError::Io {
+                operation: "taking worker stdin",
+                kind: io::ErrorKind::BrokenPipe,
+            },
+        )
+        .await;
+    };
+    let Some(stdout) = process.child_mut().stdout().take() else {
+        return cleanup_failure(
+            process,
+            None,
+            SupervisorError::Io {
+                operation: "taking worker stdout",
+                kind: io::ErrorKind::BrokenPipe,
+            },
+        )
+        .await;
+    };
+    let Some(stderr) = process.child_mut().stderr().take() else {
+        return cleanup_failure(
+            process,
+            None,
+            SupervisorError::Io {
+                operation: "taking worker stderr",
+                kind: io::ErrorKind::BrokenPipe,
+            },
+        )
+        .await;
+    };
+    let stderr_task = tokio::spawn(drain_stderr(stderr, policy.max_stderr_bytes()));
+
+    let execution = execute_session(
+        process.child_mut(),
+        WorkerPipes { stdin, stdout },
+        &budget,
+        policy,
+        expectations,
+        handshake,
+        &request.solve,
+    )
+    .await;
+    match execution {
+        Ok(evidence) => {
+            process.kill_remaining_tree().await;
+            let stderr = match budgeted(&budget, finish_stderr(stderr_task)).await {
+                Ok(stderr) => stderr,
+                Err(BudgetedError::Cancelled) => {
+                    return cleanup_failure(process, None, SupervisorError::Cancelled).await;
+                }
+                Err(BudgetedError::DeadlineExceeded) => {
+                    return cleanup_failure(process, None, SupervisorError::DeadlineExceeded).await;
+                }
+                Err(BudgetedError::Inner(error)) => {
+                    return cleanup_failure(process, None, error).await;
+                }
+            };
+            process.finish();
+            let stop_reason = match evidence {
+                CompletedSession::Solve(_) => SafeStopReason::Completed,
+                CompletedSession::HandshakeRejected(_) => SafeStopReason::HandshakeRejected,
+            };
+            Ok(SessionCompletion {
+                evidence,
+                stderr,
+                stop_reason,
+            })
+        }
+        Err(error) => cleanup_failure(process, Some(stderr_task), error).await,
+    }
+}
+
+fn prelaunch_failure(error: SupervisorError) -> SessionFailure {
+    let stop_reason = error.stop_reason();
+    SessionFailure {
+        error,
+        stderr: empty_stderr(),
+        stop_reason,
+    }
+}
+
+struct WorkerPipes {
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+}
+
+async fn execute_session(
+    child: &mut Box<dyn ChildWrapper>,
+    pipes: WorkerPipes,
+    budget: &SolveBudgetView,
+    policy: &ProtocolPolicy,
+    expectations: HandshakeExpectations,
+    handshake: ParentFrame,
+    solve: &SolveRequest,
+) -> Result<CompletedSession, SupervisorError> {
+    let WorkerPipes {
+        mut stdin,
+        mut stdout,
+    } = pipes;
+    let mut protocol = ParentProtocol::new(expectations);
+    protocol.on_parent_frame(&handshake)?;
+    let handshake_bytes = encode_frame(&handshake, FrameClass::Handshake, policy)?;
+    budgeted(budget, stdin.write_all(&handshake_bytes))
+        .await
+        .map_err(|error| map_budgeted_io(error, "writing worker handshake"))?;
+
+    let mut accounting = OutputAccounting::default();
+    let Some(first) = read_worker_frame(
+        &mut stdout,
+        FrameClass::Handshake,
+        policy,
+        budget,
+        accounting.session_bytes,
+        accounting.frames,
+    )
+    .await?
+    else {
+        protocol.on_eof()?;
+        return Err(ProtocolFault::from(eutheto_protocol::StateFault::MissingTerminal).into());
+    };
+    accounting.record_frame(first.1, false, policy)?;
+    let observation = protocol.on_worker_frame(first.0)?;
+    match observation {
+        WorkerObservation::HandshakeAccepted => {
+            let parent_solve = ParentFrame {
+                body: Some(parent_frame::Body::SolveRequest(solve.clone())),
+            };
+            protocol.on_parent_frame(&parent_solve)?;
+            budgeted(
+                budget,
+                write_solve_request_frame_async(&mut stdin, solve, policy),
+            )
+            .await
+            .map_err(map_budgeted_protocol)?;
+            budgeted(budget, stdin.shutdown())
+                .await
+                .map_err(|error| map_budgeted_io(error, "closing worker stdin"))?;
+            drop(stdin);
+        }
+        WorkerObservation::HandshakeRejected => drop(stdin),
+        _ => return Err(ProtocolFault::from(eutheto_protocol::StateFault::MissingTerminal).into()),
+    }
+
+    loop {
+        if let Some((frame, bytes)) = read_worker_frame(
+            &mut stdout,
+            FrameClass::WorkerEvent,
+            policy,
+            budget,
+            accounting.session_bytes,
+            accounting.frames,
+        )
+        .await?
+        {
+            let intermediate = matches!(
+                &frame.body,
+                Some(worker_frame::Body::Progress(_) | worker_frame::Body::Incumbent(_))
+            );
+            accounting.record_frame(bytes, intermediate, policy)?;
+            if intermediate {
+                accounting.record_intermediate_rate(Instant::now(), policy)?;
+            }
+            protocol.on_worker_frame(frame)?;
+        } else {
+            protocol.on_eof()?;
+            break;
+        }
+    }
+
+    let status = budgeted(budget, child.wait())
+        .await
+        .map_err(|error| map_budgeted_io(error, "waiting for worker exit"))?;
+    let code = portable_exit_code(status)?;
+    protocol.on_exit(code)?;
+    protocol.into_completion().map_err(Into::into)
+}
+
+#[derive(Default)]
+struct OutputAccounting {
+    frames: usize,
+    events: usize,
+    session_bytes: usize,
+    rate_window: VecDeque<Instant>,
+}
+
+impl OutputAccounting {
+    fn record_frame(
+        &mut self,
+        bytes: usize,
+        intermediate: bool,
+        policy: &ProtocolPolicy,
+    ) -> Result<(), SupervisorError> {
+        self.frames = self
+            .frames
+            .checked_add(1)
+            .ok_or(SupervisorError::FrameCountLimit)?;
+        if self.frames > policy.frames_per_session() {
+            return Err(SupervisorError::FrameCountLimit);
+        }
+        self.session_bytes = self
+            .session_bytes
+            .checked_add(bytes)
+            .ok_or(SupervisorError::SessionByteLimit)?;
+        if self.session_bytes > policy.total_session_bytes() {
+            return Err(SupervisorError::SessionByteLimit);
+        }
+        if intermediate {
+            self.events = self
+                .events
+                .checked_add(1)
+                .ok_or(SupervisorError::EventCountLimit)?;
+            if self.events > policy.events_per_session() {
+                return Err(SupervisorError::EventCountLimit);
+            }
+        }
+        Ok(())
+    }
+
+    fn record_intermediate_rate(
+        &mut self,
+        now: Instant,
+        policy: &ProtocolPolicy,
+    ) -> Result<(), SupervisorError> {
+        let cutoff = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
+        while self
+            .rate_window
+            .front()
+            .is_some_and(|instant| *instant <= cutoff)
+        {
+            self.rate_window.pop_front();
+        }
+        if self.rate_window.len() >= policy.events_per_second() {
+            return Err(SupervisorError::EventRateLimit);
+        }
+        self.rate_window.push_back(now);
+        Ok(())
+    }
+}
+
+async fn read_worker_frame<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    class: FrameClass,
+    policy: &ProtocolPolicy,
+    budget: &SolveBudgetView,
+    accounted_bytes: usize,
+    accounted_frames: usize,
+) -> Result<Option<(WorkerFrame, usize)>, SupervisorError> {
+    let mut prefix = [0u8; 4];
+    let first = budgeted(budget, reader.read(&mut prefix[..1]))
+        .await
+        .map_err(|error| map_budgeted_io(error, "reading worker frame prefix"))?;
+    if first == 0 {
+        return Ok(None);
+    }
+    let prefix_remainder = read_exact_count(
+        reader,
+        &mut prefix[1..],
+        budget,
+        "reading worker frame prefix",
+    )
+    .await?;
+    if prefix_remainder != 3 {
+        return Err(ProtocolFault::from(FrameFault::TruncatedPrefix {
+            received: 1 + prefix_remainder,
+        })
+        .into());
+    }
+    let length = usize::try_from(u32::from_be_bytes(prefix))
+        .map_err(|_| ProtocolFault::from(FrameFault::LengthOverflow))?;
+    if length == 0 {
+        return Err(ProtocolFault::from(FrameFault::ZeroLength).into());
+    }
+    let cap = policy.frame_cap(class);
+    if length > cap {
+        return Err(ProtocolFault::from(FrameFault::Oversized {
+            class: class.policy_name(),
+            length,
+            cap,
+        })
+        .into());
+    }
+    if accounted_frames >= policy.frames_per_session() {
+        return Err(SupervisorError::FrameCountLimit);
+    }
+    let total_bytes = length
+        .checked_add(4)
+        .ok_or_else(|| ProtocolFault::from(FrameFault::LengthOverflow))?;
+    let projected_session_bytes = accounted_bytes
+        .checked_add(total_bytes)
+        .ok_or(SupervisorError::SessionByteLimit)?;
+    if projected_session_bytes > policy.total_session_bytes() {
+        return Err(SupervisorError::SessionByteLimit);
+    }
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(length)
+        .map_err(|_| ProtocolFault::from(FrameFault::Allocation))?;
+    payload.resize(length, 0);
+    let received =
+        read_exact_count(reader, &mut payload, budget, "reading worker frame payload").await?;
+    if received != length {
+        return Err(ProtocolFault::from(FrameFault::TruncatedPayload {
+            declared: length,
+            received,
+        })
+        .into());
+    }
+    let frame = decode_worker_frame(Bytes::from(payload), class)?;
+    Ok(Some((frame, total_bytes)))
+}
+
+async fn read_exact_count<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    mut output: &mut [u8],
+    budget: &SolveBudgetView,
+    operation: &'static str,
+) -> Result<usize, SupervisorError> {
+    let expected = output.len();
+    while !output.is_empty() {
+        let read = budgeted(budget, reader.read(output))
+            .await
+            .map_err(|error| map_budgeted_io(error, operation))?;
+        if read == 0 {
+            break;
+        }
+        output = &mut output[read..];
+    }
+    Ok(expected - output.len())
+}
+
+fn expectations(request: &SessionRequest) -> Result<HandshakeExpectations, ProtocolFault> {
+    HandshakeExpectations::checked_in(
+        request.identity.worker_identity.clone(),
+        request.identity.worker_version.clone(),
+        request.identity.backend_id.clone(),
+        request.identity.ortools_version.clone(),
+        request.identity.adapter_version.clone(),
+        request.executable.manifest_sha256,
+        request.identity.required_capabilities.iter().copied(),
+        request.identity.advertised_capabilities.iter().copied(),
+    )
+}
+
+fn handshake_frame(request: &SessionRequest, policy: &ProtocolPolicy) -> ParentFrame {
+    ParentFrame {
+        body: Some(parent_frame::Body::HandshakeRequest(HandshakeRequest {
+            protocol_major: policy.protocol_major(),
+            protocol_minor: policy.protocol_minor(),
+            core_version: request.core_version.clone(),
+            expected_backend_id: request.identity.backend_id.clone(),
+            expected_manifest_sha256: Bytes::copy_from_slice(&request.executable.manifest_sha256),
+            required_capabilities: request
+                .identity
+                .required_capabilities
+                .iter()
+                .map(|capability| *capability as i32)
+                .collect(),
+        })),
+    }
+}
+
+fn worker_command(path: &Path, cwd: &Path) -> CommandWrap {
+    let mut command = CommandWrap::with_new(path.as_os_str(), |command| {
+        command
+            .env_clear()
+            .current_dir(cwd)
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        command.env("TMPDIR", cwd);
+        #[cfg(windows)]
+        command.env("TEMP", cwd).env("TMP", cwd);
+    });
+    command.wrap(KillOnDrop);
+    #[cfg(unix)]
+    command.wrap(ProcessGroup::leader());
+    #[cfg(windows)]
+    command.wrap(JobObject);
+    command
+}
+
+fn private_worker_tempdir() -> io::Result<TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("eutheto-worker-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    // Windows relies on the current user's temporary-directory ACL. The child
+    // receives only this already-selected path after its environment is cleared.
+    builder.tempdir()
+}
+
+async fn stage_verified_executable(
+    executable: &VerifiedExecutable,
+    directory: &Path,
+) -> Result<PathBuf, ExecutableIdentityError> {
+    let path = &executable.path;
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(ExecutableIdentityError::SymbolicLink);
+    }
+    if !metadata.is_file() {
+        return Err(ExecutableIdentityError::NotRegularFile);
+    }
+    let mut source = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    let opened_metadata = source
+        .metadata()
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    if !opened_metadata.is_file() {
+        return Err(ExecutableIdentityError::NotRegularFile);
+    }
+    #[cfg(unix)]
+    let staged_path = directory.join("worker");
+    #[cfg(windows)]
+    let staged_path = directory.join("worker.exe");
+    let mut staged = tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&staged_path)
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; HASH_BUFFER_BYTES];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .await
+            .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        staged
+            .write_all(&buffer[..read])
+            .await
+            .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    }
+    staged
+        .flush()
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    let actual: [u8; 32] = digest.finalize().into();
+    if actual != executable.executable_sha256 {
+        return Err(ExecutableIdentityError::DigestMismatch);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staged
+            .set_permissions(std::fs::Permissions::from_mode(0o700))
+            .await
+            .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    }
+    drop(staged);
+    Ok(staged_path)
+}
+
+async fn verify_path_and_digest(
+    path: &Path,
+    expected: &[u8; 32],
+) -> Result<(), ExecutableIdentityError> {
+    if !path.is_absolute() {
+        return Err(ExecutableIdentityError::NotAbsolute);
+    }
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(ExecutableIdentityError::SymbolicLink);
+    }
+    if !metadata.is_file() {
+        return Err(ExecutableIdentityError::NotRegularFile);
+    }
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; HASH_BUFFER_BYTES];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let actual: [u8; 32] = digest.finalize().into();
+    if actual != *expected {
+        return Err(ExecutableIdentityError::DigestMismatch);
+    }
+    Ok(())
+}
+
+async fn drain_stderr(
+    mut stderr: tokio::process::ChildStderr,
+    max_bytes: usize,
+) -> Result<BoundedStderr, SupervisorError> {
+    let mut bounded = BoundedStderr::new(max_bytes)?;
+    let mut buffer = [0u8; 4096];
+    loop {
+        let read = stderr
+            .read(&mut buffer)
+            .await
+            .map_err(|error| io_error("draining worker stderr", &error))?;
+        if read == 0 {
+            return Ok(bounded);
+        }
+        bounded.push(&buffer[..read]);
+    }
+}
+
+async fn finish_stderr(
+    task: JoinHandle<Result<BoundedStderr, SupervisorError>>,
+) -> Result<BoundedStderr, SupervisorError> {
+    task.await.map_err(|_| SupervisorError::StderrDrain)?
+}
+
+fn empty_stderr() -> BoundedStderr {
+    match BoundedStderr::new(eutheto_protocol::STDERR_TRUNCATION_MARKER.len()) {
+        Ok(stderr) => stderr,
+        Err(_) => std::process::abort(),
+    }
+}
+
+struct ProcessGuard {
+    child: Option<Box<dyn ChildWrapper>>,
+    directory: Option<TempDir>,
+}
+
+impl ProcessGuard {
+    fn new(child: Box<dyn ChildWrapper>, directory: TempDir) -> Self {
+        Self {
+            child: Some(child),
+            directory: Some(directory),
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut Box<dyn ChildWrapper> {
+        match &mut self.child {
+            Some(child) => child,
+            None => std::process::abort(),
+        }
+    }
+
+    fn finish(mut self) {
+        drop(self.child.take());
+        drop(self.directory.take());
+    }
+
+    async fn kill_remaining_tree(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+        }
+    }
+
+    async fn stop_and_reap(&mut self, graceful: bool) {
+        if let Some(child) = &mut self.child {
+            stop_and_reap(child, graceful).await;
+        }
+        drop(self.child.take());
+        drop(self.directory.take());
+    }
+}
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let directory = self.directory.take();
+        let _ = child.start_kill();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn(async move {
+                let _ = child.wait().await;
+                drop(directory);
+            }));
+        }
+    }
+}
+
+async fn cleanup_failure(
+    mut process: ProcessGuard,
+    stderr_task: Option<JoinHandle<Result<BoundedStderr, SupervisorError>>>,
+    error: SupervisorError,
+) -> Result<SessionCompletion, SessionFailure> {
+    process.stop_and_reap(error.graceful_stop()).await;
+    let stderr = match stderr_task {
+        Some(task) => match tokio::time::timeout(TERMINATION_GRACE, finish_stderr(task)).await {
+            Ok(Ok(stderr)) => stderr,
+            _ => empty_stderr(),
+        },
+        None => empty_stderr(),
+    };
+    process.finish();
+    let stop_reason = error.stop_reason();
+    Err(SessionFailure {
+        error,
+        stderr,
+        stop_reason,
+    })
+}
+
+async fn stop_and_reap(child: &mut Box<dyn ChildWrapper>, graceful: bool) {
+    #[cfg(unix)]
+    if graceful {
+        const SIGTERM: i32 = 15;
+        let _ = child.signal(SIGTERM);
+        tokio::time::sleep(TERMINATION_GRACE).await;
+    }
+    #[cfg(windows)]
+    let _ = graceful;
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+fn portable_exit_code(status: ExitStatus) -> Result<i32, SupervisorError> {
+    status.code().ok_or(SupervisorError::MissingExitCode)
+}
+
+fn io_error(operation: &'static str, error: &io::Error) -> SupervisorError {
+    SupervisorError::Io {
+        operation,
+        kind: error.kind(),
+    }
+}
+
+#[derive(Debug)]
+enum BudgetedError<E> {
+    Cancelled,
+    DeadlineExceeded,
+    Inner(E),
+}
+
+fn budget_checkpoint(budget: &SolveBudgetView) -> Result<(), SupervisorError> {
+    let snapshot = budget.snapshot();
+    if snapshot.cancelled {
+        Err(SupervisorError::Cancelled)
+    } else if snapshot.expired {
+        Err(SupervisorError::DeadlineExceeded)
+    } else {
+        Ok(())
+    }
+}
+
+async fn budgeted<F, T, E>(budget: &SolveBudgetView, future: F) -> Result<T, BudgetedError<E>>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    tokio::pin!(future);
+    loop {
+        let snapshot = budget.snapshot();
+        if snapshot.cancelled {
+            return Err(BudgetedError::Cancelled);
+        }
+        if snapshot.expired {
+            return Err(BudgetedError::DeadlineExceeded);
+        }
+        let pause = CANCELLATION_POLL_INTERVAL.min(budget.remaining_duration());
+        tokio::select! {
+            output = &mut future => {
+                let snapshot = budget.snapshot();
+                if snapshot.cancelled {
+                    return Err(BudgetedError::Cancelled);
+                }
+                if snapshot.expired {
+                    return Err(BudgetedError::DeadlineExceeded);
+                }
+                return output.map_err(BudgetedError::Inner);
+            }
+            () = tokio::time::sleep(pause) => {}
+        }
+    }
+}
+
+fn map_budgeted_protocol(error: BudgetedError<ProtocolFault>) -> SupervisorError {
+    match error {
+        BudgetedError::Cancelled => SupervisorError::Cancelled,
+        BudgetedError::DeadlineExceeded => SupervisorError::DeadlineExceeded,
+        BudgetedError::Inner(error) => SupervisorError::Protocol(error),
+    }
+}
+
+fn map_budgeted_io(error: BudgetedError<io::Error>, operation: &'static str) -> SupervisorError {
+    match error {
+        BudgetedError::Cancelled => SupervisorError::Cancelled,
+        BudgetedError::DeadlineExceeded => SupervisorError::DeadlineExceeded,
+        BudgetedError::Inner(error) => io_error(operation, &error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::{
+        BudgetedError, OutputAccounting, SupervisorError, VerifiedExecutable, budgeted,
+        private_worker_tempdir, stage_verified_executable, worker_command,
+    };
+    use eutheto_protocol::checked_in_policy;
+    use eutheto_types::{
+        CancellationToken, DurationMillis, FixedMonotonicClock, ParentSolveBudget,
+    };
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn session_accepts_exact_intermediate_event_and_total_frame_caps()
+    -> Result<(), eutheto_protocol::ProtocolFault> {
+        let policy = checked_in_policy()?;
+        assert_eq!(policy.events_per_session(), 4096);
+        assert_eq!(policy.frames_per_session(), 4099);
+        let mut accounting = OutputAccounting::default();
+        accounting
+            .record_frame(1, false, policy)
+            .map_err(supervisor_fault)?;
+        accounting
+            .record_frame(1, false, policy)
+            .map_err(supervisor_fault)?;
+        for _ in 0..policy.events_per_session() {
+            accounting
+                .record_frame(1, true, policy)
+                .map_err(supervisor_fault)?;
+        }
+        accounting
+            .record_frame(1, false, policy)
+            .map_err(supervisor_fault)?;
+        assert_eq!(accounting.events, policy.events_per_session());
+        assert_eq!(accounting.frames, policy.frames_per_session());
+        Ok(())
+    }
+
+    #[test]
+    fn session_rejects_one_intermediate_event_over_cap()
+    -> Result<(), eutheto_protocol::ProtocolFault> {
+        let policy = checked_in_policy()?;
+        let mut accounting = OutputAccounting::default();
+        accounting
+            .record_frame(1, false, policy)
+            .map_err(supervisor_fault)?;
+        accounting
+            .record_frame(1, false, policy)
+            .map_err(supervisor_fault)?;
+        for _ in 0..policy.events_per_session() {
+            accounting
+                .record_frame(1, true, policy)
+                .map_err(supervisor_fault)?;
+        }
+        assert!(matches!(
+            accounting.record_frame(1, true, policy),
+            Err(SupervisorError::EventCountLimit)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn session_byte_cap_rejects_before_unbounded_output_accounting()
+    -> Result<(), eutheto_protocol::ProtocolFault> {
+        let policy = checked_in_policy()?;
+        let mut accounting = OutputAccounting::default();
+        assert!(matches!(
+            accounting.record_frame(policy.total_session_bytes() + 1, false, policy),
+            Err(SupervisorError::SessionByteLimit)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ready_output_cannot_cross_the_deadline_boundary() -> Result<(), Box<dyn Error>> {
+        let clock = FixedMonotonicClock::default();
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(1)?,
+            Arc::new(clock.clone()),
+            CancellationToken::new(),
+        )?;
+        let result = budgeted(&parent.phase_view(), async {
+            clock.advance(Duration::from_millis(1))?;
+            Ok::<_, eutheto_types::FixedMonotonicClockError>(())
+        })
+        .await;
+        assert!(matches!(result, Err(BudgetedError::DeadlineExceeded)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ready_output_cannot_cross_cancellation_boundary() -> Result<(), Box<dyn Error>> {
+        let clock = FixedMonotonicClock::default();
+        let cancellation = CancellationToken::new();
+        let parent = ParentSolveBudget::new(
+            DurationMillis::new(1)?,
+            Arc::new(clock.clone()),
+            cancellation.clone(),
+        )?;
+        let result = budgeted(&parent.phase_view(), async {
+            clock.advance(Duration::from_millis(1))?;
+            cancellation.cancel();
+            Ok::<_, eutheto_types::FixedMonotonicClockError>(())
+        })
+        .await;
+        assert!(matches!(result, Err(BudgetedError::Cancelled)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn staged_copy_survives_original_replacement_and_has_private_modes()
+    -> Result<(), Box<dyn Error>> {
+        let source_directory = tempfile::tempdir()?;
+        let source = source_directory.path().join("approved-worker");
+        let approved = b"approved executable bytes";
+        tokio::fs::write(&source, approved).await?;
+        let executable = VerifiedExecutable {
+            path: source.clone(),
+            executable_sha256: Sha256::digest(approved).into(),
+            manifest_sha256: [0x5a; 32],
+        };
+        let private_directory = private_worker_tempdir()?;
+        let staged = stage_verified_executable(&executable, private_directory.path()).await?;
+        tokio::fs::write(&source, b"hostile replacement").await?;
+        assert_eq!(tokio::fs::read(&staged).await?, approved);
+        let command = worker_command(&staged, private_directory.path());
+        assert_eq!(command.command().as_std().get_program(), staged.as_os_str());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let directory_mode = private_directory.path().metadata()?.permissions().mode() & 0o777;
+            let executable_mode = staged.metadata()?.permissions().mode() & 0o777;
+            assert_eq!(directory_mode, 0o700);
+            assert_eq!(executable_mode, 0o700);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn supervisor_fault(error: SupervisorError) -> eutheto_protocol::ProtocolFault {
+        eutheto_protocol::ProtocolFault::Policy(error.to_string())
+    }
+}

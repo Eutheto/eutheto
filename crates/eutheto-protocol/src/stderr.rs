@@ -1,8 +1,10 @@
+use std::fmt;
+
 use crate::{ProtocolFault, StateFault};
 
 pub const STDERR_TRUNCATION_MARKER: &str = "[stderr truncated]";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BoundedStderr {
     retained: String,
     max_bytes: usize,
@@ -92,10 +94,22 @@ impl BoundedStderr {
     }
 }
 
+impl fmt::Debug for BoundedStderr {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BoundedStderr")
+            .field("retained_bytes", &self.retained.len())
+            .field("max_bytes", &self.max_bytes)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+
 pub(crate) fn is_unsafe_control(character: char) -> bool {
     character.is_control()
         || matches!(
             character,
+
             '\u{061c}'
                 | '\u{200b}'..='\u{200f}'
                 | '\u{2028}'..='\u{202e}'
@@ -108,6 +122,16 @@ pub(crate) fn is_unsafe_control(character: char) -> bool {
 mod tests {
     use super::{BoundedStderr, STDERR_TRUNCATION_MARKER};
     use crate::{ProtocolFault, checked_in_policy};
+    #[test]
+    fn debug_reports_only_bounded_metadata() -> Result<(), ProtocolFault> {
+        let mut stderr = BoundedStderr::new(128)?;
+        stderr.push(b"representative-secret-stderr");
+        let debug = format!("{stderr:?}");
+        assert!(!debug.contains("representative-secret-stderr"));
+        assert!(debug.contains("retained_bytes"));
+        assert!(debug.contains("max_bytes"));
+        Ok(())
+    }
 
     #[test]
     fn strips_terminal_controls_and_tolerates_invalid_utf8() -> Result<(), ProtocolFault> {

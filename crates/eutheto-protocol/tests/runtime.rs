@@ -11,9 +11,9 @@ use eutheto_protocol::wire::{
     worker_frame,
 };
 use eutheto_protocol::{
-    FrameClass, HandshakeExpectations, NormalizedAppliedParameters, ParentPhase, ParentProtocol,
-    ProtocolFault, ProtocolPolicy, StateFault, WorkerObservation, applied_parameters_sha256,
-    checked_in_policy, normalize_applied_parameters,
+    CompletedSession, FrameClass, HandshakeExpectations, NormalizedAppliedParameters, ParentPhase,
+    ParentProtocol, ProtocolFault, ProtocolPolicy, StateFault, WorkerObservation,
+    applied_parameters_sha256, checked_in_policy, normalize_applied_parameters,
 };
 
 const PARENT_MESSAGE: &str = "eutheto.worker.v1.ParentFrame";
@@ -275,6 +275,54 @@ fn terminal_evidence_compacts_borrowed_bytes() -> Result<(), ProtocolFault> {
         stored.applied_parameters_sha256.as_ptr() as usize,
         parameters_pointer
     );
+    Ok(())
+}
+
+#[test]
+fn consuming_completion_requires_eof_and_zero_exit() -> Result<(), ProtocolFault> {
+    let mut premature = running_protocol()?;
+    premature.on_worker_frame(finished("request-1"))?;
+    assert!(matches!(
+        premature.into_completion(),
+        Err(ProtocolFault::State(StateFault::CompletionUnavailable {
+            state: "terminal"
+        }))
+    ));
+
+    let mut complete = running_protocol()?;
+    complete.on_worker_frame(finished("request-1"))?;
+    complete.on_eof()?;
+    complete.on_exit(0)?;
+    assert!(matches!(
+        complete.into_completion()?,
+        CompletedSession::Solve(_)
+    ));
+    Ok(())
+}
+
+#[test]
+fn protocol_debug_omits_identity_hashes_messages_and_model_evidence() -> Result<(), ProtocolFault> {
+    let expectations_debug = format!("{:?}", expectations()?);
+    assert!(!expectations_debug.contains("eutheto-ortools-worker"));
+    assert!(!expectations_debug.contains("5a5a5a"));
+
+    let mut protocol = running_protocol()?;
+    protocol.on_worker_frame(WorkerFrame {
+        body: Some(worker_frame::Body::Error(WorkerError {
+            request_id: "request-1".to_owned(),
+            code: WorkerErrorCode::Internal as i32,
+            message: "representative-secret-message".to_owned(),
+            retryable: false,
+        })),
+    })?;
+    protocol.on_eof()?;
+    protocol.on_exit(0)?;
+    let parent_debug = format!("{protocol:?}");
+    assert_eq!(parent_debug, "ParentProtocol { phase: Complete }");
+    let completion_debug = format!("{:?}", protocol.into_completion()?);
+    assert!(!completion_debug.contains("representative-secret-message"));
+    assert!(!completion_debug.contains("request-1"));
+    assert_eq!(completion_debug, "CompletedSession::Solve");
     Ok(())
 }
 
@@ -1174,6 +1222,13 @@ fn handshake_rejection_requires_clean_eof_and_zero_exit() -> Result<(), Protocol
     assert_eq!(evidence.error().message, "minor dialect is unsupported");
     assert_eq!(evidence.error().supported_protocol_major, Some(1));
     assert_eq!(evidence.error().supported_protocol_minor, Some(0));
+    let rejection_debug = format!("{evidence:?}");
+    assert_eq!(rejection_debug, "HandshakeRejectionEvidence");
+    assert!(!rejection_debug.contains("minor dialect is unsupported"));
+    assert!(matches!(
+        protocol.into_completion()?,
+        CompletedSession::HandshakeRejected(_)
+    ));
 
     let mut nonzero = ParentProtocol::new(expectations()?);
     nonzero.on_parent_frame(&handshake_request()?)?;

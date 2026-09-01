@@ -188,6 +188,8 @@ pub enum StateFault {
     ExitBeforeEof,
     #[error("worker exit was observed more than once")]
     DuplicateExit,
+    #[error("completed evidence is unavailable while protocol is in {state}")]
+    CompletionUnavailable { state: &'static str },
     #[error("stderr retention limit is smaller than its truncation marker")]
     StderrLimit,
 }

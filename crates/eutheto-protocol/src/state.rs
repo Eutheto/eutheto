@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt;
 
 use prost::bytes::Bytes;
 use semver::Version;
@@ -16,7 +17,7 @@ use crate::wire::{
 };
 use crate::{ProtocolFault, StateFault};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HandshakeExpectations {
     protocol_major: u32,
     protocol_minor: u32,
@@ -28,6 +29,24 @@ pub struct HandshakeExpectations {
     manifest_sha256: [u8; 32],
     required_capabilities: BTreeSet<i32>,
     expected_advertised_capabilities: BTreeSet<i32>,
+}
+
+impl fmt::Debug for HandshakeExpectations {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HandshakeExpectations")
+            .field("protocol_major", &self.protocol_major)
+            .field("protocol_minor", &self.protocol_minor)
+            .field(
+                "required_capability_count",
+                &self.required_capabilities.len(),
+            )
+            .field(
+                "advertised_capability_count",
+                &self.expected_advertised_capabilities.len(),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl HandshakeExpectations {
@@ -302,7 +321,7 @@ pub fn applied_parameters_sha256(parameters: &NormalizedAppliedParameters) -> [u
 }
 
 /// A validated worker handshake rejection after clean EOF and exit code zero.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct HandshakeRejectionEvidence {
     error: HandshakeError,
 }
@@ -314,11 +333,17 @@ impl HandshakeRejectionEvidence {
     }
 }
 
+impl fmt::Debug for HandshakeRejectionEvidence {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("HandshakeRejectionEvidence")
+    }
+}
+
 /// The exact terminal worker frame after protocol-consistent EOF and exit.
 ///
 /// This remains untrusted candidate evidence. It conveys no feasibility,
 /// objective, model-validity, or domain-validity claim.
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct TerminalEvidence {
     frame: WorkerFrame,
 }
@@ -327,6 +352,36 @@ impl TerminalEvidence {
     #[must_use]
     pub fn frame(&self) -> &WorkerFrame {
         &self.frame
+    }
+}
+
+impl fmt::Debug for TerminalEvidence {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = match &self.frame.body {
+            Some(worker_frame::Body::Finished(_)) => "finished",
+            Some(worker_frame::Body::Error(_)) => "error",
+            _ => "invalid",
+        };
+        formatter
+            .debug_struct("TerminalEvidence")
+            .field("kind", &kind)
+            .finish()
+    }
+}
+
+/// Evidence that became available only after clean EOF and exit code zero.
+#[derive(PartialEq)]
+pub enum CompletedSession {
+    Solve(Box<TerminalEvidence>),
+    HandshakeRejected(HandshakeRejectionEvidence),
+}
+
+impl fmt::Debug for CompletedSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Solve(_) => "CompletedSession::Solve",
+            Self::HandshakeRejected(_) => "CompletedSession::HandshakeRejected",
+        })
     }
 }
 
@@ -356,11 +411,19 @@ enum PhaseState {
     Failed,
 }
 
-#[derive(Debug)]
 pub struct ParentProtocol {
     expectations: HandshakeExpectations,
     negotiated_capabilities: BTreeSet<i32>,
     phase: PhaseState,
+}
+
+impl fmt::Debug for ParentProtocol {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ParentProtocol")
+            .field("phase", &self.phase())
+            .finish()
+    }
 }
 
 impl ParentProtocol {
@@ -723,6 +786,29 @@ impl ParentProtocol {
         match &self.phase {
             PhaseState::RejectedComplete(evidence) => Some(evidence),
             _ => None,
+        }
+    }
+
+    /// Consumes a fully corroborated session and returns its completed evidence.
+    ///
+    /// Evidence is unavailable until both clean stdout EOF and exit code zero
+    /// have been observed. Every incomplete or failed phase returns a state
+    /// fault instead of exposing provisional terminal data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a completion-unavailable state fault unless the phase is
+    /// `Complete` or `RejectedComplete`.
+    pub fn into_completion(self) -> Result<CompletedSession, ProtocolFault> {
+        match self.phase {
+            PhaseState::Complete(evidence) => Ok(CompletedSession::Solve(Box::new(evidence))),
+            PhaseState::RejectedComplete(evidence) => {
+                Ok(CompletedSession::HandshakeRejected(evidence))
+            }
+            phase => Err(StateFault::CompletionUnavailable {
+                state: phase_state_name(&phase),
+            }
+            .into()),
         }
     }
 

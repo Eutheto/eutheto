@@ -537,6 +537,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "cfg_aliases",
+      "version": "0.2.2",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "chrono",
       "version": "0.4.45",
       "kind": "dependency",
@@ -1273,6 +1285,14 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-solver-ortools",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-solver-ortools"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-solver-router",
       "version": "0.1.0",
       "kind": "workspace",
@@ -1473,6 +1493,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "futures",
+      "version": "0.3.34",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
       }
     },
     {
@@ -2737,6 +2769,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "nix",
+      "version": "0.31.3",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "num-conv",
       "version": "0.2.2",
       "kind": "dependency",
@@ -3369,6 +3413,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "process-wrap",
+      "version": "10.0.0",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "0e3f4237d0e4741eb50bc5584db701f1299c85fa31ff0274dd6445e79dc42d12"
       }
     },
     {
@@ -4406,13 +4462,13 @@
     {
       "ecosystem": "cargo",
       "name": "tauri-plugin-fs",
-      "version": "2.5.1",
+      "version": "2.5.2",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": {
         "algorithm": "SHA256",
-        "value": "b7ecc274121aca0c036a2b42d1cbe83d368d348f54e0bb8a735c2b1548e8f371"
+        "value": "de22eef34fd78c0da050e748710edd50bf127e651d02ea1b2bfada1523cc5c51"
       }
     },
     {
@@ -5413,6 +5469,18 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "windows",
+      "version": "0.62.2",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
+      }
+    },
+    {
+      "ecosystem": "cargo",
       "name": "windows-collections",
       "version": "0.2.0",
       "kind": "dependency",
@@ -5421,6 +5489,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "windows-collections",
+      "version": "0.3.2",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
       }
     },
     {
@@ -5457,6 +5537,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "windows-future",
+      "version": "0.3.2",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
       }
     },
     {
@@ -5517,6 +5609,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "windows-numerics",
+      "version": "0.3.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
       }
     },
     {
@@ -5661,6 +5765,18 @@
       "checksum": {
         "algorithm": "SHA256",
         "value": "b66463ad2e0ea3bbf808b7f1d371311c80e115c0b71d60efc142cafbcfb057a6"
+      }
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "windows-threading",
+      "version": "0.2.1",
+      "kind": "dependency",
+      "licenseConcluded": "NOASSERTION",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": {
+        "algorithm": "SHA256",
+        "value": "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
       }
     },
     {

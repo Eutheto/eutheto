@@ -83,6 +83,13 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-solver-ortools",
+      "version": "0.1.0",
+      "path": "crates/eutheto-solver-ortools",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-solver-router",
       "version": "0.1.0",
       "path": "crates/eutheto-solver-router",
