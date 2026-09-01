@@ -7,7 +7,8 @@ foreach(required_variable
     PROBE_TARGET
     PROBE_RUNNER_OS
     PROBE_RUNNER_ARCH
-    PROBE_GENERATOR)
+    PROBE_GENERATOR
+    PROBE_LINKAGE)
   if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
     message(FATAL_ERROR "${required_variable} is required.")
   endif()
@@ -41,6 +42,14 @@ if(NOT PROBE_RUNNER_OS STREQUAL expected_runner_os
   message(FATAL_ERROR
     "Target ${PROBE_TARGET} requires ${expected_runner_os}/${expected_runner_arch}, "
     "not ${PROBE_RUNNER_OS}/${PROBE_RUNNER_ARCH}.")
+endif()
+
+if(PROBE_LINKAGE STREQUAL "shared")
+  set(build_shared_libraries ON)
+elseif(PROBE_LINKAGE STREQUAL "static")
+  set(build_shared_libraries OFF)
+else()
+  message(FATAL_ERROR "PROBE_LINKAGE must be shared or static.")
 endif()
 
 set(source_tag "v9.15")
@@ -90,7 +99,7 @@ file(WRITE "${report_file}"
   "source_patch=${source_patch_relative}\n"
   "source_patch_sha256_expected=${expected_source_patch_sha256}\n"
   "protobuf_dependency_expected=v33.1\n"
-  "linkage_probe=shared\n"
+  "linkage_probe=${PROBE_LINKAGE}\n"
   "linkage_policy=measured-candidate-evidence-not-final-target-policy\n")
 file(WRITE "${cache_evidence_file}"
   "classification=candidate-non-distributable\n")
@@ -321,7 +330,7 @@ list(APPEND ortools_configure_command
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=${ortools_install_dir}"
   "-DCMAKE_CXX_FLAGS=${eigen_license_cxx_flag}"
-  "-DBUILD_SHARED_LIBS=ON"
+  "-DBUILD_SHARED_LIBS=${build_shared_libraries}"
   "-DBUILD_CXX=ON"
   "-DBUILD_DEPS=ON"
   "-DINSTALL_BUILD_DEPS=ON"
@@ -379,7 +388,7 @@ set(ortools_cache "${ortools_build_dir}/CMakeCache.txt")
 foreach(cache_expectation
     "CMAKE_BUILD_TYPE|Release"
     "CMAKE_CXX_FLAGS|${eigen_license_cxx_flag}"
-    "BUILD_SHARED_LIBS|ON"
+    "BUILD_SHARED_LIBS|${build_shared_libraries}"
     "BUILD_CXX|ON"
     "BUILD_DEPS|ON"
     "INSTALL_BUILD_DEPS|ON"

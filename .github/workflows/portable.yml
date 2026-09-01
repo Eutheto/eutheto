@@ -292,21 +292,25 @@ jobs:
             target: linux-x86_64
             generator: Unix Makefiles
             generator-platform: ""
+            linkage: shared
           - name: Windows x86_64
             os: windows-2025
             target: windows-x86_64
             generator: Ninja
             generator-platform: ""
+            linkage: static
           - name: macOS arm64
             os: macos-15
             target: macos-arm64
             generator: Unix Makefiles
             generator-platform: ""
+            linkage: shared
           - name: macOS x86_64
             os: macos-15-intel
             target: macos-x86_64
             generator: Unix Makefiles
             generator-platform: ""
+            linkage: shared
     runs-on: ${{ matrix.os }}
     timeout-minutes: 240
     steps:
@@ -332,6 +336,7 @@ jobs:
           "-DPROBE_RUNNER_ARCH=${{ runner.arch }}"
           "-DPROBE_GENERATOR=${{ matrix.generator }}"
           "-DPROBE_GENERATOR_PLATFORM=${{ matrix.generator-platform }}"
+          "-DPROBE_LINKAGE=${{ matrix.linkage }}"
           -P "${{ github.workspace }}/workers/ortools/cmake/candidate_probe.cmake"
 
       - name: Build and test non-distributable candidate
@@ -345,6 +350,7 @@ jobs:
           "-DPROBE_RUNNER_ARCH=${{ runner.arch }}"
           "-DPROBE_GENERATOR=${{ matrix.generator }}"
           "-DPROBE_GENERATOR_PLATFORM=${{ matrix.generator-platform }}"
+          "-DPROBE_LINKAGE=${{ matrix.linkage }}"
           -P "${{ github.workspace }}/workers/ortools/cmake/candidate_probe.cmake"
 
       - name: Upload candidate non-distributable text evidence
