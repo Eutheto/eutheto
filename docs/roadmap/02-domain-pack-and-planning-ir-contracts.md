@@ -580,12 +580,13 @@ Stop and write an ADR if a domain rule cannot be independently verified, backend
 Phase 02 was locally revalidated on 2026-08-31 with the repository-owned commands and actual adapter surfaces:
 
 - `just check` passed drift checks for 12 generated files, six protocol fixture pairs, 29 fixtures across 13 roots, the Phase-02 dependency graph, DCO self-tests, Rust/TypeScript/Nix formatting, Rust and TypeScript lint/type checks, all Rust workspace targets and documentation tests, and 28 Vue tests.
-- `nix flake check --no-update-lock-file` built all compatible local `x86_64-linux` flake checks after the untracked Phase-02 source files were included in the Git flake input. The command explicitly omitted the three incompatible non-local systems; hosted native checks remain required.
+- `nix flake check --no-update-lock-file` built all compatible local `x86_64-linux` flake checks after the untracked Phase-02 source files were included in the Git flake input. The command explicitly omitted the three incompatible non-local systems; protected pull-request checks supplied the native cross-platform evidence.
 - `nix develop .#full -c just fuzz-check`, using explicit `nightly-2026-08-28` compiler tools, completed bounded 30-second campaigns for all eight checked-in targets and seed corpora with no crashes.
 - The compiled `optimizer` process, using an isolated data directory and `--offline --format json`, returned the registered synthetic pack from `packs list` and returned no production solver claims, the generated 35-feature support matrix, and the deferred OR-Tools/Pumpkin gates from `solvers list`.
 - Independent DeepReview and security rechecks confirmed closure of every demonstrated Phase-02 blocker, including distinct school formulations, interval coherence, portable extension preservation, pack-owned project initialization, actual component split/merge equivalence, cumulative candidate retention, and authoritative parent/backend budget enforcement.
+- Pull request #9 passed the protected checks for implementation commit `43d624f`: canonical locked Nix, immutable-input and migration isolation, locked policy/scans/inventories, and native source build/test jobs on Ubuntu x86_64, Ubuntu arm64, Windows x86_64, Windows arm64, macOS x86_64, and macOS arm64.
 
-These local runs establish the Phase-02 contract and fixture behavior described above. Hosted cross-platform checks for the change remain required before merge; local evidence is not a substitute for those protected-branch checks. OR-Tools, Pumpkin, official school/workforce/seating packs, and authoritative verification remain deferred to their named phases.
+Together, the local and hosted runs establish the Phase-02 contract, fixture, and cross-platform behavior described above. OR-Tools, Pumpkin, official school/workforce/seating packs, and authoritative verification remain deferred to their named phases.
 
 ## Exit gate
 
