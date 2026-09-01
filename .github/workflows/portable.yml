@@ -315,6 +315,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Enable the MSVC command-line environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
       - name: Build and test non-distributable candidate
         if: runner.os != 'Windows'
         run: >-
@@ -330,10 +336,16 @@ jobs:
 
       - name: Build and test non-distributable candidate
         if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
-          cmake "-DREPOSITORY_ROOT=${{ github.workspace }}" "-DPROBE_ROOT=${{ runner.temp }}/eutheto-ortools-candidate" "-DPROBE_TARGET=${{ matrix.target }}" "-DPROBE_RUNNER_OS=${{ runner.os }}" "-DPROBE_RUNNER_ARCH=${{ runner.arch }}" "-DPROBE_GENERATOR=${{ matrix.generator }}" "-DPROBE_GENERATOR_PLATFORM=${{ matrix.generator-platform }}" -P "${{ github.workspace }}/workers/ortools/cmake/candidate_probe.cmake"
+        run: >-
+          cmake
+          "-DREPOSITORY_ROOT=${{ github.workspace }}"
+          "-DPROBE_ROOT=${{ runner.temp }}/eutheto-ortools-candidate"
+          "-DPROBE_TARGET=${{ matrix.target }}"
+          "-DPROBE_RUNNER_OS=${{ runner.os }}"
+          "-DPROBE_RUNNER_ARCH=${{ runner.arch }}"
+          "-DPROBE_GENERATOR=${{ matrix.generator }}"
+          "-DPROBE_GENERATOR_PLATFORM=${{ matrix.generator-platform }}"
+          -P "${{ github.workspace }}/workers/ortools/cmake/candidate_probe.cmake"
 
       - name: Upload candidate non-distributable text evidence
         if: always()
