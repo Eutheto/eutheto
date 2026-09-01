@@ -95,6 +95,7 @@
         "crates/eutheto-solver-api",
         "crates/eutheto-solver-router",
         "crates/eutheto-protocol",
+        "crates/eutheto-solver-ortools",
         "crates/eutheto-core",
         "crates/eutheto-store",
         "crates/eutheto-command",
