@@ -21,6 +21,7 @@ let
   linuxRuntimePackages = lib.unique (
     [
       pkgs.openssl
+      pkgs.stdenv.cc.cc.lib
       pkgs.sqlite
       llvm.libclang
     ]
