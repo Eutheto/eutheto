@@ -1,0 +1,23 @@
+{
+  "handshakeResponse": {
+    "success": {
+      "adapterVersion": "0.1.0",
+      "backendId": "ortools-cp-sat",
+      "capabilities": [
+        "CAPABILITY_CP_SAT",
+        "CAPABILITY_INTERMEDIATE_SOLUTIONS",
+        "CAPABILITY_PROGRESS",
+        "CAPABILITY_SOLUTION_PROJECTION",
+        "CAPABILITY_OBJECTIVE_BOUNDS",
+        "CAPABILITY_SOLUTION_STATS",
+        "CAPABILITY_DETERMINISTIC_TIME"
+      ],
+      "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "ortoolsVersion": "9.15.6755",
+      "protocolMajor": 1,
+      "protocolMinor": 0,
+      "workerIdentity": "eutheto-ortools-worker",
+      "workerVersion": "0.1.0"
+    }
+  }
+}

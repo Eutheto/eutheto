@@ -8,6 +8,30 @@ use crate::{generate, protocol, supply_chain};
 const REQUIRED_TRACKED_INPUTS_AND_OUTPUTS: &[&str] = &[
     "Cargo.lock",
     "pnpm-lock.yaml",
+    "protocol/solver-worker.proto",
+    "protocol/version.json",
+    "crates/eutheto-protocol/src/generated/eutheto.worker.v1.rs",
+    "protocol/generated/cpp/solver-worker.pb.cc",
+    "protocol/generated/cpp/solver-worker.pb.h",
+    "protocol/generated/eutheto.worker.v1.descriptor.pb",
+    "protocol/golden/finished.frame.hex",
+    "protocol/golden/finished.json",
+    "protocol/golden/handshake-error.frame.hex",
+    "protocol/golden/handshake-error.json",
+    "protocol/golden/handshake-request.frame.hex",
+    "protocol/golden/handshake-request.json",
+    "protocol/golden/handshake-response.frame.hex",
+    "protocol/golden/handshake-response.json",
+    "protocol/golden/incumbent.frame.hex",
+    "protocol/golden/incumbent.json",
+    "protocol/golden/progress.frame.hex",
+    "protocol/golden/progress.json",
+    "protocol/golden/solve-request.frame.hex",
+    "protocol/golden/solve-request.json",
+    "protocol/golden/started.frame.hex",
+    "protocol/golden/started.json",
+    "protocol/golden/worker-error.frame.hex",
+    "protocol/golden/worker-error.json",
     "xtask/supply-chain-inputs.json",
     "THIRD_PARTY_NOTICES.md",
     "xtask/generated/license-inventory.json",
@@ -21,7 +45,7 @@ pub fn verify_clean(repo_root: &Path) -> Result<()> {
     protocol::verify(repo_root).context("worker protocol verification failed")?;
     supply_chain::check_licenses(repo_root).context("license artifact drift check failed")?;
     supply_chain::check_sbom(repo_root).context("SBOM drift check failed")?;
-    println!("verified tracked tree and all Phase-00 generated artifacts are clean");
+    println!("verified tracked tree and all generated artifacts are clean");
     Ok(())
 }
 

@@ -1,7 +1,12 @@
 {
-  "protocolVersion": 1,
-  "request": {
-    "handshake": {}
-  },
-  "requestId": "phase00-1"
+  "handshakeRequest": {
+    "coreVersion": "0.1.0",
+    "expectedBackendId": "ortools-cp-sat",
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "requiredCapabilities": [
+      "CAPABILITY_CP_SAT",
+      "CAPABILITY_SOLUTION_PROJECTION"
+    ]
+  }
 }

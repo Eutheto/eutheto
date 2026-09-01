@@ -1,91 +1,299 @@
 // SPDX-License-Identifier: Apache-2.0
-// Protocol version and limits: protocol/version.json.
+// Authoritative policy, compatibility, and transport limits: protocol/version.json.
 syntax = "proto3";
 
-package eutheto.solver.worker.v1;
+package eutheto.worker.v1;
 
-// One length-prefixed transport frame. Exactly one body member must be present.
-message SolverWorkerFrame {
-  uint32 protocol_version = 1;
-  string request_id = 2;
-
+// A parent-to-worker transport payload. The transport adds a four-byte
+// big-endian payload length; it does not add any other envelope.
+message ParentFrame {
   oneof body {
-    WorkerRequest request = 3;
-    WorkerResult result = 4;
-    WorkerError error = 5;
+    // The first and only legal frame before a successful handshake.
+    HandshakeRequest handshake_request = 1;
+    // The one solve accepted after a successful handshake.
+    SolveRequest solve_request = 2;
   }
+
+  reserved 3 to 15;
+}
+
+// A worker-to-parent transport payload. Stdout contains only these frames.
+message WorkerFrame {
+  oneof body {
+    // The single response to HandshakeRequest, including typed rejection.
+    HandshakeResponse handshake_response = 1;
+    // Confirms that the worker accepted and began the solve.
+    Started started = 2;
+    // Reports bounded non-candidate search progress.
+    Progress progress = 3;
+    // Reports a bounded projected candidate found during search.
+    Incumbent incumbent = 4;
+    // Terminates a solve with its raw and normalized evidence.
+    Finished finished = 5;
+    // Terminates solve processing with a typed failure.
+    WorkerError error = 6;
+  }
+
+  reserved 7 to 15;
+}
+
+message HandshakeRequest {
+  // Protocol compatibility is negotiated as major plus additive minor.
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  // Semantic version of the parent component initiating the worker.
+  string core_version = 3;
+  // Stable backend identifier expected from this bundled worker.
+  string expected_backend_id = 4;
+  // Every listed capability must be present for handshake success.
+  repeated Capability required_capabilities = 5;
 
   reserved 6 to 15;
 }
 
-message WorkerRequest {
-  oneof kind {
-    HandshakeRequest handshake = 1;
-    HealthRequest health = 2;
+message HandshakeResponse {
+  oneof outcome {
+    HandshakeSuccess success = 1;
+    HandshakeError error = 2;
   }
 
   reserved 3 to 15;
 }
 
-// Empty by design. The enclosing frame carries the requested protocol version.
-message HandshakeRequest {
-  reserved 1 to 15;
+message HandshakeSuccess {
+  // Exact protocol version accepted and echoed by the worker.
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  string worker_identity = 3;
+  string worker_version = 4;
+  string backend_id = 5;
+  string ortools_version = 6;
+  string adapter_version = 7;
+  // Exactly 32 raw bytes: SHA-256 of the canonical installed worker manifest.
+  bytes manifest_sha256 = 8;
+  repeated Capability capabilities = 9;
+
+  reserved 10 to 31;
 }
 
-// Empty by design. Health has no domain or solve semantics.
-message HealthRequest {
-  reserved 1 to 15;
-}
-
-message WorkerResult {
-  oneof kind {
-    HandshakeResult handshake = 1;
-    HealthResult health = 2;
-  }
-
-  reserved 3 to 15;
-}
-
-message HandshakeResult {
-  string worker_identity = 1;
-  string worker_version = 2;
-  // Lowercase hexadecimal SHA-256 of the canonical installed solver manifest.
-  string manifest_sha256 = 3;
-  repeated WorkerCapability capabilities = 4;
+message HandshakeError {
+  HandshakeErrorCode code = 1;
+  // Bounded printable diagnostic safe to present without backend stdout.
+  string message = 2;
+  // Present when the worker can state the version it supports.
+  optional uint32 supported_protocol_major = 3;
+  optional uint32 supported_protocol_minor = 4;
 
   reserved 5 to 15;
 }
 
-enum WorkerCapability {
-  WORKER_CAPABILITY_UNSPECIFIED = 0;
-  WORKER_CAPABILITY_HEALTH = 1;
+enum HandshakeErrorCode {
+  HANDSHAKE_ERROR_CODE_UNSPECIFIED = 0;
+  HANDSHAKE_ERROR_CODE_UNSUPPORTED_PROTOCOL_MAJOR = 1;
+  HANDSHAKE_ERROR_CODE_UNSUPPORTED_PROTOCOL_MINOR = 2;
+  HANDSHAKE_ERROR_CODE_UNEXPECTED_BACKEND = 3;
+  HANDSHAKE_ERROR_CODE_MISSING_CAPABILITY = 4;
+  HANDSHAKE_ERROR_CODE_INVALID_VERSION = 5;
+  HANDSHAKE_ERROR_CODE_MANIFEST_MISMATCH = 6;
+
+  reserved 7 to 31;
 }
 
-message HealthResult {
-  HealthState state = 1;
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_CP_SAT = 1;
+  CAPABILITY_INTERMEDIATE_SOLUTIONS = 2;
+  CAPABILITY_PROGRESS = 3;
+  CAPABILITY_SOLUTION_PROJECTION = 4;
+  CAPABILITY_OBJECTIVE_BOUNDS = 5;
+  CAPABILITY_SOLUTION_STATS = 6;
+  CAPABILITY_SUFFICIENT_ASSUMPTIONS = 7;
+  CAPABILITY_DETERMINISTIC_TIME = 8;
+
+  reserved 9 to 31;
+}
+
+message SolveRequest {
+  // Opaque parent-generated identifier copied to every solve frame.
+  string request_id = 1;
+  // Serialized operations_research.sat.CpModelProto bytes.
+  bytes cp_model_proto = 2;
+  // Project-owned allowlist; raw SatParameters bytes are never accepted.
+  SolveParameters parameters = 3;
+  repeated ProjectionRequest projections = 4;
+  ResourceLimits resource_limits = 5;
+  // Exactly 32 raw SHA-256 bytes over the exact serialized cp_model_proto
+  // bytes above; the parent computes it and the worker recomputes it before
+  // solving. Semantic parsing or reserialization is not part of the hash.
+  bytes model_fingerprint = 6;
+
+  reserved 7 to 31;
+}
+
+message SolveParameters {
+  optional int32 random_seed = 3;
+  optional bool stop_after_first_feasible = 4;
+  optional bool emit_intermediate_solutions = 5;
+  optional bool log_search_progress = 6;
+  // Requests the fixed-seed, single-worker profile used by contract fixtures.
+  optional bool deterministic_test_profile = 7;
+
+  reserved 1, 2;
+  reserved 8 to 31;
+}
+
+message ProjectionRequest {
+  // Project-local numeric identifier; it has no domain meaning in the worker.
+  uint64 projection_id = 1;
+  // Zero-based variable index in the submitted CpModelProto.
+  int32 cp_sat_variable_index = 2;
+
+  reserved 3 to 15;
+}
+
+message ResourceLimits {
+  // Parent's remaining wall-clock solve budget in milliseconds.
+  uint64 wall_time_millis = 1;
+  // Best-effort process memory ceiling in bytes; absent when unavailable.
+  optional uint64 memory_bytes = 2;
+  // Maximum native solver threads permitted by parent policy.
+  uint32 worker_threads = 3;
+
+  reserved 4 to 15;
+}
+
+message Started {
+  string request_id = 1;
+  // Untrusted echo used only for request correlation and stale-frame rejection.
+  bytes model_fingerprint = 2;
+
+  reserved 3 to 15;
+}
+
+message Progress {
+  string request_id = 1;
+  ProgressKind kind = 2;
+  repeated double objective_values = 3;
+  repeated double best_bound_values = 4;
+  optional double wall_time_seconds = 5;
+  optional double deterministic_time = 6;
+
+  reserved 7 to 15;
+}
+
+enum ProgressKind {
+  PROGRESS_KIND_UNSPECIFIED = 0;
+  PROGRESS_KIND_PRESOLVE = 1;
+  PROGRESS_KIND_SEARCH = 2;
+  PROGRESS_KIND_BOUND_IMPROVED = 3;
+
+  reserved 4 to 15;
+}
+
+message Incumbent {
+  string request_id = 1;
+  ProjectedCandidate candidate = 2;
+  repeated double objective_values = 3;
+  repeated double best_bound_values = 4;
+  optional double wall_time_seconds = 5;
+  optional double deterministic_time = 6;
+
+  reserved 7 to 15;
+}
+
+// Untrusted projected candidate evidence. The parent must independently verify it.
+message ProjectedCandidate {
+  repeated ProjectedValue values = 1;
 
   reserved 2 to 15;
 }
 
-enum HealthState {
-  HEALTH_STATE_UNSPECIFIED = 0;
-  HEALTH_STATE_READY = 1;
+message ProjectedValue {
+  uint64 projection_id = 1;
+  int64 value = 2;
+
+  reserved 3 to 15;
+}
+
+message Finished {
+  string request_id = 1;
+  // Exact integer operations_research.sat.CpSolverStatus value.
+  int32 raw_cp_sat_status = 2;
+  WorkerSolveStatus status = 3;
+  TerminationReason termination_reason = 4;
+  // Present only when a final projected candidate is available.
+  optional ProjectedCandidate final_candidate = 5;
+  repeated double objective_values = 6;
+  repeated double best_bound_values = 7;
+  optional double wall_time_seconds = 8;
+  optional double user_time_seconds = 9;
+  optional double deterministic_time = 10;
+  optional uint64 conflicts = 11;
+  optional uint64 branches = 12;
+  optional uint64 binary_propagations = 13;
+  optional uint64 integer_propagations = 14;
+  // Exact signed CP-SAT literals returned as sufficient assumptions.
+  repeated int32 sufficient_assumptions = 15;
+  // Exactly 32 raw SHA-256 bytes over the fixed 56-byte v1 applied-parameter
+  // preimage defined by docs/architecture/worker-protocol.md. This is
+  // untrusted worker-reported reproducibility evidence, not proof of applying.
+  bytes applied_parameters_sha256 = 16;
+  // Untrusted echo used only for request correlation and stale-frame rejection.
+  bytes model_fingerprint = 17;
+
+  reserved 18 to 31;
+}
+
+enum WorkerSolveStatus {
+  WORKER_SOLVE_STATUS_UNSPECIFIED = 0;
+  WORKER_SOLVE_STATUS_OPTIMAL = 1;
+  WORKER_SOLVE_STATUS_FEASIBLE = 2;
+  WORKER_SOLVE_STATUS_INFEASIBLE = 3;
+  WORKER_SOLVE_STATUS_NO_SOLUTION = 4;
+  WORKER_SOLVE_STATUS_INVALID_MODEL = 5;
+  WORKER_SOLVE_STATUS_CANCELLED = 6;
+  WORKER_SOLVE_STATUS_FAILED = 7;
+
+  reserved 8 to 31;
+}
+
+enum TerminationReason {
+  TERMINATION_REASON_UNSPECIFIED = 0;
+  TERMINATION_REASON_OPTIMAL = 1;
+  TERMINATION_REASON_INFEASIBLE = 2;
+  TERMINATION_REASON_TIME_LIMIT = 3;
+  TERMINATION_REASON_SOLUTION_LIMIT = 4;
+  TERMINATION_REASON_MEMORY_LIMIT = 5;
+  TERMINATION_REASON_CANCELLED = 6;
+  TERMINATION_REASON_INVALID_MODEL = 7;
+  TERMINATION_REASON_INTERNAL_ERROR = 8;
+  // CP-SAT returned UNKNOWN without a known parent or worker limit cause.
+  TERMINATION_REASON_UNKNOWN = 9;
+
+  reserved 10 to 31;
 }
 
 message WorkerError {
-  WorkerErrorCode code = 1;
-  string message = 2;
-  // Set only for WORKER_ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION.
-  optional uint32 rejected_protocol_version = 3;
+  // Opaque identifier copied from the accepted SolveRequest.
+  string request_id = 1;
+  WorkerErrorCode code = 2;
+  // Bounded printable diagnostic; never arbitrary solver stdout.
+  string message = 3;
+  bool retryable = 4;
 
-  reserved 4 to 15;
+  reserved 5 to 15;
 }
 
 enum WorkerErrorCode {
   WORKER_ERROR_CODE_UNSPECIFIED = 0;
   WORKER_ERROR_CODE_MALFORMED_FRAME = 1;
-  WORKER_ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION = 2;
-  WORKER_ERROR_CODE_RESOURCE_LIMIT = 3;
-  WORKER_ERROR_CODE_UNSUPPORTED_REQUEST = 4;
-  WORKER_ERROR_CODE_INTERNAL = 5;
+  WORKER_ERROR_CODE_PROTOCOL_VIOLATION = 2;
+  WORKER_ERROR_CODE_UNSUPPORTED_MODEL = 3;
+  WORKER_ERROR_CODE_INVALID_MODEL = 4;
+  WORKER_ERROR_CODE_INVALID_PARAMETERS = 5;
+  WORKER_ERROR_CODE_RESOURCE_LIMIT = 6;
+  WORKER_ERROR_CODE_ORTOOLS_INITIALIZATION = 7;
+  WORKER_ERROR_CODE_INTERNAL = 8;
+
+  reserved 9 to 31;
 }

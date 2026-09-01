@@ -1,26 +1,153 @@
 {
   "compatibility": {
-    "accepted_wire_versions": [
+    "accepted_protocol_majors": [
       1
     ],
-    "unknown_version_action": "bounded_error_then_close"
+    "unknown_major_action": "typed_handshake_error_then_close"
+  },
+  "field_limits": {
+    "eutheto.worker.v1.Finished.applied_parameters_sha256": {
+      "max_bytes": 32
+    },
+    "eutheto.worker.v1.Finished.best_bound_values": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.Finished.model_fingerprint": {
+      "max_bytes": 32
+    },
+    "eutheto.worker.v1.Finished.objective_values": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.Finished.request_id": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.Finished.sufficient_assumptions": {
+      "max_count": 100000
+    },
+    "eutheto.worker.v1.HandshakeError.message": {
+      "max_bytes": 512
+    },
+    "eutheto.worker.v1.HandshakeRequest.core_version": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.HandshakeRequest.expected_backend_id": {
+      "max_bytes": 128
+    },
+    "eutheto.worker.v1.HandshakeRequest.required_capabilities": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.HandshakeSuccess.adapter_version": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.HandshakeSuccess.backend_id": {
+      "max_bytes": 128
+    },
+    "eutheto.worker.v1.HandshakeSuccess.capabilities": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.HandshakeSuccess.manifest_sha256": {
+      "max_bytes": 32
+    },
+    "eutheto.worker.v1.HandshakeSuccess.ortools_version": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.HandshakeSuccess.worker_identity": {
+      "max_bytes": 256
+    },
+    "eutheto.worker.v1.HandshakeSuccess.worker_version": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.Incumbent.best_bound_values": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.Incumbent.objective_values": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.Incumbent.request_id": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.Progress.best_bound_values": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.Progress.objective_values": {
+      "max_count": 64
+    },
+    "eutheto.worker.v1.Progress.request_id": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.ProjectedCandidate.values": {
+      "max_count": 100000
+    },
+    "eutheto.worker.v1.SolveRequest.cp_model_proto": {
+      "max_bytes": 267386880
+    },
+    "eutheto.worker.v1.SolveRequest.model_fingerprint": {
+      "max_bytes": 32
+    },
+    "eutheto.worker.v1.SolveRequest.projections": {
+      "max_count": 100000
+    },
+    "eutheto.worker.v1.SolveRequest.request_id": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.Started.model_fingerprint": {
+      "max_bytes": 32
+    },
+    "eutheto.worker.v1.Started.request_id": {
+      "max_bytes": 64
+    },
+    "eutheto.worker.v1.WorkerError.message": {
+      "max_bytes": 512
+    },
+    "eutheto.worker.v1.WorkerError.request_id": {
+      "max_bytes": 64
+    }
+  },
+  "frame_classes": {
+    "handshake": {
+      "max_payload_bytes": 1048576,
+      "routes": [
+        "ParentFrame.handshake_request",
+        "WorkerFrame.handshake_response"
+      ]
+    },
+    "solve_request": {
+      "max_payload_bytes": 268435456,
+      "routes": [
+        "ParentFrame.solve_request"
+      ]
+    },
+    "worker_event": {
+      "max_payload_bytes": 16777216,
+      "routes": [
+        "WorkerFrame.started",
+        "WorkerFrame.progress",
+        "WorkerFrame.incumbent",
+        "WorkerFrame.finished",
+        "WorkerFrame.error"
+      ]
+    }
   },
   "framing": {
     "length_prefix_bytes": 4,
     "length_prefix_order": "big-endian",
-    "max_payload_bytes": 65536,
     "min_payload_bytes": 1
   },
   "limits": {
-    "capabilities_per_handshake": 16,
-    "error_message_bytes": 512,
-    "frames_per_session": 32,
-    "manifest_sha256_bytes": 64,
-    "nesting_depth": 4,
-    "request_id_bytes": 64,
-    "worker_identity_bytes": 128,
-    "worker_version_bytes": 64
+    "events_per_second": 64,
+    "events_per_session": 4096,
+    "frames_per_session": 4099,
+    "max_nesting_depth": 8,
+    "max_repeated_field_items": 100000,
+    "max_stderr_bytes": 4194304,
+    "max_string_bytes": 4096,
+    "max_worker_threads": 10000,
+    "total_session_bytes": 536870912
   },
+  "package": "eutheto.worker.v1",
   "protocol": "eutheto.solver-worker",
-  "wire_version": 1
+  "version": {
+    "major": 1,
+    "minor": 0
+  }
 }

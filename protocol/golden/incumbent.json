@@ -1,0 +1,21 @@
+{
+  "incumbent": {
+    "bestBoundValues": [
+      0.0
+    ],
+    "candidate": {
+      "values": [
+        {
+          "projectionId": 1,
+          "value": 0
+        }
+      ]
+    },
+    "deterministicTime": 0.002,
+    "objectiveValues": [
+      0.0
+    ],
+    "requestId": "solve-0001",
+    "wallTimeSeconds": 0.02
+  }
+}

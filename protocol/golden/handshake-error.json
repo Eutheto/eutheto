@@ -1,0 +1,10 @@
+{
+  "handshakeResponse": {
+    "error": {
+      "code": "HANDSHAKE_ERROR_CODE_UNSUPPORTED_PROTOCOL_MAJOR",
+      "message": "unsupported protocol major 2",
+      "supportedProtocolMajor": 1,
+      "supportedProtocolMinor": 0
+    }
+  }
+}
