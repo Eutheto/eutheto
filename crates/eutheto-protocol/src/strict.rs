@@ -376,10 +376,11 @@ impl WireSchema {
                         },
                     ));
                 }
-                if message
-                    .reserved_ranges
-                    .iter()
-                    .any(|(start, end)| (*start..*end).contains(&number))
+                if (19_000..=19_999).contains(&number)
+                    || message
+                        .reserved_ranges
+                        .iter()
+                        .any(|(start, end)| (*start..*end).contains(&number))
                 {
                     return Err(wire_fault(
                         message_name,
@@ -930,6 +931,14 @@ mod tests {
             validate_checked_in("eutheto.worker.v1.SolveParameters", &[0x08, 0x00]),
             Err(ProtocolFault::Wire(fault))
                 if fault.violation == WireViolation::ReservedField(1)
+        ));
+        assert!(matches!(
+            validate_checked_in(
+                "eutheto.worker.v1.HandshakeRequest",
+                &[0xc0, 0xa3, 0x09, 0x01],
+            ),
+            Err(ProtocolFault::Wire(fault))
+                if fault.violation == WireViolation::ReservedField(19_000)
         ));
         for payload in [&[0xaa, 0x06, 0x80, 0x00][..], &[0xaa, 0x06, 0x05, 0x01][..]] {
             assert!(validate_checked_in("eutheto.worker.v1.HandshakeRequest", payload).is_err());
