@@ -1,5 +1,7 @@
+mod architecture;
 mod fixtures;
 mod generate;
+mod phase02_generate;
 mod protocol;
 mod release;
 mod supply_chain;
@@ -35,6 +37,11 @@ enum Command {
         #[command(subcommand)]
         command: FixturesCommand,
     },
+    /// Verify workspace dependency direction and Phase-02 crate boundaries.
+    Architecture {
+        #[command(subcommand)]
+        command: ArchitectureCommand,
+    },
     /// Native solver-worker operations (deferred until the solver pin gate).
     Solver {
         #[command(subcommand)]
@@ -55,6 +62,12 @@ enum Command {
         #[command(subcommand)]
         command: ReleaseCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArchitectureCommand {
+    /// Reject missing Phase-02 crates and forbidden transitive dependency paths.
+    Verify,
 }
 
 #[derive(Debug, Subcommand)]
@@ -103,6 +116,9 @@ fn main() -> Result<()> {
         Command::Fixtures {
             command: FixturesCommand::Validate,
         } => fixtures::validate(&root),
+        Command::Architecture {
+            command: ArchitectureCommand::Verify,
+        } => architecture::verify(&root),
         Command::Solver { command } => unavailable_solver(&command),
         Command::Licenses {
             command: GenerateCommand::Generate,

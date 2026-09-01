@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "planningIrSchemaVersion": 1,
+  "features": [
+    {
+      "id": "ir.absolute-difference",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.all-different",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.allowed-table",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.assumptions",
+      "category": "solve",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.at-most-one",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.bool-and",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.bool-or",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.cardinality-range",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.cumulative",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.element",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.equality",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.equivalence",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.exactly-one",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.forbidden-table",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.implication",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.integer-linear",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.maximum",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.minimum",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.multipass-objectives",
+      "category": "objective",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.no-overlap",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.objective-penalty",
+      "category": "objective",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.objective-reward",
+      "category": "objective",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.optional-interval",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.reified-linear-comparison",
+      "category": "primitive",
+      "gate": "unconditional"
+    },
+    {
+      "id": "ir.scalarized-objectives",
+      "category": "objective",
+      "gate": "unconditional"
+    },
+    {
+      "id": "projection.absent",
+      "category": "projection",
+      "gate": "unconditional"
+    },
+    {
+      "id": "projection.boolean",
+      "category": "projection",
+      "gate": "unconditional"
+    },
+    {
+      "id": "projection.integer",
+      "category": "projection",
+      "gate": "unconditional"
+    },
+    {
+      "id": "projection.interval",
+      "category": "projection",
+      "gate": "unconditional"
+    },
+    {
+      "id": "solve.cancellation",
+      "category": "solve",
+      "gate": "unconditional"
+    },
+    {
+      "id": "solve.deterministic-mode",
+      "category": "solve",
+      "gate": "unconditional"
+    },
+    {
+      "id": "solve.infeasibility-evidence",
+      "category": "solve",
+      "gate": "unconditional"
+    },
+    {
+      "id": "solve.intermediate-candidates",
+      "category": "solve",
+      "gate": "unconditional"
+    },
+    {
+      "id": "solve.proof-and-bounds",
+      "category": "solve",
+      "gate": "unconditional"
+    },
+    {
+      "id": "solve.resource-limits",
+      "category": "solve",
+      "gate": "unconditional"
+    }
+  ],
+  "registeredBackends": [],
+  "deferredCandidateGates": [
+    {
+      "backendId": "solver.ortools-cp-sat",
+      "candidateVersion": "9.15",
+      "claimStatus": "unclaimed",
+      "owningPhase": 3
+    },
+    {
+      "backendId": "solver.pumpkin",
+      "candidateVersion": "0.5.0",
+      "claimStatus": "unclaimed",
+      "owningPhase": 8
+    }
+  ]
+}

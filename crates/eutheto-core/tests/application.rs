@@ -3,9 +3,10 @@ use eutheto_core::{
     BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp, ProjectScope,
 };
 use eutheto_export::{
-    BackupSections, FullBackupSnapshot, PortableProjectMetadata, ScenarioExportSnapshot,
-    SemanticCapability, assemble_full_backup, assemble_scenario_export,
-    backup_selection_from_manifest, collect_scenario_owned_uuids, parse_omitted_asset_placeholder,
+    BackupSections, CHECKSUMS_PATH, CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, FullBackupSnapshot,
+    MANIFEST_PATH, PortableProjectMetadata, ScenarioExportSnapshot, SemanticCapability,
+    assemble_full_backup, assemble_scenario_export, backup_selection_from_manifest,
+    collect_scenario_owned_uuids, parse_omitted_asset_placeholder,
 };
 use eutheto_import::{
     CollisionAction, CollisionPlan, ImportOptions, ImportProvenance, InspectedBundle,
@@ -27,11 +28,14 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::future::{Future, poll_fn};
+use std::io::{Cursor, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::task::Poll;
 use tempfile::TempDir;
 use uuid::Uuid;
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 trait BoxedResult<T> {
     fn boxed(self) -> Result<T, Box<dyn Error>>;
 }
@@ -56,7 +60,7 @@ fn private_tempdir() -> Result<TempDir, Box<dyn Error>> {
 }
 
 struct CancellingIdGenerator {
-    cancellation: eutheto_export::CancellationSignal,
+    cancellation: eutheto_types::CancellationToken,
     id: Uuid,
 }
 
@@ -163,7 +167,7 @@ fn dependencies_at(directory: &TempDir, now: &str) -> Result<AppDependencies, Bo
         },
         clock: Arc::new(FixedClock::new(timestamp(now)?)),
         ids: Arc::new(SystemIdGenerator),
-        cancellation: eutheto_export::CancellationSignal::default(),
+        cancellation: eutheto_types::CancellationToken::default(),
     })
 }
 
@@ -174,6 +178,109 @@ fn dependencies_with_fixed_ids(
     let mut dependencies = dependencies(directory)?;
     dependencies.ids = Arc::new(FixedIdGenerator::new(ids));
     Ok(dependencies)
+}
+fn with_newer_unknown_semantics(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    let mut entries = BTreeMap::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content)?;
+        entries.insert(entry.name().to_owned(), content);
+    }
+    let mut manifest: serde_json::Value = serde_json::from_slice(
+        entries
+            .get(MANIFEST_PATH)
+            .ok_or("fixture manifest is missing")?,
+    )?;
+    let object = manifest
+        .as_object_mut()
+        .ok_or("fixture manifest is not an object")?;
+    object.insert(
+        "schemaVersion".to_owned(),
+        serde_json::Value::from(CURRENT_PORTABLE_SCHEMA_VERSION.saturating_add(1)),
+    );
+    object.insert(
+        "requiredCapabilities".to_owned(),
+        json!([{ "id": "future.semantic", "version": 1 }]),
+    );
+    let manifest_bytes = eutheto_export::canonical_json(&manifest)?;
+    entries.insert(MANIFEST_PATH.to_owned(), manifest_bytes.clone());
+    let mut checksums: Checksums = serde_json::from_slice(
+        entries
+            .get(CHECKSUMS_PATH)
+            .ok_or("fixture checksums are missing")?,
+    )?;
+    checksums.files.insert(
+        MANIFEST_PATH.to_owned(),
+        eutheto_export::sha256_hex(&manifest_bytes),
+    );
+    entries.insert(
+        CHECKSUMS_PATH.to_owned(),
+        eutheto_export::canonical_json(&checksums)?,
+    );
+
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o600);
+    for (path, content) in entries {
+        writer.start_file(path, options)?;
+        writer.write_all(&content)?;
+    }
+    Ok(writer.finish()?.into_inner())
+}
+
+fn with_unknown_pack_and_invalid_domain(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    let mut entries = BTreeMap::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content)?;
+        entries.insert(entry.name().to_owned(), content);
+    }
+    let scenario_path = entries
+        .keys()
+        .find(|path| path.starts_with("scenarios/"))
+        .cloned()
+        .ok_or("fixture scenario is missing")?;
+    let mut scenario: serde_json::Value = serde_json::from_slice(
+        entries
+            .get(&scenario_path)
+            .ok_or("fixture scenario is missing")?,
+    )?;
+    scenario["document"]["domainPack"]["id"] = json!("vendor.unknown");
+    scenario["document"]["domain"] = json!("__INVALID_DOMAIN__");
+    let encoded = String::from_utf8(eutheto_export::canonical_json(&scenario)?)?
+        .replace(
+            "\"domain\":\"__INVALID_DOMAIN__\"",
+            "\"domain\":{\"entities\":[],\"entities\":{}}",
+        )
+        .into_bytes();
+    assert!(String::from_utf8_lossy(&encoded).contains("\"entities\":[],\"entities\":{}"));
+    entries.insert(scenario_path, encoded);
+    let files = entries
+        .iter()
+        .filter(|(path, _)| path.as_str() != CHECKSUMS_PATH)
+        .map(|(path, content)| (path.clone(), eutheto_export::sha256_hex(content)))
+        .collect();
+    entries.insert(
+        CHECKSUMS_PATH.to_owned(),
+        eutheto_export::canonical_json(&Checksums {
+            algorithm: eutheto_export::CHECKSUM_ALGORITHM.to_owned(),
+            files,
+        })?,
+    );
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o600);
+    for (path, content) in entries {
+        writer.start_file(path, options)?;
+        writer.write_all(&content)?;
+    }
+    Ok(writer.finish()?.into_inner())
 }
 
 async fn create_project(
@@ -202,7 +309,7 @@ async fn create_project(
 fn add_entity_envelope(
     scenario_id: eutheto_types::ScenarioId,
     expected_revision: Revision,
-    name: &str,
+    _name: &str,
 ) -> Result<CommandEnvelope, Box<dyn Error>> {
     let ids = SystemIdGenerator;
     let person_id = PersonId::new(&ids)?;
@@ -217,7 +324,11 @@ fn add_entity_envelope(
         source: CommandSource::System,
         command: ScenarioCommand::AddEntity(AddEntity {
             entity_id: person_id,
-            value: json!({"id": person_id.to_string(), "name": name}),
+            value: json!({
+                "id": person_id.to_string(),
+                "enabled": false,
+                "target": 0
+            }),
         }),
     })
 }
@@ -522,11 +633,11 @@ async fn batch_undo_and_redo_survive_restart() -> Result<(), Box<dyn Error>> {
             commands: vec![
                 ScenarioCommand::AddEntity(AddEntity {
                     entity_id: first,
-                    value: json!({"id": first.to_string(), "name": "Ada"}),
+                    value: json!({"id": first, "enabled": false, "target": 0}),
                 }),
                 ScenarioCommand::AddEntity(AddEntity {
                     entity_id: second,
-                    value: json!({"id": second.to_string(), "name": "Grace"}),
+                    value: json!({"id": second, "enabled": false, "target": 0}),
                 }),
             ],
         }),
@@ -979,7 +1090,7 @@ async fn prepared_backup_publication_binds_the_library_revision() -> Result<(), 
 async fn cancelled_portable_publication_leaves_no_destination_temp_or_storage_mutation()
 -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
-    let cancellation = eutheto_export::CancellationSignal::new();
+    let cancellation = eutheto_types::CancellationToken::new();
     let mut app_dependencies = dependencies(&directory)?;
     app_dependencies.cancellation = cancellation.clone();
     let app = EuthetoApp::open(app_dependencies).await.boxed()?;
@@ -1030,7 +1141,7 @@ async fn cancellation_observed_after_portable_inspection_retains_no_preview_or_s
         other => return Err(format!("unexpected inspection seed: {other:?}").into()),
     };
     let target_directory = private_tempdir()?;
-    let cancellation = eutheto_export::CancellationSignal::new();
+    let cancellation = eutheto_types::CancellationToken::new();
     let mut target_dependencies = dependencies(&target_directory)?;
     target_dependencies.cancellation = cancellation.clone();
     target_dependencies.ids = Arc::new(CancellingIdGenerator {
@@ -1079,7 +1190,7 @@ async fn cancellation_immediately_before_portable_apply_leaves_store_unmodified(
         other => return Err(format!("unexpected cancellation seed: {other:?}").into()),
     };
     let target_directory = private_tempdir()?;
-    let cancellation = eutheto_export::CancellationSignal::new();
+    let cancellation = eutheto_types::CancellationToken::new();
     let mut target_dependencies = dependencies(&target_directory)?;
     target_dependencies.cancellation = cancellation.clone();
     let target = EuthetoApp::open(target_dependencies).await.boxed()?;
@@ -2838,7 +2949,8 @@ async fn failed_destructive_restore_rolls_back_across_restart_and_keeps_verified
         Arc::clone(&store),
         initialization,
         dependencies.clone(),
-    );
+    )
+    .boxed()?;
     let prior_id = create_project(&app, "Prior library").await.boxed()?;
     app.execute(AppCommand::ApplyScenario {
         request_id: request_id()?,
@@ -3354,6 +3466,286 @@ async fn deferred_solve_solution_and_ai_calls_are_typed_unsupported() -> Result<
 }
 
 #[tokio::test]
+async fn registries_expose_only_validated_static_metadata_in_stable_order()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
+
+    let packs = match app.query(AppQuery::ListDomainPacks).await.boxed()? {
+        AppQueryResult::DomainPacks(packs) => packs,
+        other => return Err(format!("unexpected pack-list result: {other:?}").into()),
+    };
+    assert_eq!(
+        packs
+            .iter()
+            .map(|pack| pack.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["official.test"]
+    );
+    assert!(packs.windows(2).all(|pair| pair[0].id < pair[1].id));
+    let pack_id = packs[0].id.clone();
+    assert!(matches!(
+        app.query(AppQuery::DescribeDomainPack(pack_id.clone()))
+            .await
+            .boxed()?,
+        AppQueryResult::DomainPack(metadata)
+            if metadata.as_ref().descriptor.id == pack_id
+                && metadata.as_ref().catalog.pack_id == pack_id
+    ));
+    let missing_pack: eutheto_types::PackId = "vendor.future".parse()?;
+    assert!(matches!(
+        app.query(AppQuery::DescribeDomainPack(missing_pack.clone()))
+            .await,
+        Err(AppError::NotFound(eutheto_types::ResourceRef::Pack(id))) if id == missing_pack
+    ));
+
+    assert!(matches!(
+        app.query(AppQuery::ListSolvers).await.boxed()?,
+        AppQueryResult::Solvers(solvers) if solvers.is_empty()
+    ));
+    let fake_production: eutheto_types::BackendId = "solver.fake-production".parse()?;
+    assert!(matches!(
+        app.query(AppQuery::DescribeSolver(fake_production.clone()))
+            .await,
+        Err(AppError::NotFound(eutheto_types::ResourceRef::Backend(id)))
+            if id == fake_production
+    ));
+    let matrix = match app.query(AppQuery::SolverSupportMatrix).await.boxed()? {
+        AppQueryResult::SolverSupportMatrix(matrix) => matrix,
+        other => return Err(format!("unexpected matrix result: {other:?}").into()),
+    };
+    assert!(matrix.production_backend_ids.is_empty());
+    assert!(!matrix.features.is_empty());
+    assert!(
+        matrix
+            .features
+            .windows(2)
+            .all(|pair| pair[0].id < pair[1].id)
+    );
+    let gates = match app.query(AppQuery::DeferredSolverGates).await.boxed()? {
+        AppQueryResult::DeferredSolverGates(gates) => gates,
+        other => return Err(format!("unexpected deferred-gates result: {other:?}").into()),
+    };
+    assert_eq!(
+        gates
+            .iter()
+            .map(|gate| (gate.backend_id.as_str(), gate.owning_phase))
+            .collect::<Vec<_>>(),
+        vec![("solver.ortools-cp-sat", 3), ("solver.pumpkin", 8)]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_pack_is_rejected_before_invalid_domain_is_materialized()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
+    let scenario_id = create_project(&app, "Preflight ordering").await?;
+    let bytes = match app
+        .query(AppQuery::ExportScenario(scenario_id))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::Bundle { bytes, .. } => bytes,
+        other => return Err(format!("unexpected bundle result: {other:?}").into()),
+    };
+    let bytes = with_unknown_pack_and_invalid_domain(&bytes)?;
+    let result = app
+        .query(AppQuery::PreviewImport {
+            bytes,
+            options: ImportOptions {
+                restore_mode: RestoreMode::ImportScenario,
+                include_results: false,
+                include_assets: false,
+            },
+        })
+        .await;
+    assert!(matches!(
+        result,
+        Err(AppError::Validation(report))
+            if report.issues.iter().any(|issue| issue.code == "domain_pack.unsupported")
+    ));
+    match app
+        .query(AppQuery::ListProjects(ProjectScope::All))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::Projects(projects) => {
+            assert_eq!(projects.len(), 1);
+            assert_eq!(projects[0].scenario_id, scenario_id);
+        }
+        other => return Err(format!("unexpected projects result: {other:?}").into()),
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn unopened_bundle_capability_preserves_exact_newer_bytes_and_is_consumed_safely()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
+    let scenario_id = create_project(&app, "Unopened").await?;
+    let current = match app
+        .query(AppQuery::ExportScenario(scenario_id))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::Bundle { bytes, .. } => bytes,
+        other => return Err(format!("unexpected bundle result: {other:?}").into()),
+    };
+    let newer = with_newer_unknown_semantics(&current)?;
+    let import_options = ImportOptions {
+        restore_mode: RestoreMode::ImportScenario,
+        include_results: false,
+        include_assets: false,
+    };
+    assert!(matches!(
+        app.query(AppQuery::PreviewImport {
+            bytes: newer.clone(),
+            options: import_options,
+        })
+        .await,
+        Err(AppError::Validation(report))
+            if report.issues.iter().any(|issue| issue.code == "portable.version_newer")
+    ));
+
+    let preview_id = match app
+        .query(AppQuery::InspectUnopenedBundle {
+            bytes: newer.clone(),
+        })
+        .await
+        .boxed()?
+    {
+        AppQueryResult::UnopenedBundlePreview {
+            preview_id,
+            metadata,
+        } => {
+            assert_eq!(
+                metadata.portable_schema_version,
+                CURRENT_PORTABLE_SCHEMA_VERSION.saturating_add(1)
+            );
+            assert_eq!(metadata.required_capabilities.len(), 1);
+            assert_eq!(metadata.required_capabilities[0].id, "future.semantic");
+            preview_id
+        }
+        other => return Err(format!("unexpected unopened result: {other:?}").into()),
+    };
+    let destination = directory.path().join("preserved.eutheto");
+    assert!(matches!(
+        app.execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id,
+            destination: destination.clone(),
+        })
+        .await
+        .boxed()?,
+        AppCommandResult::UnopenedBundleReexported
+    ));
+    assert_eq!(std::fs::read(&destination)?, newer);
+    match app
+        .query(AppQuery::ListProjects(ProjectScope::All))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::Projects(projects) => {
+            assert_eq!(projects.len(), 1);
+            assert_eq!(projects[0].scenario_id, scenario_id);
+        }
+        other => return Err(format!("unexpected projects result: {other:?}").into()),
+    }
+    assert!(matches!(
+        app.execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id,
+            destination: directory.path().join("second.eutheto"),
+        })
+        .await,
+        Err(AppError::Protocol(failure)) if failure.code == "portable.preview_not_found"
+    ));
+
+    let cancelled = match app
+        .query(AppQuery::InspectUnopenedBundle {
+            bytes: current.clone(),
+        })
+        .await
+        .boxed()?
+    {
+        AppQueryResult::UnopenedBundlePreview { preview_id, .. } => preview_id,
+        other => return Err(format!("unexpected unopened result: {other:?}").into()),
+    };
+    app.execute(AppCommand::CancelPortablePreview {
+        preview_id: cancelled,
+    })
+    .await
+    .boxed()?;
+    assert!(matches!(
+        app.execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id: cancelled,
+            destination: directory.path().join("cancelled.eutheto"),
+        })
+        .await,
+        Err(AppError::Protocol(failure)) if failure.code == "portable.preview_not_found"
+    ));
+
+    let no_clobber = match app
+        .query(AppQuery::InspectUnopenedBundle { bytes: current })
+        .await
+        .boxed()?
+    {
+        AppQueryResult::UnopenedBundlePreview { preview_id, .. } => preview_id,
+        other => return Err(format!("unexpected unopened result: {other:?}").into()),
+    };
+    let occupied = directory.path().join("occupied.eutheto");
+    std::fs::write(&occupied, b"existing")?;
+    assert!(
+        app.execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id: no_clobber,
+            destination: occupied.clone(),
+        })
+        .await
+        .is_err()
+    );
+    assert_eq!(std::fs::read(&occupied)?, b"existing");
+    assert!(matches!(
+        app.execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id: no_clobber,
+            destination: directory.path().join("retry.eutheto"),
+        })
+        .await,
+        Err(AppError::Protocol(failure)) if failure.code == "portable.preview_not_found"
+    ));
+    let invalid_parent = match app
+        .query(AppQuery::InspectUnopenedBundle {
+            bytes: newer.clone(),
+        })
+        .await
+        .boxed()?
+    {
+        AppQueryResult::UnopenedBundlePreview { preview_id, .. } => preview_id,
+        other => return Err(format!("unexpected unopened result: {other:?}").into()),
+    };
+    let missing_destination = directory.path().join("missing-parent").join("bundle");
+    assert!(
+        app.execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id: invalid_parent,
+            destination: missing_destination.clone(),
+        })
+        .await
+        .is_err()
+    );
+    assert!(!missing_destination.exists());
+    assert!(matches!(
+        app.execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id: invalid_parent,
+            destination: directory.path().join("invalid-parent-retry"),
+        })
+        .await,
+        Err(AppError::Protocol(failure)) if failure.code == "portable.preview_not_found"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn initialized_app_exposes_the_exact_startup_recovery_outcome() -> Result<(), Box<dyn Error>>
 {
     let directory = private_tempdir()?;
@@ -3364,7 +3756,8 @@ async fn initialized_app_exposes_the_exact_startup_recovery_outcome() -> Result<
     initialization.recovery.interrupted_solve_run_ids = vec![interrupted_run_id];
     let expected = initialization.clone();
 
-    let app = EuthetoApp::from_initialized_store(Arc::new(store), initialization, dependencies);
+    let app = EuthetoApp::from_initialized_store(Arc::new(store), initialization, dependencies)
+        .boxed()?;
 
     assert_eq!(app.initialization(), &expected);
     assert_eq!(
@@ -3435,7 +3828,7 @@ fn support_dependencies(directory: &TempDir) -> Result<AppDependencies, Box<dyn 
         },
         clock: Arc::new(FixedClock::new(timestamp("2026-01-10T12:00:00Z")?)),
         ids: Arc::new(SystemIdGenerator),
-        cancellation: eutheto_export::CancellationSignal::default(),
+        cancellation: eutheto_types::CancellationToken::default(),
     };
     let Some(database_parent) = dependencies.paths.database.parent() else {
         return Err(std::io::Error::other("the injected database path has no parent").into());
@@ -3458,7 +3851,8 @@ async fn seeded_support_app(
         Arc::clone(&store),
         initialization,
         dependencies.clone(),
-    );
+    )
+    .boxed()?;
     let scenario_id = create_project(&app, CONTENT_SENTINEL).await.boxed()?;
     app.execute(AppCommand::ApplyScenario {
         request_id: request_id()?,

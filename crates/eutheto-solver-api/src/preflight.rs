@@ -1,0 +1,431 @@
+use crate::{
+    BackendCandidate, BackendSolveOutcome, BackendTerminationReason, CapabilityMatrix,
+    CompatibilityReport, ModelCostEstimate, RequiredFeature, SolverApiLimits, SolverDescriptor,
+    SupportFeatureId,
+};
+use eutheto_planning_ir::{
+    Capability, LexicographicStrategy, PlanningIrLimitsV1, PlanningProblemSummary, summarize,
+    validate,
+};
+use eutheto_types::{
+    BackendSelection, ExplanationMode, ReproducibilityMode, SolveOptions, WorkerThreadPolicy,
+};
+use std::fmt;
+
+/// Derives every matrix requirement visible in the frozen planning summary and solve options.
+///
+/// # Errors
+///
+/// Returns [`PreflightError::InternalFeature`] if an internal capability or solve requirement
+/// cannot be represented as a support-feature identifier.
+pub fn compatibility_for(
+    matrix: &CapabilityMatrix,
+    backend: &eutheto_types::BackendId,
+    summary: &PlanningProblemSummary,
+    options: &SolveOptions,
+) -> Result<CompatibilityReport, PreflightError> {
+    let mut required = Vec::new();
+    for (capability, count) in &summary.manifest.capability_counts {
+        required.push(RequiredFeature {
+            id: capability_feature(*capability)?,
+            usage_count: *count,
+            path: "planningProblem.manifest.capabilityCounts".to_owned(),
+        });
+    }
+    match &summary.lexicographic_strategy {
+        LexicographicStrategy::ExactScalarization { .. } if summary.objective_level_count > 0 => {
+            required.push(required_feature(
+                "ir.scalarized-objectives",
+                summary.objective_level_count,
+                "planningProblem.objectives",
+            )?);
+        }
+        LexicographicStrategy::Multipass => {
+            required.push(required_feature(
+                "ir.multipass-objectives",
+                summary.objective_level_count,
+                "planningProblem.objectives",
+            )?);
+        }
+        LexicographicStrategy::ExactScalarization { .. } => {}
+    }
+    required.push(required_feature(
+        "solve.cancellation",
+        1,
+        "solveOptions.timeLimitMilliseconds",
+    )?);
+    required.push(required_feature(
+        "solve.resource-limits",
+        1,
+        "solveOptions.resourceLimits",
+    )?);
+    if matches!(options.reproducibility, ReproducibilityMode::Deterministic) {
+        required.push(required_feature(
+            "solve.deterministic-mode",
+            1,
+            "solveOptions.reproducibility",
+        )?);
+    }
+    if options.collect_intermediate_solutions {
+        required.push(required_feature(
+            "solve.intermediate-candidates",
+            1,
+            "solveOptions.collectIntermediateSolutions",
+        )?);
+    }
+    if summary.objective_level_count > 0 {
+        required.push(required_feature(
+            "solve.proof-and-bounds",
+            summary.objective_level_count,
+            "planningProblem.objectives",
+        )?);
+    }
+    if !matches!(options.explanation_mode, ExplanationMode::None) {
+        required.push(required_feature(
+            "solve.infeasibility-evidence",
+            1,
+            "solveOptions.explanationMode",
+        )?);
+    }
+    let estimate = ModelCostEstimate {
+        variables: summary.variable_count,
+        constraints: summary.constraint_count,
+        references: summary.total_reference_count,
+    };
+    Ok(matrix.report(backend, required, Some(estimate)))
+}
+
+fn capability_feature(capability: Capability) -> Result<SupportFeatureId, PreflightError> {
+    let value = match capability {
+        Capability::BoolOr => "ir.bool-or",
+        Capability::BoolAnd => "ir.bool-and",
+        Capability::Implication => "ir.implication",
+        Capability::Equivalence => "ir.equivalence",
+        Capability::AtMostOne => "ir.at-most-one",
+        Capability::ExactlyOne => "ir.exactly-one",
+        Capability::CardinalityRange => "ir.cardinality-range",
+        Capability::LinearComparison => "ir.integer-linear",
+        Capability::ReifiedLinearComparison => "ir.reified-linear-comparison",
+        Capability::AllDifferent => "ir.all-different",
+        Capability::AllowedTable => "ir.allowed-table",
+        Capability::ForbiddenTable => "ir.forbidden-table",
+        Capability::Element => "ir.element",
+        Capability::Min => "ir.minimum",
+        Capability::Max => "ir.maximum",
+        Capability::Equality => "ir.equality",
+        Capability::AbsDifference => "ir.absolute-difference",
+        Capability::NoOverlap => "ir.no-overlap",
+        Capability::Cumulative => "ir.cumulative",
+        Capability::OptionalIntervals => "ir.optional-interval",
+        Capability::ObjectivePenalty => "ir.objective-penalty",
+        Capability::ObjectiveReward => "ir.objective-reward",
+        Capability::Assumptions => "ir.assumptions",
+        Capability::BooleanProjection => "projection.boolean",
+        Capability::IntegerProjection => "projection.integer",
+        Capability::IntervalProjection => "projection.interval",
+        Capability::AbsentProjection => "projection.absent",
+    };
+    SupportFeatureId::new(value).map_err(|error| PreflightError::InternalFeature(error.to_string()))
+}
+
+fn required_feature(
+    id: &str,
+    usage_count: u64,
+    path: &str,
+) -> Result<RequiredFeature, PreflightError> {
+    Ok(RequiredFeature {
+        id: SupportFeatureId::new(id)
+            .map_err(|error| PreflightError::InternalFeature(error.to_string()))?,
+        usage_count,
+        path: path.to_owned(),
+    })
+}
+
+/// Validates a selected request before a backend may be invoked.
+///
+/// # Errors
+///
+/// Returns an error if the descriptor, request identity, selected backend, budget, planning
+/// problem, summary, solve options, or support-matrix agreement is invalid. It also returns
+/// [`PreflightError::Cancelled`], [`PreflightError::DeadlineExceeded`], or
+/// [`PreflightError::Incompatible`] when the request cannot be dispatched for the corresponding
+/// reason.
+pub fn preflight(
+    matrix: &CapabilityMatrix,
+    descriptor: &SolverDescriptor,
+    request: &crate::SolveRequest,
+) -> Result<CompatibilityReport, PreflightError> {
+    descriptor
+        .validate()
+        .map_err(|error| PreflightError::InvalidDescriptor(error.to_string()))?;
+    if request.backend_id() != &descriptor.id {
+        return Err(PreflightError::RequestBackendMismatch);
+    }
+    if request.backend_version() != descriptor.version.as_str() {
+        return Err(PreflightError::BackendVersionMismatch);
+    }
+    if request.adapter_version() != descriptor.adapter_version.as_str() {
+        return Err(PreflightError::AdapterVersionMismatch);
+    }
+    match &request.options().backend {
+        BackendSelection::Auto => return Err(PreflightError::UnresolvedBackendSelection),
+        BackendSelection::Specific(id) if id != request.backend_id() => {
+            return Err(PreflightError::OptionBackendMismatch);
+        }
+        BackendSelection::Specific(_) => {}
+    }
+    if request.dispatch_budget().child_view().is_cancelled() {
+        return Err(PreflightError::Cancelled);
+    }
+    if request.dispatch_budget().child_view().is_expired()
+        || request.dispatch_budget().backend_limit().value() == 0
+    {
+        return Err(PreflightError::DeadlineExceeded);
+    }
+    matrix
+        .validate_descriptor(descriptor)
+        .map_err(|error| PreflightError::Matrix(error.to_string()))?;
+    let limits = PlanningIrLimitsV1::DEFAULT.tightened_by(request.options().resource_limits);
+    validate(request.problem(), limits)
+        .map_err(|error| PreflightError::InvalidProblem(error.to_string()))?;
+    let actual = summarize(request.problem(), limits)
+        .map_err(|error| PreflightError::InvalidProblem(error.to_string()))?;
+    if &actual != request.summary() {
+        return Err(PreflightError::SummaryMismatch);
+    }
+    if request.options().memory_limit_bytes == Some(0)
+        || matches!(
+            request.options().worker_threads,
+            WorkerThreadPolicy::Exact(0)
+        )
+        || request.options().solution_limit == Some(0)
+    {
+        return Err(PreflightError::InvalidSolveOptions);
+    }
+    let report = compatibility_for(
+        matrix,
+        request.backend_id(),
+        request.summary(),
+        request.options(),
+    )?;
+    if !report.compatible() {
+        return Err(PreflightError::Incompatible(report));
+    }
+    Ok(report)
+}
+
+/// Checks backend identity, timing, terminal/candidate coherence, and bounded evidence.
+///
+/// # Errors
+///
+/// Returns an error if the limits are invalid or if the outcome's identity, budget evidence,
+/// timing, objective dimensions, candidates, termination reason, or first-incumbent evidence
+/// violates the request contract.
+pub fn validate_outcome(
+    request: &crate::SolveRequest,
+    outcome: &BackendSolveOutcome,
+    candidates: &[BackendCandidate],
+    limits: SolverApiLimits,
+) -> Result<(), OutcomeError> {
+    limits.validate().map_err(|_| OutcomeError::InvalidLimits)?;
+    if &outcome.backend_id != request.backend_id() {
+        return Err(OutcomeError::BackendMismatch);
+    }
+    if outcome.model_hash != request.model_hash() {
+        return Err(OutcomeError::ModelHashMismatch);
+    }
+    if outcome.solve_fingerprint != request.solve_fingerprint() {
+        return Err(OutcomeError::SolveFingerprintMismatch);
+    }
+    if outcome.evidence.remaining_at_dispatch_milliseconds
+        != request.dispatch_budget().remaining_at_dispatch()
+        || outcome.evidence.backend_limit_milliseconds != request.dispatch_budget().backend_limit()
+    {
+        return Err(OutcomeError::BudgetEvidenceMismatch);
+    }
+    if outcome.evidence.elapsed_milliseconds > outcome.evidence.backend_limit_milliseconds {
+        return Err(OutcomeError::BackendLimitExceeded);
+    }
+    if outcome
+        .evidence
+        .first_incumbent_milliseconds
+        .is_some_and(|value| value > outcome.evidence.elapsed_milliseconds)
+    {
+        return Err(OutcomeError::InvalidFirstIncumbentTime);
+    }
+    if outcome.evidence.evidence_refs.len() > limits.max_evidence_refs_per_candidate as usize {
+        return Err(OutcomeError::OutputLimitExceeded);
+    }
+    validate_objective_evidence(
+        outcome.evidence.objective.as_ref(),
+        request.problem().objectives.levels.len(),
+    )?;
+    validate_candidates(
+        request,
+        candidates,
+        limits,
+        outcome.evidence.elapsed_milliseconds,
+    )?;
+    let has_candidates = !candidates.is_empty();
+    match outcome.termination {
+        BackendTerminationReason::OptimalityClaimed | BackendTerminationReason::CandidateFound
+            if !has_candidates =>
+        {
+            return Err(OutcomeError::MissingCandidate);
+        }
+        BackendTerminationReason::InfeasibilityClaimed
+        | BackendTerminationReason::UnboundedClaimed
+        | BackendTerminationReason::InvalidModel
+        | BackendTerminationReason::Unavailable
+        | BackendTerminationReason::Failed
+            if has_candidates =>
+        {
+            return Err(OutcomeError::CandidateContradictsTermination);
+        }
+        BackendTerminationReason::Cancelled
+            if !request.dispatch_budget().child_view().is_cancelled() =>
+        {
+            return Err(OutcomeError::UnrequestedCancellation);
+        }
+        BackendTerminationReason::TimeLimit
+            if !request.dispatch_budget().child_view().is_expired()
+                && outcome.evidence.elapsed_milliseconds
+                    < outcome.evidence.backend_limit_milliseconds =>
+        {
+            return Err(OutcomeError::PrematureTimeLimit);
+        }
+        BackendTerminationReason::OptimalityClaimed
+        | BackendTerminationReason::CandidateFound
+        | BackendTerminationReason::InfeasibilityClaimed
+        | BackendTerminationReason::UnboundedClaimed
+        | BackendTerminationReason::TimeLimit
+        | BackendTerminationReason::SolutionLimit
+        | BackendTerminationReason::Cancelled
+        | BackendTerminationReason::InvalidModel
+        | BackendTerminationReason::Unavailable
+        | BackendTerminationReason::Failed => {}
+    }
+    let expected_first_incumbent = candidates
+        .first()
+        .map(|candidate| candidate.observed_after_milliseconds);
+    if outcome.evidence.first_incumbent_milliseconds != expected_first_incumbent {
+        return Err(OutcomeError::FirstIncumbentMismatch);
+    }
+    Ok(())
+}
+
+fn validate_candidates(
+    request: &crate::SolveRequest,
+    candidates: &[BackendCandidate],
+    limits: SolverApiLimits,
+    termination_elapsed: eutheto_types::DurationMillis,
+) -> Result<(), OutcomeError> {
+    if candidates.len() > limits.max_candidates as usize {
+        return Err(OutcomeError::OutputLimitExceeded);
+    }
+    let assignment_count = candidates.iter().try_fold(0_u64, |count, candidate| {
+        let candidate_count = u64::try_from(candidate.values.booleans.len())
+            .ok()
+            .and_then(|booleans| {
+                u64::try_from(candidate.values.integers.len())
+                    .ok()
+                    .and_then(|integers| booleans.checked_add(integers))
+            })
+            .ok_or(OutcomeError::CandidateAssignmentLimitExceeded)?;
+        count
+            .checked_add(candidate_count)
+            .filter(|total| *total <= u64::from(limits.max_candidate_assignments))
+            .ok_or(OutcomeError::CandidateAssignmentLimitExceeded)
+    })?;
+    debug_assert!(assignment_count <= u64::from(limits.max_candidate_assignments));
+    let objective_level_count = request.problem().objectives.levels.len();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let expected = u32::try_from(index + 1).map_err(|_| OutcomeError::OutputLimitExceeded)?;
+        if candidate.sequence != expected {
+            return Err(OutcomeError::CandidateSequenceMismatch);
+        }
+        if candidate.observed_after_milliseconds > termination_elapsed {
+            return Err(OutcomeError::CandidateAfterTermination);
+        }
+        validate_objective_evidence(candidate.objective.as_ref(), objective_level_count)?;
+        if index > 0
+            && candidate.observed_after_milliseconds
+                < candidates[index - 1].observed_after_milliseconds
+        {
+            return Err(OutcomeError::NonMonotonicCandidateTime);
+        }
+    }
+    Ok(())
+}
+
+fn validate_objective_evidence(
+    evidence: Option<&crate::BackendObjectiveEvidence>,
+    objective_level_count: usize,
+) -> Result<(), OutcomeError> {
+    if evidence.is_some_and(|value| {
+        value.objective_values.len() != objective_level_count
+            || value
+                .best_bound_values
+                .as_ref()
+                .is_some_and(|bounds| bounds.len() != objective_level_count)
+    }) {
+        return Err(OutcomeError::InvalidObjectiveDimension);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreflightError {
+    InvalidDescriptor(String),
+    RequestBackendMismatch,
+    BackendVersionMismatch,
+    UnresolvedBackendSelection,
+    AdapterVersionMismatch,
+    OptionBackendMismatch,
+    Cancelled,
+    DeadlineExceeded,
+    Matrix(String),
+    InvalidProblem(String),
+    SummaryMismatch,
+    InvalidSolveOptions,
+    InternalFeature(String),
+    Incompatible(CompatibilityReport),
+}
+
+impl fmt::Display for PreflightError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "solver preflight error: {self:?}")
+    }
+}
+
+impl std::error::Error for PreflightError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutcomeError {
+    InvalidLimits,
+    BackendMismatch,
+    ModelHashMismatch,
+    SolveFingerprintMismatch,
+    BudgetEvidenceMismatch,
+    BackendLimitExceeded,
+    InvalidFirstIncumbentTime,
+    OutputLimitExceeded,
+    CandidateAssignmentLimitExceeded,
+    InvalidObjectiveDimension,
+    NonMonotonicCandidateTime,
+    CandidateSequenceMismatch,
+    CandidateAfterTermination,
+    MissingCandidate,
+    CandidateContradictsTermination,
+    UnrequestedCancellation,
+    PrematureTimeLimit,
+    FirstIncumbentMismatch,
+}
+
+impl fmt::Display for OutcomeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "solver outcome contract error: {self:?}")
+    }
+}
+
+impl std::error::Error for OutcomeError {}

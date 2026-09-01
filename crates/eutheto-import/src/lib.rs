@@ -17,17 +17,20 @@ use eutheto_export::{
     validate_portable_payloads, validate_scenario_owned_uuid_uniqueness,
 };
 use eutheto_types::{
-    BundleId, PortableAsset, Revision, Rfc3339Timestamp, ScenarioFormat, ScenarioId,
+    BundleId, PackId, PortableAsset, Revision, Rfc3339Timestamp, ScenarioFormat, ScenarioId,
     SupplementalIdentity, SupplementalSectionKind, extract_asset_references,
     extract_result_dependency, extract_result_id, extract_scenario_references,
 };
-use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::de::{
+    self, DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{Cursor, Read, Write};
+use std::mem::size_of;
 use std::path::Path;
 use tempfile::{Builder as TempFileBuilder, NamedTempFile};
 use thiserror::Error;
@@ -357,7 +360,7 @@ pub enum ImportError {
     },
     #[error("unsupported bundle kind")]
     UnsupportedKind,
-    #[error("unsupported required semantic capability {id} version {version}")]
+    #[error("unsupported required semantic capability")]
     UnsupportedCapability { id: String, version: u32 },
     #[error("invalid manifest: {0}")]
     InvalidManifest(String),
@@ -407,6 +410,73 @@ pub struct InspectedBundle {
     pub applied_migrations: Vec<AppliedMigration>,
     pub original_format_version: u32,
     pub original_schema_version: u32,
+    /// Conservative checked charge for all representation retained by a preview.
+    pub retained_memory_bytes: usize,
+}
+
+/// Allowlisted metadata read without accepting, migrating, or reconstructing a bundle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreservedBundleMetadata {
+    pub file_sha256: String,
+    pub format: String,
+    pub format_version: u32,
+    pub portable_schema_version: u32,
+    pub bundle_kind: Option<String>,
+    pub title: Option<String>,
+    pub required_capabilities: Vec<PreservedCapabilityMetadata>,
+    pub scenarios: Vec<PreservedScenarioMetadata>,
+}
+
+/// One semantic capability advertised by an unopened bundle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreservedCapabilityMetadata {
+    pub id: String,
+    pub version: u32,
+}
+
+/// Allowlisted scenario identity and pack metadata from an unopened bundle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreservedScenarioMetadata {
+    pub path: String,
+    pub scenario_id: Option<String>,
+    pub pack_id: Option<String>,
+    pub pack_schema_version: Option<u32>,
+}
+
+/// Bounded original archive bytes retained only for exact re-export.
+///
+/// This type is not an imported bundle, does not expose parsed domain payloads,
+#[derive(Clone, Debug)]
+pub struct UnopenedBundle {
+    metadata: PreservedBundleMetadata,
+    exact_bytes: Box<[u8]>,
+    retained_memory_bytes: usize,
+}
+
+impl UnopenedBundle {
+    /// Returns the allowlisted, non-authoritative envelope metadata.
+    #[must_use]
+    pub const fn metadata(&self) -> &PreservedBundleMetadata {
+        &self.metadata
+    }
+
+    /// Returns the exact original bytes. Callers must not reconstruct the bundle.
+    #[must_use]
+    pub const fn exact_bytes(&self) -> &[u8] {
+        &self.exact_bytes
+    }
+
+    /// Returns the conservative checked charge for all retained bytes and metadata.
+    #[must_use]
+    pub const fn retained_memory_bytes(&self) -> usize {
+        self.retained_memory_bytes
+    }
+
+    /// Transfers the exact original bytes to an explicit re-export path.
+    #[must_use]
+    pub fn into_exact_bytes(self) -> Box<[u8]> {
+        self.exact_bytes
+    }
 }
 
 const ZIP_EOCD_SIGNATURE: u32 = 0x0605_4b50;
@@ -789,6 +859,213 @@ fn read_fixed_entry(bytes: &[u8], path: &str, max_bytes: u64) -> Result<Vec<u8>,
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ManifestEnvelopeMetadata {
+    format: String,
+    format_version: u32,
+    schema_version: u32,
+    #[serde(default)]
+    bundle_kind: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    integrity: ManifestIntegrityMetadata,
+    #[serde(default)]
+    required_capabilities: Vec<CapabilityMetadataWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestIntegrityMetadata {
+    algorithm: String,
+    checksums_file: String,
+}
+
+#[derive(Deserialize)]
+struct CapabilityMetadataWire {
+    id: String,
+    version: u32,
+}
+
+#[derive(Deserialize)]
+struct ScenarioEnvelopeMetadata {
+    #[serde(default)]
+    document: Option<ScenarioDocumentMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScenarioDocumentMetadata {
+    #[serde(default)]
+    scenario_id: Option<String>,
+    #[serde(default, rename = "domain")]
+    _domain: Option<IgnoredAny>,
+    #[serde(default)]
+    domain_pack: Option<ScenarioPackMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScenarioPackMetadata {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    schema_version: Option<u32>,
+}
+
+fn parse_metadata_json<T: DeserializeOwned>(
+    path: &str,
+    reader: impl Read,
+) -> Result<T, ImportError> {
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let metadata = T::deserialize(&mut deserializer).map_err(|error| ImportError::InvalidJson {
+        path: path.to_owned(),
+        message: error.to_string(),
+    })?;
+    deserializer
+        .end()
+        .map_err(|error| ImportError::InvalidJson {
+            path: path.to_owned(),
+            message: error.to_string(),
+        })?;
+    Ok(metadata)
+}
+
+fn manifest_envelope_metadata(
+    bytes: &[u8],
+    limits: &PortableLimits,
+) -> Result<ManifestEnvelopeMetadata, ImportError> {
+    let metadata: ManifestEnvelopeMetadata =
+        parse_metadata_json(MANIFEST_PATH, Cursor::new(bytes))?;
+    if metadata.format.len() > limits.max_string_bytes
+        || metadata
+            .bundle_kind
+            .as_ref()
+            .is_some_and(|value| value.len() > limits.max_string_bytes)
+        || metadata
+            .title
+            .as_ref()
+            .is_some_and(|value| value.len() > limits.max_string_bytes)
+        || metadata.required_capabilities.len() > limits.max_collection_items
+    {
+        return Err(ImportError::JsonLimit {
+            path: MANIFEST_PATH.to_owned(),
+            limit: "metadata",
+        });
+    }
+    for capability in &metadata.required_capabilities {
+        if capability.id.len() > limits.max_string_bytes {
+            return Err(ImportError::JsonLimit {
+                path: MANIFEST_PATH.to_owned(),
+                limit: "string bytes",
+            });
+        }
+        if capability.version == 0 || !valid_namespace(&capability.id) {
+            return Err(ImportError::InvalidManifest(
+                "a required capability declaration is invalid".to_owned(),
+            ));
+        }
+    }
+    if metadata.format != BUNDLE_FORMAT {
+        return Err(ImportError::InvalidManifest(format!(
+            "format must be {BUNDLE_FORMAT}"
+        )));
+    }
+    if metadata.integrity.algorithm != CHECKSUM_ALGORITHM
+        || metadata.integrity.checksums_file != CHECKSUMS_PATH
+    {
+        return Err(ImportError::InvalidManifest(
+            "integrity declaration is not the fixed SHA-256 checksums file".to_owned(),
+        ));
+    }
+    Ok(metadata)
+}
+
+fn stream_validate_checksums(
+    bytes: &[u8],
+    checksums: &Checksums,
+    policy: &InspectionPolicy,
+) -> Result<(), ImportError> {
+    if checksums.algorithm != CHECKSUM_ALGORITHM {
+        return Err(ImportError::InvalidChecksums(
+            "only SHA-256 is supported".to_owned(),
+        ));
+    }
+    if checksums.files.contains_key(CHECKSUMS_PATH) {
+        return Err(ImportError::InvalidChecksums(
+            "checksums.json cannot checksum itself".to_owned(),
+        ));
+    }
+    if checksums.files.len() > policy.limits.max_entries {
+        return Err(ImportError::TooManyEntries);
+    }
+    for (path, expected) in &checksums.files {
+        normalize_path(path, policy.limits.max_path_bytes)?;
+        if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ImportError::InvalidChecksums(
+                "a SHA-256 declaration is invalid".to_owned(),
+            ));
+        }
+    }
+
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    let mut seen = BTreeSet::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let path = std::str::from_utf8(entry.name_raw())
+            .map_err(|_| ImportError::UnsafePath {
+                path: String::new(),
+                reason: "path is not valid UTF-8",
+            })?
+            .to_owned();
+        let expected = if path == CHECKSUMS_PATH {
+            None
+        } else {
+            Some(
+                checksums
+                    .files
+                    .get(&path)
+                    .ok_or_else(|| ImportError::MissingChecksum(path.clone()))?,
+            )
+        };
+        let mut hasher = Sha256::new();
+        let mut prefix = Vec::with_capacity(262);
+        let mut count = 0_u64;
+        loop {
+            let read = entry.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            count = count
+                .checked_add(u64::try_from(read).map_err(|_| ImportError::TotalSizeExceeded)?)
+                .ok_or(ImportError::TotalSizeExceeded)?;
+            hasher.update(&buffer[..read]);
+            if prefix.len() < 262 {
+                let remaining = 262 - prefix.len();
+                prefix.extend_from_slice(&buffer[..read.min(remaining)]);
+            }
+        }
+        if count != entry.size() {
+            return Err(ImportError::EntryTooLarge { path });
+        }
+        reject_prohibited_content(&path, &prefix)?;
+        if let Some(expected) = expected {
+            let actual = format!("{:x}", hasher.finalize());
+            if actual != expected.to_ascii_lowercase() {
+                return Err(ImportError::ChecksumMismatch(path.clone()));
+            }
+            seen.insert(path);
+        }
+    }
+    for path in checksums.files.keys() {
+        if !seen.contains(path) {
+            return Err(ImportError::UndeclaredEntry(path.clone()));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ManifestPreflight {
     format: String,
     format_version: u32,
@@ -801,11 +1078,12 @@ fn preflight_manifest(
     bytes: &[u8],
     policy: &InspectionPolicy,
     registries: &MigrationRegistries,
-) -> Result<(Value, u32, u32), ImportError> {
+) -> Result<(Value, u32, u32, usize), ImportError> {
     let manifest_bytes = read_fixed_entry(bytes, MANIFEST_PATH, MAX_MANIFEST_BYTES)?;
     let mut manifest_limits = policy.limits;
     manifest_limits.max_json_bytes = MAX_MANIFEST_BYTES;
-    let value = parse_strict_json(MANIFEST_PATH, &manifest_bytes, &manifest_limits)?;
+    let parsed = parse_strict_json_charged(MANIFEST_PATH, &manifest_bytes, &manifest_limits)?;
+    let value = parsed.value;
     let preflight: ManifestPreflight = serde_json::from_value(value.clone()).map_err(|error| {
         ImportError::InvalidManifest(format!("manifest preflight failed: {error}"))
     })?;
@@ -843,9 +1121,19 @@ fn preflight_manifest(
         });
     }
     for capability in &preflight.required_capabilities {
+        if capability.version == 0 || !valid_namespace(&capability.id) {
+            return Err(ImportError::InvalidManifest(
+                "a required capability declaration is invalid".to_owned(),
+            ));
+        }
         require_capability(capability, policy)?;
     }
-    Ok((value, preflight.format_version, preflight.schema_version))
+    Ok((
+        value,
+        preflight.format_version,
+        preflight.schema_version,
+        parsed.representation_bytes,
+    ))
 }
 
 fn read_archive_entries(
@@ -889,6 +1177,75 @@ struct InspectedLogicalEntries {
     scenarios: Vec<PortableScenario>,
     scenario_revisions: Vec<PortableScenario>,
     additional_entries: BTreeMap<String, Vec<u8>>,
+    retained_memory_bytes: usize,
+}
+
+fn conservative_parsed_memory_charge(
+    path: &str,
+    _raw_bytes: usize,
+    traversal_charge: usize,
+) -> Result<usize, ImportError> {
+    // The traversal charge includes every Value node, decoded string/key byte,
+    // collection item, and 96 bytes per item for BTree links, String headers,
+    // allocator metadata, and collection spare capacity. A fixed typed-envelope
+    // allowance covers the bounded non-Value fields after from_value conversion.
+    traversal_charge
+        .checked_add(4_096)
+        .ok_or_else(|| ImportError::JsonLimit {
+            path: path.to_owned(),
+            limit: "representation bytes",
+        })
+}
+
+fn add_retained_memory(
+    path: &str,
+    total: &mut usize,
+    amount: usize,
+    limit: u64,
+) -> Result<(), ImportError> {
+    let next = total
+        .checked_add(amount)
+        .ok_or_else(|| ImportError::JsonLimit {
+            path: path.to_owned(),
+            limit: "representation bytes",
+        })?;
+    if u64::try_from(next).map_or(true, |next| next > limit) {
+        return Err(ImportError::JsonLimit {
+            path: path.to_owned(),
+            limit: "representation bytes",
+        });
+    }
+    *total = next;
+    Ok(())
+}
+
+fn retained_value_memory_charge(value: &Value) -> Option<usize> {
+    let mut charge = size_of::<Value>();
+    match value {
+        Value::String(string) => charge.checked_add(string.capacity()),
+        Value::Array(values) => {
+            charge = charge.checked_add(values.len().checked_mul(96)?)?;
+            for value in values {
+                charge = charge.checked_add(retained_value_memory_charge(value)?)?;
+            }
+            charge.checked_add(
+                values
+                    .capacity()
+                    .saturating_sub(values.len())
+                    .checked_mul(size_of::<Value>())?,
+            )
+        }
+        Value::Object(values) => {
+            charge = charge.checked_add(values.len().checked_mul(96)?)?;
+            for (key, value) in values {
+                charge = charge
+                    .checked_add(key.capacity())?
+                    .checked_add(retained_value_memory_charge(value)?)?;
+            }
+            Some(charge)
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => Some(charge),
+    }
 }
 
 fn inspect_logical_entries(
@@ -897,14 +1254,28 @@ fn inspect_logical_entries(
     policy: &InspectionPolicy,
     registries: &MigrationRegistries,
     applied_migrations: &mut Vec<AppliedMigration>,
+    initial_retained_memory_bytes: usize,
 ) -> Result<InspectedLogicalEntries, ImportError> {
     let mut scenarios = Vec::new();
     let mut scenario_revisions = Vec::new();
     let mut additional_entries = BTreeMap::new();
+    let mut retained_memory_bytes = initial_retained_memory_bytes;
     for (path, content) in entries {
         if path.starts_with("scenarios/") || path.starts_with("scenario-revisions/") {
             let historical = path.starts_with("scenario-revisions/");
-            let value = parse_strict_json(&path, &content, &policy.limits)?;
+            let parsed = parse_strict_json_charged(&path, &content, &policy.limits)?;
+            let parsed_memory_bytes = conservative_parsed_memory_charge(
+                &path,
+                content.len(),
+                parsed.representation_bytes,
+            )?;
+            add_retained_memory(
+                &path,
+                &mut retained_memory_bytes,
+                parsed_memory_bytes,
+                policy.limits.max_total_uncompressed_bytes,
+            )?;
+            let value = parsed.value;
             let version = required_u32(&value, "schemaVersion", &path)?;
             if version > CURRENT_PORTABLE_SCHEMA_VERSION {
                 return Err(ImportError::UnsupportedNewerVersion {
@@ -921,6 +1292,20 @@ fn inspect_logical_entries(
                 });
             }
             let current = registries.migrate_portable(version, value, applied_migrations)?;
+            let migrated_memory_bytes = conservative_parsed_memory_charge(
+                &path,
+                content.len(),
+                retained_value_memory_charge(&current).ok_or_else(|| ImportError::JsonLimit {
+                    path: path.clone(),
+                    limit: "representation bytes",
+                })?,
+            )?;
+            add_retained_memory(
+                &path,
+                &mut retained_memory_bytes,
+                migrated_memory_bytes.saturating_sub(parsed_memory_bytes),
+                policy.limits.max_total_uncompressed_bytes,
+            )?;
             let scenario: PortableScenario =
                 serde_json::from_value(current).map_err(|error| ImportError::InvalidScenario {
                     path: path.clone(),
@@ -937,6 +1322,20 @@ fn inspect_logical_entries(
             if path.as_bytes().strip_suffix(b".json").is_some() {
                 let _validated = parse_strict_json(&path, &content, &policy.limits)?;
             }
+            let raw_memory_bytes = content
+                .capacity()
+                .checked_add(path.capacity())
+                .and_then(|charge| charge.checked_add(256))
+                .ok_or_else(|| ImportError::JsonLimit {
+                    path: path.clone(),
+                    limit: "representation bytes",
+                })?;
+            add_retained_memory(
+                &path,
+                &mut retained_memory_bytes,
+                raw_memory_bytes,
+                policy.limits.max_total_uncompressed_bytes,
+            )?;
             additional_entries.insert(path, content);
         }
     }
@@ -946,7 +1345,27 @@ fn inspect_logical_entries(
         scenarios,
         scenario_revisions,
         additional_entries,
+        retained_memory_bytes,
     })
+}
+fn parse_and_validate_checksums(
+    entries: &BTreeMap<String, Vec<u8>>,
+    limits: &PortableLimits,
+) -> Result<(Checksums, usize), ImportError> {
+    let checksums_bytes = entries
+        .get(CHECKSUMS_PATH)
+        .ok_or_else(|| ImportError::MissingEntry(CHECKSUMS_PATH.to_owned()))?;
+    let parsed_checksums = parse_strict_json_charged(CHECKSUMS_PATH, checksums_bytes, limits)?;
+    let checksums_memory_bytes = conservative_parsed_memory_charge(
+        CHECKSUMS_PATH,
+        checksums_bytes.len(),
+        parsed_checksums.representation_bytes,
+    )?;
+    let checksums_value = parsed_checksums.value;
+    let checksums: Checksums = serde_json::from_value(checksums_value)
+        .map_err(|error| ImportError::InvalidChecksums(error.to_string()))?;
+    validate_checksums(&checksums, entries)?;
+    Ok((checksums, checksums_memory_bytes))
 }
 
 /// Inspect bytes completely under limits. Nothing is extracted or made live.
@@ -973,17 +1392,12 @@ pub fn inspect_bundle(
         policy.limits.max_path_bytes,
     )?;
     validate_archive_metadata(bytes, policy)?;
-    let (manifest_value, original_format_version, original_schema_version) =
+    let (manifest_value, original_format_version, original_schema_version, manifest_memory_bytes) =
         preflight_manifest(bytes, policy, registries)?;
 
     let entries = read_archive_entries(bytes, policy)?;
-    let checksums_bytes = entries
-        .get(CHECKSUMS_PATH)
-        .ok_or_else(|| ImportError::MissingEntry(CHECKSUMS_PATH.to_owned()))?;
-    let checksums_value = parse_strict_json(CHECKSUMS_PATH, checksums_bytes, &policy.limits)?;
-    let checksums: Checksums = serde_json::from_value(checksums_value)
-        .map_err(|error| ImportError::InvalidChecksums(error.to_string()))?;
-    validate_checksums(&checksums, &entries)?;
+    let (checksums, checksums_memory_bytes) =
+        parse_and_validate_checksums(&entries, &policy.limits)?;
 
     let mut applied_migrations = Vec::new();
     let logical = registries.migrate_outer(
@@ -998,6 +1412,14 @@ pub fn inspect_bundle(
         manifest: manifest_value,
         mut entries,
     } = logical;
+    let migrated_manifest_memory_bytes = conservative_parsed_memory_charge(
+        MANIFEST_PATH,
+        0,
+        retained_value_memory_charge(&manifest_value).ok_or_else(|| ImportError::JsonLimit {
+            path: MANIFEST_PATH.to_owned(),
+            limit: "representation bytes",
+        })?,
+    )?;
     let mut manifest: BundleManifest = serde_json::from_value(manifest_value)
         .map_err(|error| ImportError::InvalidManifest(error.to_string()))?;
     validate_manifest(&manifest, policy, registries)?;
@@ -1012,16 +1434,31 @@ pub fn inspect_bundle(
             .map(|(path, content)| (path.as_str(), content.as_slice())),
     )
     .map_err(|error| ImportError::InvalidManifest(error.0))?;
+    let mut initial_retained_memory_bytes = 0_usize;
+    add_retained_memory(
+        MANIFEST_PATH,
+        &mut initial_retained_memory_bytes,
+        manifest_memory_bytes.max(migrated_manifest_memory_bytes),
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
+    add_retained_memory(
+        CHECKSUMS_PATH,
+        &mut initial_retained_memory_bytes,
+        checksums_memory_bytes,
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
     let InspectedLogicalEntries {
         scenarios,
         scenario_revisions,
         additional_entries,
+        retained_memory_bytes: logical_memory_bytes,
     } = inspect_logical_entries(
         entries,
         &manifest,
         policy,
         registries,
         &mut applied_migrations,
+        initial_retained_memory_bytes,
     )?;
     validate_bundle_references(&scenarios, &scenario_revisions, &additional_entries)?;
     manifest.format_version = CURRENT_BUNDLE_FORMAT_VERSION;
@@ -1037,6 +1474,207 @@ pub fn inspect_bundle(
         applied_migrations,
         original_format_version,
         original_schema_version,
+        retained_memory_bytes: logical_memory_bytes,
+    })
+}
+
+fn preserved_metadata_memory_charge(
+    metadata: &PreservedBundleMetadata,
+) -> Result<usize, ImportError> {
+    let mut charge = size_of::<PreservedBundleMetadata>();
+    for string in [
+        Some(&metadata.file_sha256),
+        Some(&metadata.format),
+        metadata.bundle_kind.as_ref(),
+        metadata.title.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        charge = charge
+            .checked_add(string.capacity())
+            .ok_or_else(|| ImportError::JsonLimit {
+                path: MANIFEST_PATH.to_owned(),
+                limit: "representation bytes",
+            })?;
+    }
+    charge = charge
+        .checked_add(
+            metadata
+                .required_capabilities
+                .capacity()
+                .checked_mul(size_of::<PreservedCapabilityMetadata>())
+                .ok_or_else(|| ImportError::JsonLimit {
+                    path: MANIFEST_PATH.to_owned(),
+                    limit: "representation bytes",
+                })?,
+        )
+        .and_then(|value| {
+            value.checked_add(
+                metadata
+                    .scenarios
+                    .capacity()
+                    .checked_mul(size_of::<PreservedScenarioMetadata>())?,
+            )
+        })
+        .ok_or_else(|| ImportError::JsonLimit {
+            path: MANIFEST_PATH.to_owned(),
+            limit: "representation bytes",
+        })?;
+    for capability in &metadata.required_capabilities {
+        charge = charge
+            .checked_add(capability.id.capacity())
+            .ok_or_else(|| ImportError::JsonLimit {
+                path: MANIFEST_PATH.to_owned(),
+                limit: "representation bytes",
+            })?;
+    }
+    for scenario in &metadata.scenarios {
+        for string in [
+            Some(&scenario.path),
+            scenario.scenario_id.as_ref(),
+            scenario.pack_id.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            charge =
+                charge
+                    .checked_add(string.capacity())
+                    .ok_or_else(|| ImportError::JsonLimit {
+                        path: scenario.path.clone(),
+                        limit: "representation bytes",
+                    })?;
+        }
+    }
+    Ok(charge)
+}
+
+/// Performs a no-copy safety, checksum, and allowlisted metadata preflight.
+///
+/// Scenario domain payloads and all non-allowlisted fields are streamed through
+/// `IgnoredAny`; they are never represented as [`Value`] or domain DTOs.
+///
+/// # Errors
+///
+/// Returns [`ImportError`] unless the archive and its fixed checksum contract
+/// are valid and its allowlisted envelope metadata can be read within bounds.
+pub fn preflight_bundle_metadata(
+    bytes: &[u8],
+    policy: &InspectionPolicy,
+) -> Result<PreservedBundleMetadata, ImportError> {
+    let effective_policy = policy.hardened();
+    let policy = &effective_policy;
+    let archive_size = u64::try_from(bytes.len()).map_err(|_| ImportError::ArchiveTooLarge)?;
+    if archive_size > policy.limits.max_archive_bytes {
+        return Err(ImportError::ArchiveTooLarge);
+    }
+    validate_zip32_central_directory(
+        bytes,
+        policy.limits.max_entries,
+        policy.limits.max_path_bytes,
+    )?;
+    validate_archive_metadata(bytes, policy)?;
+
+    let checksums_bytes = read_fixed_entry(bytes, CHECKSUMS_PATH, policy.limits.max_json_bytes)?;
+    let checksums_value = parse_strict_json(CHECKSUMS_PATH, &checksums_bytes, &policy.limits)?;
+    let checksums: Checksums = serde_json::from_value(checksums_value)
+        .map_err(|error| ImportError::InvalidChecksums(error.to_string()))?;
+    stream_validate_checksums(bytes, &checksums, policy)?;
+
+    let manifest_bytes = read_fixed_entry(bytes, MANIFEST_PATH, MAX_MANIFEST_BYTES)?;
+    let manifest = manifest_envelope_metadata(&manifest_bytes, &policy.limits)?;
+    let mut scenarios = Vec::new();
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let path = std::str::from_utf8(entry.name_raw())
+            .map_err(|_| ImportError::UnsafePath {
+                path: String::new(),
+                reason: "path is not valid UTF-8",
+            })?
+            .to_owned();
+        // Archive paths are canonical: an uppercase extension is not a JSON entry.
+        if !(path.starts_with("scenarios/") || path.starts_with("scenario-revisions/"))
+            || path.as_bytes().strip_suffix(b".json").is_none()
+        {
+            continue;
+        }
+        if entry.size() > policy.limits.max_json_bytes {
+            return Err(ImportError::JsonLimit {
+                path,
+                limit: "document bytes",
+            });
+        }
+        let envelope: ScenarioEnvelopeMetadata = parse_metadata_json(&path, entry.by_ref())?;
+        let document = envelope.document;
+        let scenario_id = document
+            .as_ref()
+            .and_then(|document| document.scenario_id.as_ref())
+            .filter(|value| value.len() <= policy.limits.max_string_bytes)
+            .cloned();
+        let pack = document.and_then(|document| document.domain_pack);
+        let pack_id = pack
+            .as_ref()
+            .and_then(|pack| pack.id.as_ref())
+            .filter(|value| value.len() <= policy.limits.max_string_bytes)
+            .and_then(|id| id.parse::<PackId>().ok())
+            .map(|id| id.to_string());
+        scenarios.push(PreservedScenarioMetadata {
+            path,
+            scenario_id,
+            pack_id,
+            pack_schema_version: pack.as_ref().and_then(|pack| pack.schema_version),
+        });
+    }
+    scenarios.sort_by(|left, right| left.path.cmp(&right.path));
+
+    Ok(PreservedBundleMetadata {
+        file_sha256: sha256_hex(bytes),
+        format: manifest.format,
+        format_version: manifest.format_version,
+        portable_schema_version: manifest.schema_version,
+        bundle_kind: manifest.bundle_kind,
+        title: manifest.title,
+        required_capabilities: manifest
+            .required_capabilities
+            .into_iter()
+            .map(|capability| PreservedCapabilityMetadata {
+                id: capability.id,
+                version: capability.version,
+            })
+            .collect(),
+        scenarios,
+    })
+}
+
+/// Inspect only archive safety, fixed checksums, and allowlisted envelope metadata.
+///
+/// The returned archive remains unopened application data: no migration,
+/// semantic-capability acceptance, pack lookup, scenario validation, or import
+/// staging occurs. Exact original bytes are retained so an unavailable or newer
+/// pack can be re-exported without reconstruction.
+///
+/// # Errors
+///
+/// Returns [`ImportError`] unless the archive is bounded, structurally safe,
+/// uses the fixed checksum contract, and all declared entry bytes match it.
+pub fn inspect_unopened_bundle_for_exact_reexport(
+    bytes: &[u8],
+    policy: &InspectionPolicy,
+) -> Result<UnopenedBundle, ImportError> {
+    let metadata = preflight_bundle_metadata(bytes, policy)?;
+    let retained_memory_bytes = bytes
+        .len()
+        .checked_add(preserved_metadata_memory_charge(&metadata)?)
+        .ok_or_else(|| ImportError::JsonLimit {
+            path: "bundle".to_owned(),
+            limit: "representation bytes",
+        })?;
+    Ok(UnopenedBundle {
+        metadata,
+        exact_bytes: bytes.to_vec().into_boxed_slice(),
+        retained_memory_bytes,
     })
 }
 
@@ -1161,11 +1799,7 @@ fn validate_supplemental_bundle_references(
             register_supplemental_uuid_stem(identity_owners, section_kind, key)?;
             continue;
         }
-        let value: Value =
-            serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                path: path.clone(),
-                message: error.to_string(),
-            })?;
+        let value = parse_strict_json(path, bytes, &PORTABLE_LIMITS)?;
         validate_asset_references(&value, available_assets, path)?;
         if section_kind == SupplementalSectionKind::Results {
             validate_result_bundle_reference(path, &value, represented, identity_owners)?;
@@ -1400,18 +2034,17 @@ fn validate_manifest(
     }
     for capability in &manifest.required_capabilities {
         if capability.version == 0 || !valid_namespace(&capability.id) {
-            return Err(ImportError::InvalidManifest(format!(
-                "invalid required capability {}",
-                capability.id
-            )));
+            return Err(ImportError::InvalidManifest(
+                "a required capability declaration is invalid".to_owned(),
+            ));
         }
         require_capability(capability, policy)?;
     }
     for namespace in &manifest.nonsemantic_extensions {
         if !valid_namespace(namespace) {
-            return Err(ImportError::InvalidManifest(format!(
-                "invalid nonsemantic extension namespace {namespace}"
-            )));
+            return Err(ImportError::InvalidManifest(
+                "a nonsemantic extension namespace is invalid".to_owned(),
+            ));
         }
     }
     Ok(())
@@ -1431,6 +2064,11 @@ fn require_capability(
     capability: &SemanticCapability,
     policy: &InspectionPolicy,
 ) -> Result<(), ImportError> {
+    if capability.version == 0 || !valid_namespace(&capability.id) {
+        return Err(ImportError::InvalidManifest(
+            "a required capability declaration is invalid".to_owned(),
+        ));
+    }
     if policy
         .supported_capabilities
         .get(&capability.id)
@@ -1670,24 +2308,162 @@ fn required_u32(value: &Value, field: &str, path: &str) -> Result<u32, ImportErr
     })
 }
 
-fn parse_strict_json(
+const JSON_LIMIT_MARKER: &str = "__eutheto_json_limit__:";
+
+struct ParsedJson {
+    value: Value,
+    representation_bytes: usize,
+}
+
+struct JsonBudget {
+    limits: PortableLimits,
+    nodes: usize,
+    items: usize,
+    string_bytes: usize,
+    representation_bytes: usize,
+    max_representation_bytes: usize,
+}
+
+impl JsonBudget {
+    fn new(limits: &PortableLimits) -> Result<Self, &'static str> {
+        let json_bytes =
+            usize::try_from(limits.max_json_bytes).map_err(|_| "representation bytes")?;
+        let max_representation_bytes = json_bytes
+            .checked_mul(64)
+            .and_then(|value| value.checked_add(4_096))
+            .ok_or("representation bytes")?;
+        Ok(Self {
+            limits: *limits,
+            nodes: 0,
+            items: 0,
+            string_bytes: 0,
+            representation_bytes: 0,
+            max_representation_bytes,
+        })
+    }
+
+    fn add_representation<E: de::Error>(&mut self, bytes: usize) -> Result<(), E> {
+        self.representation_bytes = self
+            .representation_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| E::custom(format_args!("{JSON_LIMIT_MARKER}representation bytes")))?;
+        if self.representation_bytes > self.max_representation_bytes {
+            return Err(E::custom(format_args!(
+                "{JSON_LIMIT_MARKER}representation bytes"
+            )));
+        }
+        Ok(())
+    }
+
+    fn enter_node<E: de::Error>(&mut self, depth: usize) -> Result<(), E> {
+        if depth > self.limits.max_json_depth {
+            return Err(E::custom(format_args!("{JSON_LIMIT_MARKER}nesting depth")));
+        }
+        self.nodes = self
+            .nodes
+            .checked_add(1)
+            .ok_or_else(|| E::custom(format_args!("{JSON_LIMIT_MARKER}aggregate nodes")))?;
+        if self.nodes > self.limits.max_collection_items {
+            return Err(E::custom(format_args!(
+                "{JSON_LIMIT_MARKER}aggregate nodes"
+            )));
+        }
+        self.add_representation::<E>(size_of::<Value>())
+    }
+
+    fn add_item<E: de::Error>(&mut self, container_items: usize) -> Result<(), E> {
+        if container_items >= self.limits.max_collection_items {
+            return Err(E::custom(format_args!(
+                "{JSON_LIMIT_MARKER}container items"
+            )));
+        }
+        self.items = self
+            .items
+            .checked_add(1)
+            .ok_or_else(|| E::custom(format_args!("{JSON_LIMIT_MARKER}aggregate items")))?;
+        if self.items > self.limits.max_collection_items {
+            return Err(E::custom(format_args!(
+                "{JSON_LIMIT_MARKER}aggregate items"
+            )));
+        }
+        // A deliberately conservative allowance for map links, allocator metadata,
+        // and collection spare capacity. Preview accounting reuses the resulting
+        // checked representation charge rather than compact JSON length.
+        self.add_representation::<E>(96)
+    }
+
+    fn add_string<E: de::Error>(&mut self, bytes: usize, key: bool) -> Result<(), E> {
+        if bytes > self.limits.max_string_bytes {
+            let limit = if key {
+                "object key bytes"
+            } else {
+                "string bytes"
+            };
+            return Err(E::custom(format_args!("{JSON_LIMIT_MARKER}{limit}")));
+        }
+        self.string_bytes = self
+            .string_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| E::custom(format_args!("{JSON_LIMIT_MARKER}aggregate string bytes")))?;
+        if u64::try_from(self.string_bytes).map_or(true, |total| total > self.limits.max_json_bytes)
+        {
+            return Err(E::custom(format_args!(
+                "{JSON_LIMIT_MARKER}aggregate string bytes"
+            )));
+        }
+        self.add_representation::<E>(bytes)
+    }
+}
+
+fn json_limit_from_error(path: &str, message: &str) -> Option<ImportError> {
+    let marker = message.find(JSON_LIMIT_MARKER)?;
+    let limit = &message[marker + JSON_LIMIT_MARKER.len()..];
+    let limit = limit.split(" at line").next().unwrap_or(limit);
+    let limit = match limit {
+        "nesting depth" => "nesting depth",
+        "aggregate nodes" => "aggregate nodes",
+        "container items" => "container items",
+        "aggregate items" => "aggregate items",
+        "string bytes" => "string bytes",
+        "object key bytes" => "object key bytes",
+        "aggregate string bytes" => "aggregate string bytes",
+        "representation bytes" => "representation bytes",
+        _ => return None,
+    };
+    Some(ImportError::JsonLimit {
+        path: path.to_owned(),
+        limit,
+    })
+}
+
+fn parse_strict_json_charged(
     path: &str,
     bytes: &[u8],
     limits: &PortableLimits,
-) -> Result<Value, ImportError> {
+) -> Result<ParsedJson, ImportError> {
     if u64::try_from(bytes.len()).map_or(true, |size| size > limits.max_json_bytes) {
         return Err(ImportError::JsonLimit {
             path: path.to_owned(),
             limit: "document bytes",
         });
     }
+    let mut budget = JsonBudget::new(limits).map_err(|limit| ImportError::JsonLimit {
+        path: path.to_owned(),
+        limit,
+    })?;
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let value = StrictValueSeed
-        .deserialize(&mut deserializer)
-        .map_err(|error| ImportError::InvalidJson {
+    let value = StrictValueSeed {
+        budget: &mut budget,
+        depth: 0,
+    }
+    .deserialize(&mut deserializer)
+    .map_err(|error| {
+        let message = error.to_string();
+        json_limit_from_error(path, &message).unwrap_or_else(|| ImportError::InvalidJson {
             path: path.to_owned(),
-            message: error.to_string(),
-        })?;
+            message,
+        })
+    })?;
     deserializer
         .end()
         .map_err(|error| ImportError::InvalidJson {
@@ -1699,7 +2475,18 @@ fn parse_strict_json(
         path: path.to_owned(),
         message: error.0,
     })?;
-    Ok(value)
+    Ok(ParsedJson {
+        value,
+        representation_bytes: budget.representation_bytes,
+    })
+}
+
+fn parse_strict_json(
+    path: &str,
+    bytes: &[u8],
+    limits: &PortableLimits,
+) -> Result<Value, ImportError> {
+    parse_strict_json_charged(path, bytes, limits).map(|parsed| parsed.value)
 }
 
 fn validate_json_limits(
@@ -1756,22 +2543,32 @@ fn validate_json_limits(
     Ok(())
 }
 
-struct StrictValueSeed;
+struct StrictValueSeed<'a> {
+    budget: &'a mut JsonBudget,
+    depth: usize,
+}
 
-impl<'de> DeserializeSeed<'de> for StrictValueSeed {
+impl<'de> DeserializeSeed<'de> for StrictValueSeed<'_> {
     type Value = Value;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(StrictValueVisitor)
+        self.budget.enter_node::<D::Error>(self.depth)?;
+        deserializer.deserialize_any(StrictValueVisitor {
+            budget: self.budget,
+            depth: self.depth,
+        })
     }
 }
 
-struct StrictValueVisitor;
+struct StrictValueVisitor<'a> {
+    budget: &'a mut JsonBudget,
+    depth: usize,
+}
 
-impl<'de> Visitor<'de> for StrictValueVisitor {
+impl<'de> Visitor<'de> for StrictValueVisitor<'_> {
     type Value = Value;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1807,11 +2604,19 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
             .ok_or_else(|| E::custom("non-finite JSON number"))
     }
 
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.budget.add_string::<E>(value.len(), false)?;
         Ok(Value::String(value.to_owned()))
     }
 
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.budget.add_string::<E>(value.len(), false)?;
         Ok(Value::String(value))
     }
 
@@ -1819,8 +2624,16 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     where
         A: SeqAccess<'de>,
     {
+        let depth = self.depth.checked_add(1).ok_or_else(|| {
+            <A::Error as de::Error>::custom(format_args!("{JSON_LIMIT_MARKER}nesting depth"))
+        })?;
+        let budget = self.budget;
         let mut values = Vec::new();
-        while let Some(value) = sequence.next_element_seed(StrictValueSeed)? {
+        while let Some(value) = sequence.next_element_seed(StrictValueSeed {
+            budget: &mut *budget,
+            depth,
+        })? {
+            budget.add_item::<A::Error>(values.len())?;
             values.push(value);
         }
         Ok(Value::Array(values))
@@ -1830,14 +2643,22 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     where
         A: MapAccess<'de>,
     {
+        let depth = self.depth.checked_add(1).ok_or_else(|| {
+            <A::Error as de::Error>::custom(format_args!("{JSON_LIMIT_MARKER}nesting depth"))
+        })?;
+        let budget = self.budget;
         let mut values = Map::new();
         while let Some(key) = object.next_key::<String>()? {
-            let value = object.next_value_seed(StrictValueSeed)?;
-            if values.insert(key.clone(), value).is_some() {
-                return Err(de::Error::custom(format_args!(
-                    "duplicate object key {key:?}"
-                )));
+            budget.add_string::<A::Error>(key.len(), true)?;
+            if values.contains_key(&key) {
+                return Err(de::Error::custom("duplicate object key"));
             }
+            budget.add_item::<A::Error>(values.len())?;
+            let value = object.next_value_seed(StrictValueSeed {
+                budget: &mut *budget,
+                depth,
+            })?;
+            values.insert(key, value);
         }
         Ok(Value::Object(values))
     }
@@ -2660,11 +3481,7 @@ fn collect_copied_result_ids(
         if plan.supplemental.get(&identity) == Some(&SupplementalCollisionAction::Skip) {
             continue;
         }
-        let value: Value =
-            serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                path: path.clone(),
-                message: error.to_string(),
-            })?;
+        let value = parse_strict_json(path, bytes, &PORTABLE_LIMITS)?;
         let dependency = extract_result_dependency(&value).map_err(|error| {
             ImportError::Remap(format!("{path} has invalid dependency: {error}"))
         })?;
@@ -2704,11 +3521,7 @@ fn validate_local_supplemental_uuid_collisions(
                 let bytes = inspected.additional_entries.get(&path).ok_or_else(|| {
                     ImportError::Remap(format!("retained result {path} is missing"))
                 })?;
-                let value: Value =
-                    serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                        path: path.clone(),
-                        message: error.to_string(),
-                    })?;
+                let value = parse_strict_json(&path, bytes, &PORTABLE_LIMITS)?;
                 let dependency = extract_result_dependency(&value)
                     .map_err(|error| ImportError::Remap(format!("{path}: {error}")))?;
                 match plan.scenarios.get(&dependency.scenario_id) {
@@ -2765,11 +3578,7 @@ fn scenario_has_unsafe_local_result_collision(
         if !path.starts_with("results/") {
             continue;
         }
-        let value: Value =
-            serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                path: path.clone(),
-                message: error.to_string(),
-            })?;
+        let value = parse_strict_json(path, bytes, &PORTABLE_LIMITS)?;
         let dependency = extract_result_dependency(&value)
             .map_err(|error| ImportError::Remap(format!("{path}: {error}")))?;
         if dependency.scenario_id != scenario_id {
@@ -2924,11 +3733,7 @@ fn staged_references(
         .chain(&split.shared_records)
         .chain(&split.preferences)
     {
-        let value: Value =
-            serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                path: key.clone(),
-                message: error.to_string(),
-            })?;
+        let value = parse_strict_json(key, bytes, &PORTABLE_LIMITS)?;
         referenced_assets.extend(
             extract_asset_references(&value)
                 .map_err(|error| ImportError::InvalidManifest(error.to_string()))?,
@@ -2964,11 +3769,7 @@ fn stage_json_section(
 ) -> Result<BTreeMap<String, Vec<u8>>, ImportError> {
     let mut staged = BTreeMap::new();
     for (key, bytes) in values {
-        let mut value: Value =
-            serde_json::from_slice(&bytes).map_err(|error| ImportError::InvalidJson {
-                path: format!("{section}/{key}"),
-                message: error.to_string(),
-            })?;
+        let mut value = parse_strict_json(&format!("{section}/{key}"), &bytes, &PORTABLE_LIMITS)?;
         let result_id = if section == SupplementalSectionKind::Results {
             Some(extract_result_id(&value).map_err(|error| {
                 ImportError::Remap(format!("{section}/{key} has invalid identity: {error}"))
@@ -3062,11 +3863,7 @@ fn staged_result_dependencies(
     results
         .iter()
         .map(|(key, bytes)| {
-            let value: Value =
-                serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                    path: format!("results/{key}"),
-                    message: error.to_string(),
-                })?;
+            let value = parse_strict_json(&format!("results/{key}"), bytes, &PORTABLE_LIMITS)?;
             let dependency = extract_result_dependency(&value).map_err(|error| {
                 ImportError::Remap(format!("results/{key} has invalid dependency: {error}"))
             })?;
@@ -3080,11 +3877,7 @@ fn validate_staged_result_dependencies(
     represented: &BTreeSet<(ScenarioId, Revision)>,
 ) -> Result<(), ImportError> {
     for (key, bytes) in results {
-        let value: Value =
-            serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                path: format!("results/{key}"),
-                message: error.to_string(),
-            })?;
+        let value = parse_strict_json(&format!("results/{key}"), bytes, &PORTABLE_LIMITS)?;
         let dependency = extract_result_dependency(&value).map_err(|error| {
             ImportError::Remap(format!("results/{key} has invalid dependency: {error}"))
         })?;
@@ -3107,11 +3900,7 @@ where
 {
     for section in sections {
         for (key, bytes) in section {
-            let value: Value =
-                serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                    path: key.clone(),
-                    message: error.to_string(),
-                })?;
+            let value = parse_strict_json(key, bytes, &PORTABLE_LIMITS)?;
             let references = extract_scenario_references(&value)
                 .map_err(|error| ImportError::Remap(error.to_string()))?;
             if let Some(missing) = references.difference(represented).next() {
@@ -3287,10 +4076,7 @@ fn supplemental_identity(
 }
 
 fn result_id_from_bytes(path: &str, bytes: &[u8]) -> Result<Uuid, ImportError> {
-    let value: Value = serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-        path: path.to_owned(),
-        message: error.to_string(),
-    })?;
+    let value = parse_strict_json(path, bytes, &PORTABLE_LIMITS)?;
     extract_result_id(&value)
         .map_err(|error| ImportError::Remap(format!("{path} has invalid result identity: {error}")))
 }
@@ -3313,11 +4099,7 @@ fn supplemental_owned_uuids(
             .into_iter()
             .collect::<BTreeSet<_>>();
         if identity.section != SupplementalSectionKind::Assets {
-            let value: Value =
-                serde_json::from_slice(bytes).map_err(|error| ImportError::InvalidJson {
-                    path: path.clone(),
-                    message: error.to_string(),
-                })?;
+            let value = parse_strict_json(path, bytes, &PORTABLE_LIMITS)?;
             owned.extend(collect_self_declared_uuids(&value));
         }
         if owners.insert(identity, owned).is_some() {
@@ -4173,6 +4955,82 @@ mod tests {
             &InspectionPolicy::default(),
             &MigrationRegistries::current_only(),
         )
+    }
+
+    #[test]
+    fn unopened_bundle_preserves_exact_bytes_without_import_claim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bytes = valid_bundle()?;
+        let unopened =
+            inspect_unopened_bundle_for_exact_reexport(&bytes, &InspectionPolicy::default())?;
+        assert_eq!(unopened.exact_bytes(), bytes);
+        assert_eq!(unopened.metadata().format, BUNDLE_FORMAT);
+        assert_eq!(unopened.metadata().title.as_deref(), Some("Portable"));
+        assert_eq!(unopened.metadata().scenarios.len(), 1);
+        assert_eq!(
+            unopened.metadata().scenarios[0].pack_id.as_deref(),
+            Some("official.generic")
+        );
+        assert_eq!(unopened.into_exact_bytes().as_ref(), bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn unopened_bundle_preserves_newer_semantics_but_normal_import_rejects_them()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let policy = InspectionPolicy::default();
+        let mut entries = read_archive_entries(&valid_bundle()?, &policy)?;
+        let manifest_bytes = entries
+            .get(MANIFEST_PATH)
+            .ok_or("fixture manifest is missing")?;
+        let mut manifest: Value = serde_json::from_slice(manifest_bytes)?;
+        let manifest_object = manifest
+            .as_object_mut()
+            .ok_or("manifest is not an object")?;
+        manifest_object.insert(
+            "schemaVersion".to_owned(),
+            Value::from(CURRENT_PORTABLE_SCHEMA_VERSION.saturating_add(1)),
+        );
+        manifest_object.insert(
+            "requiredCapabilities".to_owned(),
+            serde_json::json!([{"id": "future.semantic", "version": 1}]),
+        );
+        let updated_manifest = canonical_json(&manifest)?;
+        entries.insert(MANIFEST_PATH.to_owned(), updated_manifest.clone());
+
+        let checksums_bytes = entries
+            .get(CHECKSUMS_PATH)
+            .ok_or("fixture checksums are missing")?;
+        let mut checksums: Checksums = serde_json::from_slice(checksums_bytes)?;
+        checksums
+            .files
+            .insert(MANIFEST_PATH.to_owned(), sha256_hex(&updated_manifest));
+        entries.insert(CHECKSUMS_PATH.to_owned(), canonical_json(&checksums)?);
+        let archive_entries = entries
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_slice()))
+            .collect::<Vec<_>>();
+        let newer = raw_zip(&archive_entries, CompressionMethod::Deflated)?;
+
+        assert!(matches!(
+            inspect(&newer),
+            Err(ImportError::UnsupportedNewerVersion { .. })
+        ));
+        let unopened =
+            inspect_unopened_bundle_for_exact_reexport(&newer, &InspectionPolicy::default())?;
+        assert_eq!(unopened.exact_bytes(), newer);
+        assert_eq!(
+            unopened.metadata().portable_schema_version,
+            CURRENT_PORTABLE_SCHEMA_VERSION.saturating_add(1)
+        );
+        assert_eq!(
+            unopened.metadata().required_capabilities,
+            vec![PreservedCapabilityMetadata {
+                id: "future.semantic".to_owned(),
+                version: 1,
+            }]
+        );
+        Ok(())
     }
 
     fn supplemental_bundle() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -7135,5 +7993,21 @@ mod tests {
         assert_eq!(staged.manifest_extensions, manifest_extensions);
         assert!(staged.nonsemantic_extensions.contains("example.unused"));
         Ok(())
+    }
+    #[test]
+    fn strict_parser_rejects_aggregate_tiny_nodes_during_traversal() {
+        let mut limits = PORTABLE_LIMITS;
+        limits.max_collection_items = 8;
+        let result = parse_strict_json("aggregate.json", b"[[0,0],[0,0],[0,0]]", &limits);
+        assert!(
+            matches!(
+                result,
+                Err(ImportError::JsonLimit {
+                    limit: "aggregate nodes",
+                    ..
+                })
+            ),
+            "aggregate node budget must reject nested tiny values"
+        );
     }
 }

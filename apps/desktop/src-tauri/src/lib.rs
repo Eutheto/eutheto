@@ -5,24 +5,26 @@ use std::sync::Arc;
 
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-    BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp, PreparedPortableBinding,
-    ProjectScope,
+    BackendSupportColumn, BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp,
+    PreparedPortableBinding, ProjectScope, SolverSupportMatrixMetadata, SupportCell,
+    SupportFeature, SupportFeatureId,
 };
 use eutheto_export::{
-    ApplicationMetadata, BackupSelectionScope, BundleKind, CancellationSignal, FixedExclusion,
-    OmittedAssetReason, PORTABLE_LIMITS, PortableBackupAssetSelection,
+    ApplicationMetadata, BackupSelectionScope, BundleKind, FixedExclusion, OmittedAssetReason,
+    PORTABLE_LIMITS, PortableBackupAssetSelection,
 };
 use eutheto_import::{
     CollisionPlan, ImportOptions, ImportPreview, MigrationRegistryKind, RestoreAuthorization,
     SafetyBackupEvidence,
 };
 use eutheto_types::{
-    ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, CommandBatch,
-    CommandEnvelope, CommandId, CommandResult, CommandSource, DomainPackRef, EventTopic,
-    FieldErrorDto, FoundationStatus, PersonId, ProjectMetadataDto, ProjectSummaryDto, RequestId,
-    ResourceRef, Revision, Rfc3339Timestamp, SafeDiagnosticValue, ScenarioCommand, ScenarioId,
-    ScenarioSettings, ScenarioSummaryDto, ScenarioViewDto, SupplementalIdentity, SupportPreviewDto,
-    SystemClock, SystemIdGenerator, ValidationIssue, ValidationReport, ValidationSeverity,
+    ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
+    CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult, CommandSource,
+    DomainPackRef, EventTopic, FieldErrorDto, FoundationStatus, PackId, PersonId,
+    ProjectMetadataDto, ProjectSummaryDto, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
+    SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings, ScenarioSummaryDto,
+    ScenarioViewDto, SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator,
+    ValidationIssue, ValidationReport, ValidationSeverity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -149,6 +151,12 @@ macro_rules! with_tauri_commands {
             app_check_for_update,
             app_install_update,
             app_get_license_inventory,
+            pack_list,
+            pack_describe,
+            solver_list,
+            solver_describe,
+            solver_get_support_matrix,
+            solver_get_deferred_gates,
             project_list,
             project_get_metadata,
             project_create,
@@ -165,6 +173,8 @@ macro_rules! with_tauri_commands {
             project_restore_preview,
             project_restore_apply,
             project_operation_cancel,
+            project_unopened_bundle_inspect,
+            project_unopened_bundle_reexport,
             scenario_get_summary,
             scenario_get_setup_status,
             scenario_get_view,
@@ -248,6 +258,19 @@ type ApiResult<T> = Result<ApiResponseDto<T>, ApiError>;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RequestOnly {
     request_id: RequestId,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PackDescribeRequest {
+    request_id: RequestId,
+    pack_id: PackId,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SolverDescribeRequest {
+    request_id: RequestId,
+    backend_id: BackendId,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -490,6 +513,97 @@ impl From<State<'_, DesktopState>> for AppPathsSummaryDto {
         }
     }
 }
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DomainPackMetadataDto {
+    descriptor: Value,
+    catalog: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolverSupportCellDto {
+    feature_id: SupportFeatureId,
+    #[serde(flatten)]
+    cell: SupportCell,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolverSupportBackendColumnDto {
+    backend_id: BackendId,
+    backend_version: String,
+    adapter_version: String,
+    cells: Vec<SolverSupportCellDto>,
+}
+
+impl From<BackendSupportColumn> for SolverSupportBackendColumnDto {
+    fn from(column: BackendSupportColumn) -> Self {
+        Self {
+            backend_id: column.backend_id,
+            backend_version: column.backend_version,
+            adapter_version: column.adapter_version,
+            cells: column
+                .cells
+                .into_iter()
+                .map(|(feature_id, cell)| SolverSupportCellDto { feature_id, cell })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SolverSupportMatrixDto {
+    schema_version: u32,
+    planning_ir_schema_version: u32,
+    features: Vec<SupportFeature>,
+    production_backend_ids: Vec<BackendId>,
+    backend_columns: Vec<SolverSupportBackendColumnDto>,
+}
+
+fn solver_support_matrix_dto(matrix: SolverSupportMatrixMetadata) -> SolverSupportMatrixDto {
+    SolverSupportMatrixDto {
+        schema_version: matrix.schema_version,
+        planning_ir_schema_version: matrix.planning_ir_schema_version,
+        features: matrix.features,
+        production_backend_ids: matrix.production_backend_ids,
+        backend_columns: matrix
+            .backend_columns
+            .into_iter()
+            .map(SolverSupportBackendColumnDto::from)
+            .collect(),
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnopenedBundleScenarioDto {
+    path: String,
+    scenario_id: Option<String>,
+    pack_id: Option<String>,
+    pack_schema_version: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnopenedBundleMetadataDto {
+    file_sha256: String,
+    format: String,
+    format_version: u32,
+    portable_schema_version: u32,
+    bundle_kind: Option<String>,
+    title: Option<String>,
+    required_capabilities: Vec<PortableCapabilityDto>,
+    scenarios: Vec<UnopenedBundleScenarioDto>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnopenedBundlePreviewDto {
+    preview_id: RequestId,
+    metadata: UnopenedBundleMetadataDto,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -705,6 +819,16 @@ fn response<T>(
         warnings,
         result,
     }
+}
+fn metadata_value<T: Serialize + ?Sized>(value: &T) -> Result<Value, ApiError> {
+    serde_json::to_value(value).map_err(|_| {
+        boundary_error(
+            "protocol.metadata_serialization_failed",
+            "The application metadata could not be translated safely.",
+            None,
+        )
+        .into()
+    })
 }
 
 fn validation_warnings(report: &ValidationReport) -> Vec<ValidationIssue> {
@@ -1388,6 +1512,12 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "app_get_capabilities",
         "app_get_paths_summary",
         "app_create_support_bundle_preview",
+        "pack_list",
+        "pack_describe",
+        "solver_list",
+        "solver_describe",
+        "solver_get_support_matrix",
+        "solver_get_deferred_gates",
         "project_list",
         "project_get_metadata",
         "project_create",
@@ -1404,6 +1534,8 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "project_restore_preview",
         "project_restore_apply",
         "project_operation_cancel",
+        "project_unopened_bundle_inspect",
+        "project_unopened_bundle_reexport",
         "scenario_get_summary",
         "scenario_get_setup_status",
         "scenario_get_view",
@@ -1460,6 +1592,167 @@ async fn app_create_support_bundle_preview(
         _ => Err(boundary_error(
             "protocol.result_mismatch",
             "The application returned an unexpected support preview result.",
+            None,
+        )
+        .into()),
+    }
+}
+#[tauri::command]
+async fn pack_list(state: State<'_, DesktopState>, request: RequestOnly) -> ApiResult<Vec<Value>> {
+    match state
+        .app
+        .query(AppQuery::ListDomainPacks)
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::DomainPacks(descriptors) => {
+            let descriptors = descriptors
+                .iter()
+                .map(metadata_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(response(request.request_id, None, Vec::new(), descriptors))
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected domain-pack list result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn pack_describe(
+    state: State<'_, DesktopState>,
+    request: PackDescribeRequest,
+) -> ApiResult<DomainPackMetadataDto> {
+    match state
+        .app
+        .query(AppQuery::DescribeDomainPack(request.pack_id))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::DomainPack(metadata) => {
+            let metadata = metadata.as_ref();
+            Ok(response(
+                request.request_id,
+                None,
+                Vec::new(),
+                DomainPackMetadataDto {
+                    descriptor: metadata_value(&metadata.descriptor)?,
+                    catalog: metadata_value(&metadata.catalog)?,
+                },
+            ))
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected domain-pack description result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solver_list(
+    state: State<'_, DesktopState>,
+    request: RequestOnly,
+) -> ApiResult<Vec<Value>> {
+    match state
+        .app
+        .query(AppQuery::ListSolvers)
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::Solvers(descriptors) => {
+            let descriptors = descriptors
+                .iter()
+                .map(metadata_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(response(request.request_id, None, Vec::new(), descriptors))
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solver list result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solver_describe(
+    state: State<'_, DesktopState>,
+    request: SolverDescribeRequest,
+) -> ApiResult<Value> {
+    match state
+        .app
+        .query(AppQuery::DescribeSolver(request.backend_id))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::Solver(descriptor) => Ok(response(
+            request.request_id,
+            None,
+            Vec::new(),
+            metadata_value(&descriptor)?,
+        )),
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solver description result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solver_get_support_matrix(
+    state: State<'_, DesktopState>,
+    request: RequestOnly,
+) -> ApiResult<SolverSupportMatrixDto> {
+    match state
+        .app
+        .query(AppQuery::SolverSupportMatrix)
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolverSupportMatrix(matrix) => Ok(response(
+            request.request_id,
+            None,
+            Vec::new(),
+            solver_support_matrix_dto(matrix),
+        )),
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solver support-matrix result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solver_get_deferred_gates(
+    state: State<'_, DesktopState>,
+    request: RequestOnly,
+) -> ApiResult<Vec<Value>> {
+    match state
+        .app
+        .query(AppQuery::DeferredSolverGates)
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::DeferredSolverGates(gates) => {
+            let gates = gates
+                .iter()
+                .map(metadata_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(response(request.request_id, None, Vec::new(), gates))
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected deferred solver-gate result.",
             None,
         )
         .into()),
@@ -2079,9 +2372,8 @@ async fn project_restore_apply(
     }
 }
 
-#[tauri::command]
-async fn project_operation_cancel(
-    state: State<'_, DesktopState>,
+async fn cancel_portable_preview_impl(
+    state: &DesktopState,
     request: PortableCancelRequest,
 ) -> ApiResult<EmptyDto> {
     if state
@@ -2111,6 +2403,163 @@ async fn project_operation_cancel(
         )
         .into()),
     }
+}
+
+#[tauri::command]
+async fn project_operation_cancel(
+    state: State<'_, DesktopState>,
+    request: PortableCancelRequest,
+) -> ApiResult<EmptyDto> {
+    cancel_portable_preview_impl(&state, request).await
+}
+
+async fn inspect_unopened_bundle_bytes(
+    state: &DesktopState,
+    request_id: RequestId,
+    bytes: Vec<u8>,
+) -> ApiResult<UnopenedBundlePreviewDto> {
+    match state
+        .app
+        .query(AppQuery::InspectUnopenedBundle { bytes })
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::UnopenedBundlePreview {
+            preview_id,
+            metadata,
+        } => Ok(response(
+            request_id,
+            None,
+            Vec::new(),
+            UnopenedBundlePreviewDto {
+                preview_id,
+                metadata: UnopenedBundleMetadataDto {
+                    file_sha256: metadata.file_sha256,
+                    format: metadata.format,
+                    format_version: metadata.format_version,
+                    portable_schema_version: metadata.portable_schema_version,
+                    bundle_kind: metadata.bundle_kind,
+                    title: metadata.title,
+                    required_capabilities: metadata
+                        .required_capabilities
+                        .into_iter()
+                        .map(|capability| PortableCapabilityDto {
+                            id: capability.id,
+                            version: capability.version,
+                        })
+                        .collect(),
+                    scenarios: metadata
+                        .scenarios
+                        .into_iter()
+                        .map(|scenario| UnopenedBundleScenarioDto {
+                            path: scenario.path,
+                            scenario_id: scenario.scenario_id,
+                            pack_id: scenario.pack_id,
+                            pack_schema_version: scenario.pack_schema_version,
+                        })
+                        .collect(),
+                },
+            },
+        )),
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected unopened-bundle inspection result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn project_unopened_bundle_inspect(
+    state: State<'_, DesktopState>,
+    app_handle: AppHandle,
+    request: RequestOnly,
+) -> ApiResult<UnopenedBundlePreviewDto> {
+    let bytes = native_file_task(move || {
+        let selected = app_handle
+            .dialog()
+            .file()
+            .set_title("Choose an unopened Eutheto bundle to inspect")
+            .add_filter("Eutheto portable file", &["eutheto"])
+            .blocking_pick_file()
+            .ok_or(NativeFileError::Cancelled)?;
+        let path = selected
+            .into_path()
+            .map_err(|_| NativeFileError::Conversion)
+            .and_then(require_portable_path)?;
+        read_bounded_portable(&path)
+    })
+    .await?;
+    inspect_unopened_bundle_bytes(&state, request.request_id, bytes).await
+}
+
+async fn exact_reexport_unopened_bundle_to_path(
+    state: &DesktopState,
+    request: PortableCancelRequest,
+    destination: PathBuf,
+    artifact_name: String,
+) -> ApiResult<PortableArtifactDto> {
+    match state
+        .app
+        .execute(AppCommand::ExactReexportUnopenedBundle {
+            preview_id: request.preview_id,
+            destination,
+        })
+        .await
+        .map_err(map_app_error)?
+    {
+        AppCommandResult::UnopenedBundleReexported => Ok(response(
+            request.request_id,
+            None,
+            Vec::new(),
+            PortableArtifactDto { artifact_name },
+        )),
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected unopened-bundle re-export result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn project_unopened_bundle_reexport(
+    state: State<'_, DesktopState>,
+    app_handle: AppHandle,
+    request: PortableCancelRequest,
+) -> ApiResult<PortableArtifactDto> {
+    let selected = native_file_task(move || {
+        let selected = app_handle
+            .dialog()
+            .file()
+            .set_title("Save exact unopened Eutheto bundle")
+            .set_file_name("Eutheto-Unopened.eutheto")
+            .add_filter("Eutheto portable file", &["eutheto"])
+            .blocking_save_file()
+            .ok_or(NativeFileError::Cancelled)?;
+        let destination = selected
+            .into_path()
+            .map_err(|_| NativeFileError::Conversion)
+            .and_then(require_portable_path)?;
+        let artifact_name = selected_basename(&destination)?;
+        Ok((destination, artifact_name))
+    })
+    .await;
+    let (destination, artifact_name) = match selected {
+        Ok(selected) => selected,
+        Err(error) => {
+            let _ = state
+                .app
+                .execute(AppCommand::CancelPortablePreview {
+                    preview_id: request.preview_id,
+                })
+                .await;
+            return Err(error);
+        }
+    };
+    exact_reexport_unopened_bundle_to_path(&state, request, destination, artifact_name).await
 }
 
 #[tauri::command]
@@ -2636,7 +3085,7 @@ pub fn run() -> tauri::Result<()> {
                 },
                 clock: Arc::new(SystemClock),
                 ids: Arc::new(SystemIdGenerator),
-                cancellation: CancellationSignal::default(),
+                cancellation: CancellationToken::default(),
             }))
             .map_err(|error| {
                 std::io::Error::other(format!("application startup failed: {error:?}"))
@@ -2674,7 +3123,7 @@ pub fn run() -> tauri::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use eutheto_export::{CancellationSignal, FixedExclusion};
+    use eutheto_export::FixedExclusion;
     use eutheto_import::{CollisionAction, SafetyBackupEvidence, SupplementalCollisionAction};
     use std::collections::BTreeMap;
     use std::error::Error;
@@ -2682,12 +3131,14 @@ mod tests {
 
     use eutheto_core::{
         AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-        BackupAssetSelection, DeferredCapability, EuthetoApp,
+        BackendSupportColumn, BackupAssetSelection, CapabilityMatrix, DeferredCapability,
+        EuthetoApp, SolverSupportMatrixMetadata, SupportCell, SupportFeature,
+        SupportFeatureCategory, SupportFeatureGate, SupportFeatureId,
     };
     use eutheto_types::{
-        ActorRef, AddEntity, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError,
-        CommandEnvelope, CommandId, CommandResult, CommandSource, DomainPackRef, PersonId,
-        ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId, Revision,
+        ActorRef, AddEntity, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
+        CancellationToken, CommandEnvelope, CommandId, CommandResult, CommandSource, DomainPackRef,
+        PersonId, ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId, Revision,
         SafeDiagnosticValue, ScenarioCommand, ScenarioSettings, ScenarioViewDto, SystemClock,
         SystemIdGenerator,
     };
@@ -2696,13 +3147,16 @@ mod tests {
 
     use super::{
         BackupCreateRequest, BackupSummaryDto, DesktopState, ExportCreateRequest, NativeFileError,
-        PortablePreviewRequest, PreparedPortableCache, PreparedPortableKind,
+        PortableCancelRequest, PortablePreviewRequest, PreparedPortableCache, PreparedPortableKind,
         PreparedPortableOutput, ProjectListRequest, ProjectScopeDto, REGISTERED_COMMANDS,
-        backup_summary, core_unavailable, map_app_error, map_native_file_error, native_file_task,
-        preview_portable_bytes, project_archive, project_create, project_delete,
-        project_import_apply, project_list, project_list_impl, project_restore_apply,
-        project_unarchive, read_bounded_portable, revision_diagnostic_value,
-        scenario_apply_command, scenario_get_view, scenario_redo, scenario_undo, selected_basename,
+        backup_summary, cancel_portable_preview_impl, core_unavailable,
+        exact_reexport_unopened_bundle_to_path, inspect_unopened_bundle_bytes, map_app_error,
+        map_native_file_error, native_file_task, pack_describe, pack_list, preview_portable_bytes,
+        project_archive, project_create, project_delete, project_import_apply, project_list,
+        project_list_impl, project_restore_apply, project_unarchive, read_bounded_portable,
+        revision_diagnostic_value, scenario_apply_command, scenario_get_view, scenario_redo,
+        scenario_undo, selected_basename, solver_describe, solver_get_deferred_gates,
+        solver_get_support_matrix, solver_list, solver_support_matrix_dto,
         suggested_portable_filename,
     };
 
@@ -3102,16 +3556,111 @@ mod tests {
             read_bounded_portable(directory.path()),
             Err(NativeFileError::InvalidFileType)
         );
+        let oversized = directory.path().join("oversized.eutheto");
+        let oversized_file = std::fs::File::create(&oversized)?;
+        oversized_file.set_len(eutheto_export::PORTABLE_LIMITS.max_archive_bytes + 1)?;
+        assert_eq!(
+            read_bounded_portable(&oversized),
+            Err(NativeFileError::TooLarge)
+        );
+        let oversized_error = map_native_file_error(NativeFileError::TooLarge);
+        assert_eq!(oversized_error.code, "portable.archive_too_large");
+        assert_eq!(oversized_error.category, ApiErrorCategoryDto::Storage);
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
             let link = directory.path().join("link.eutheto");
             symlink(&regular, &link)?;
+
             assert_eq!(
                 read_bounded_portable(&link),
                 Err(NativeFileError::InvalidFileType)
             );
         }
+        Ok(())
+    }
+    #[test]
+    fn solver_support_matrix_dto_preserves_exact_validated_cells() -> Result<(), Box<dyn Error>> {
+        let unsupported_id = SupportFeatureId::new("primitive.fixture-unsupported")?;
+        let degraded_id = SupportFeatureId::new("solve.fixture-degraded")?;
+        let backend_id = BackendId::new("solver.fixture")?;
+        let matrix = CapabilityMatrix::new(
+            1,
+            1,
+            vec![
+                SupportFeature {
+                    id: degraded_id.clone(),
+                    category: SupportFeatureCategory::Solve,
+                    gate: SupportFeatureGate::Enabled("phase.fixture".to_owned()),
+                },
+                SupportFeature {
+                    id: unsupported_id.clone(),
+                    category: SupportFeatureCategory::Primitive,
+                    gate: SupportFeatureGate::Unconditional,
+                },
+            ],
+            vec![BackendSupportColumn {
+                backend_id,
+                backend_version: "0.0-fixture".to_owned(),
+                adapter_version: "adapter-fixture-v2".to_owned(),
+                cells: vec![
+                    (
+                        degraded_id,
+                        SupportCell::Degraded {
+                            restriction_id: "restriction.fixture-cap".to_owned(),
+                            reason: "Fixture degradation reason".to_owned(),
+                            remediation: "Use the unrestricted fixture mode".to_owned(),
+                            fixture_id: "fixture.degraded-exact".to_owned(),
+                        },
+                    ),
+                    (
+                        unsupported_id,
+                        SupportCell::Unsupported {
+                            reason: "Fixture unsupported reason".to_owned(),
+                            remediation: "Choose the fixture alternative".to_owned(),
+                            fixture_id: "fixture.unsupported-exact".to_owned(),
+                        },
+                    ),
+                ],
+            }],
+            Vec::new(),
+        )?;
+        let metadata = SolverSupportMatrixMetadata {
+            schema_version: matrix.schema_version(),
+            planning_ir_schema_version: matrix.planning_ir_schema_version(),
+            features: matrix.features().cloned().collect(),
+            production_backend_ids: matrix.production_backend_ids().cloned().collect(),
+            backend_columns: matrix.backend_columns().collect(),
+        };
+
+        let dto = serde_json::to_value(solver_support_matrix_dto(metadata))?;
+        assert_eq!(
+            dto["backendColumns"],
+            json!([
+                {
+                    "backendId": "solver.fixture",
+                    "backendVersion": "0.0-fixture",
+                    "adapterVersion": "adapter-fixture-v2",
+                    "cells": [
+                        {
+                            "featureId": "primitive.fixture-unsupported",
+                            "support": "unsupported",
+                            "reason": "Fixture unsupported reason",
+                            "remediation": "Choose the fixture alternative",
+                            "fixtureId": "fixture.unsupported-exact"
+                        },
+                        {
+                            "featureId": "solve.fixture-degraded",
+                            "support": "degraded",
+                            "restrictionId": "restriction.fixture-cap",
+                            "reason": "Fixture degradation reason",
+                            "remediation": "Use the unrestricted fixture mode",
+                            "fixtureId": "fixture.degraded-exact"
+                        }
+                    ]
+                }
+            ])
+        );
         Ok(())
     }
 
@@ -3123,7 +3672,7 @@ mod tests {
             };
         }
 
-        assert_eq!(REGISTERED_COMMANDS.len(), 83);
+        assert_eq!(REGISTERED_COMMANDS.len(), 91);
         let mut unique_commands = REGISTERED_COMMANDS.to_vec();
         unique_commands.sort_unstable();
         unique_commands.dedup();
@@ -3143,6 +3692,286 @@ mod tests {
             .collect();
         assert_eq!(permission_commands, REGISTERED_COMMANDS);
     }
+    // One adapter flow ties every Phase 02 metadata view to the same registry-backed state.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn phase_02_metadata_commands_are_registry_derived_without_solver_claims()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let app = EuthetoApp::open(AppDependencies {
+            paths: AppPaths {
+                database: directory.path().join("metadata.sqlite3"),
+                safety_backups: directory.path().join("metadata-backups"),
+            },
+            clock: Arc::new(SystemClock),
+            ids: Arc::new(SystemIdGenerator),
+            cancellation: CancellationToken::default(),
+        })
+        .await
+        .map_err(|error| format!("metadata app setup failed: {error:?}"))?;
+        let state = DesktopState {
+            app,
+            cache_dir: directory.path().join("metadata-cache"),
+            backup_dir: directory.path().join("metadata-backups"),
+            prepared_outputs: Arc::default(),
+        };
+        let desktop = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![
+                pack_list,
+                pack_describe,
+                solver_list,
+                solver_describe,
+                solver_get_support_matrix,
+                solver_get_deferred_gates,
+            ])
+            .manage(state)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
+        let webview =
+            tauri::WebviewWindowBuilder::new(&desktop, "main", tauri::WebviewUrl::default())
+                .build()?;
+        let ids = SystemIdGenerator;
+
+        let packs: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "pack_list",
+            &json!({ "requestId": RequestId::new(&ids)? }),
+        )?;
+        let pack_items = packs
+            .result
+            .as_array()
+            .ok_or("pack list result must be an array")?;
+        assert_eq!(pack_items.len(), 1);
+        assert_eq!(pack_items[0]["id"], "official.test");
+        assert_eq!(pack_items[0]["syntheticTestOnly"], true);
+
+        let described: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "pack_describe",
+            &json!({
+                "requestId": RequestId::new(&ids)?,
+                "packId": "official.test"
+            }),
+        )?;
+        assert_eq!(described.result["descriptor"], pack_items[0]);
+        assert_eq!(described.result["catalog"]["packId"], "official.test");
+        assert!(
+            described.result["catalog"]["commands"]
+                .as_array()
+                .is_some_and(|commands| !commands.is_empty())
+        );
+
+        let solvers: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "solver_list",
+            &json!({ "requestId": RequestId::new(&ids)? }),
+        )?;
+        assert_eq!(solvers.result, json!([]));
+
+        let matrix: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "solver_get_support_matrix",
+            &json!({ "requestId": RequestId::new(&ids)? }),
+        )?;
+        assert_eq!(matrix.result["productionBackendIds"], json!([]));
+        assert_eq!(matrix.result["backendColumns"], json!([]));
+        assert!(
+            matrix.result["features"]
+                .as_array()
+                .is_some_and(|features| !features.is_empty())
+        );
+
+        let gates: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "solver_get_deferred_gates",
+            &json!({ "requestId": RequestId::new(&ids)? }),
+        )?;
+        assert_eq!(
+            gates.result,
+            json!([
+                {
+                    "backendId": "solver.ortools-cp-sat",
+                    "candidateVersion": "9.15",
+                    "owningPhase": 3
+                },
+                {
+                    "backendId": "solver.pumpkin",
+                    "candidateVersion": "0.5.0",
+                    "owningPhase": 8
+                }
+            ])
+        );
+
+        let unavailable = invoke_ipc(
+            &webview,
+            "solver_describe",
+            &json!({
+                "requestId": RequestId::new(&ids)?,
+                "backendId": "solver.ortools-cp-sat"
+            }),
+        )?;
+        let Err(unavailable) = unavailable else {
+            return Err("deferred solver unexpectedly described as available".into());
+        };
+        assert_eq!(unavailable["code"], "resource.not_found");
+        assert_eq!(unavailable["category"], "notFound");
+        Ok(())
+    }
+
+    // One sequential flow proves exact-byte publication and every single-use capability outcome.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn unopened_bundle_adapter_preserves_exact_bytes_and_consumes_capabilities()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let app = EuthetoApp::open(AppDependencies {
+            paths: AppPaths {
+                database: directory.path().join("unopened.sqlite3"),
+                safety_backups: directory.path().join("unopened-backups"),
+            },
+            clock: Arc::new(SystemClock),
+            ids: Arc::new(SystemIdGenerator),
+            cancellation: CancellationToken::default(),
+        })
+        .await
+        .map_err(|error| format!("unopened app setup failed: {error:?}"))?;
+        let state = DesktopState {
+            app,
+            cache_dir: directory.path().join("unopened-cache"),
+            backup_dir: directory.path().join("unopened-backups"),
+            prepared_outputs: Arc::default(),
+        };
+        let original = match state
+            .app
+            .query(AppQuery::ExportBackup {
+                title: "Exact unopened fixture".to_owned(),
+                selection: eutheto_core::BackupSelection::default(),
+            })
+            .await
+            .map_err(|error| format!("fixture export failed: {error:?}"))?
+        {
+            AppQueryResult::BackupBundle { bytes, .. } => bytes,
+            other => return Err(format!("unexpected fixture export result: {other:?}").into()),
+        };
+        let ids = SystemIdGenerator;
+
+        let inspected =
+            inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, original.clone())
+                .await
+                .map_err(|error| format!("unopened inspection failed: {error:?}"))?;
+        assert_eq!(
+            inspected.result.metadata.title.as_deref(),
+            Some("Exact unopened fixture")
+        );
+        assert_eq!(
+            inspected.result.metadata.file_sha256,
+            eutheto_export::sha256_hex(&original)
+        );
+        let exposed = serde_json::to_value(&inspected.result)?;
+        assert!(exposed.get("bytes").is_none());
+        assert!(exposed["metadata"].get("bytes").is_none());
+
+        let destination = directory.path().join("exact-copy.eutheto");
+        exact_reexport_unopened_bundle_to_path(
+            &state,
+            PortableCancelRequest {
+                request_id: RequestId::new(&ids)?,
+                preview_id: inspected.result.preview_id,
+            },
+            destination.clone(),
+            "exact-copy.eutheto".to_owned(),
+        )
+        .await
+        .map_err(|error| format!("exact re-export failed: {error:?}"))?;
+        assert_eq!(std::fs::read(&destination)?, original);
+
+        let consumed = exact_reexport_unopened_bundle_to_path(
+            &state,
+            PortableCancelRequest {
+                request_id: RequestId::new(&ids)?,
+                preview_id: inspected.result.preview_id,
+            },
+            directory.path().join("second-copy.eutheto"),
+            "second-copy.eutheto".to_owned(),
+        )
+        .await;
+        let Err(consumed) = consumed else {
+            return Err("single-use preview unexpectedly re-exported twice".into());
+        };
+        assert_eq!(consumed.code, "portable.preview_not_found");
+
+        let no_clobber =
+            inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, original.clone())
+                .await
+                .map_err(|error| format!("second inspection failed: {error:?}"))?;
+        let occupied = directory.path().join("occupied.eutheto");
+        std::fs::write(&occupied, b"sentinel")?;
+        let publication = exact_reexport_unopened_bundle_to_path(
+            &state,
+            PortableCancelRequest {
+                request_id: RequestId::new(&ids)?,
+                preview_id: no_clobber.result.preview_id,
+            },
+            occupied.clone(),
+            "occupied.eutheto".to_owned(),
+        )
+        .await;
+        let Err(publication) = publication else {
+            return Err("exact re-export unexpectedly replaced an existing file".into());
+        };
+        assert_eq!(publication.category, ApiErrorCategoryDto::Storage);
+        assert_eq!(std::fs::read(&occupied)?, b"sentinel");
+        let after_no_clobber = exact_reexport_unopened_bundle_to_path(
+            &state,
+            PortableCancelRequest {
+                request_id: RequestId::new(&ids)?,
+                preview_id: no_clobber.result.preview_id,
+            },
+            directory.path().join("after-no-clobber.eutheto"),
+            "after-no-clobber.eutheto".to_owned(),
+        )
+        .await;
+        let Err(after_no_clobber) = after_no_clobber else {
+            return Err("failed publication unexpectedly retained its preview".into());
+        };
+        assert_eq!(after_no_clobber.code, "portable.preview_not_found");
+
+        let cancelled = inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, original)
+            .await
+            .map_err(|error| format!("third inspection failed: {error:?}"))?;
+        cancel_portable_preview_impl(
+            &state,
+            PortableCancelRequest {
+                request_id: RequestId::new(&ids)?,
+                preview_id: cancelled.result.preview_id,
+            },
+        )
+        .await
+        .map_err(|error| format!("unopened cancellation failed: {error:?}"))?;
+        let after_cancel = exact_reexport_unopened_bundle_to_path(
+            &state,
+            PortableCancelRequest {
+                request_id: RequestId::new(&ids)?,
+                preview_id: cancelled.result.preview_id,
+            },
+            directory.path().join("cancelled.eutheto"),
+            "cancelled.eutheto".to_owned(),
+        )
+        .await;
+        let Err(after_cancel) = after_cancel else {
+            return Err("cancelled unopened preview unexpectedly re-exported".into());
+        };
+        assert_eq!(after_cancel.code, "portable.preview_not_found");
+
+        let malformed =
+            inspect_unopened_bundle_bytes(&state, RequestId::new(&ids)?, b"not a zip".to_vec())
+                .await;
+        let Err(malformed) = malformed else {
+            return Err("malformed unopened bundle unexpectedly inspected".into());
+        };
+        assert_eq!(malformed.code, "portable.content_invalid");
+        assert_eq!(malformed.category, ApiErrorCategoryDto::Validation);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn project_list_delegates_and_round_trips_request_id() -> Result<(), Box<dyn Error>> {
@@ -3154,7 +3983,7 @@ mod tests {
             },
             clock: Arc::new(SystemClock),
             ids: Arc::new(SystemIdGenerator),
-            cancellation: CancellationSignal::default(),
+            cancellation: CancellationToken::default(),
         })
         .await
         .map_err(|error| format!("app setup failed: {error:?}"))?;
@@ -3210,7 +4039,7 @@ mod tests {
             },
             clock: Arc::new(SystemClock),
             ids: Arc::new(SystemIdGenerator),
-            cancellation: CancellationSignal::default(),
+            cancellation: CancellationToken::default(),
         })
         .await
         .map_err(|error| format!("source app setup failed: {error:?}"))?;
@@ -3247,7 +4076,7 @@ mod tests {
             },
             clock: Arc::new(SystemClock),
             ids: Arc::new(SystemIdGenerator),
-            cancellation: CancellationSignal::default(),
+            cancellation: CancellationToken::default(),
         };
         let target_app = EuthetoApp::open(target_dependencies.clone())
             .await
@@ -3529,7 +4358,7 @@ mod tests {
             },
             clock: Arc::new(SystemClock),
             ids: Arc::new(SystemIdGenerator),
-            cancellation: CancellationSignal::default(),
+            cancellation: CancellationToken::default(),
         };
         let first_app = EuthetoApp::open(dependencies.clone())
             .await

@@ -19,7 +19,6 @@ let
     ".turbo"
     ".vite"
     ".vscode"
-    ".wdio"
     ".yarn"
     "CMakeFiles"
     "allure-results"

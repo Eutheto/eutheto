@@ -1,7 +1,8 @@
 //! Shared portable-data safety, identity, asset, and reference contracts.
 
 use crate::{Revision, ScenarioId};
-use serde::{Deserialize, Serialize};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -43,6 +44,219 @@ pub fn validate_nonsecret_portable_json(
     limits: &PortableJsonLimits,
 ) -> Result<(), PortableJsonViolation> {
     validate_json_at(value, limits, 0)
+}
+
+struct StreamingJsonBudget {
+    limits: PortableJsonLimits,
+    nodes: usize,
+    items: usize,
+    string_bytes: usize,
+}
+
+impl StreamingJsonBudget {
+    fn node<E: de::Error>(&mut self, depth: usize) -> Result<(), E> {
+        if depth > self.limits.max_depth {
+            return Err(E::custom("portable JSON nesting limit exceeded"));
+        }
+        self.nodes = self
+            .nodes
+            .checked_add(1)
+            .ok_or_else(|| E::custom("portable JSON node count overflow"))?;
+        if self.nodes > self.limits.max_collection_items {
+            return Err(E::custom("portable JSON aggregate node limit exceeded"));
+        }
+        Ok(())
+    }
+
+    fn item<E: de::Error>(&mut self, container_items: usize) -> Result<(), E> {
+        if container_items >= self.limits.max_collection_items {
+            return Err(E::custom("portable JSON container item limit exceeded"));
+        }
+        self.items = self
+            .items
+            .checked_add(1)
+            .ok_or_else(|| E::custom("portable JSON item count overflow"))?;
+        if self.items > self.limits.max_collection_items {
+            return Err(E::custom("portable JSON aggregate item limit exceeded"));
+        }
+        Ok(())
+    }
+
+    fn string<E: de::Error>(&mut self, value: &str, key: bool) -> Result<(), E> {
+        if value.len() > self.limits.max_string_bytes {
+            return Err(E::custom(if key {
+                "portable JSON object key limit exceeded"
+            } else {
+                "portable JSON string limit exceeded"
+            }));
+        }
+        self.string_bytes = self
+            .string_bytes
+            .checked_add(value.len())
+            .ok_or_else(|| E::custom("portable JSON string byte count overflow"))?;
+        Ok(())
+    }
+}
+
+struct StreamingJsonSeed<'a> {
+    budget: &'a mut StreamingJsonBudget,
+    depth: usize,
+    reject_false: bool,
+}
+
+impl<'de> DeserializeSeed<'de> for StreamingJsonSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        self.budget.node::<D::Error>(self.depth)?;
+        deserializer.deserialize_any(StreamingJsonVisitor {
+            budget: self.budget,
+            depth: self.depth,
+            reject_false: self.reject_false,
+        })
+    }
+}
+
+struct StreamingJsonVisitor<'a> {
+    budget: &'a mut StreamingJsonBudget,
+    depth: usize,
+    reject_false: bool,
+}
+
+impl<'de> Visitor<'de> for StreamingJsonVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("bounded duplicate-free portable JSON")
+    }
+
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_none<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_bool<E: de::Error>(self, value: bool) -> Result<(), E> {
+        if self.reject_false && !value {
+            return Err(E::custom(
+                "provider-restricted content cannot be serialized",
+            ));
+        }
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<(), E> {
+        self.budget.string::<E>(value, false)?;
+        validate_string(value, &self.budget.limits).map_err(E::custom)
+    }
+
+    fn visit_string<E: de::Error>(self, value: String) -> Result<(), E> {
+        self.visit_str(&value)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<(), A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let depth = self
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| <A::Error as de::Error>::custom("portable JSON nesting overflow"))?;
+        let budget = self.budget;
+        let mut count = 0_usize;
+        while sequence
+            .next_element_seed(StreamingJsonSeed {
+                budget: &mut *budget,
+                depth,
+                reject_false: false,
+            })?
+            .is_some()
+        {
+            budget.item::<A::Error>(count)?;
+            count += 1;
+        }
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<(), A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let depth = self
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| <A::Error as de::Error>::custom("portable JSON nesting overflow"))?;
+        let budget = self.budget;
+        let mut keys = BTreeSet::new();
+        while let Some(key) = object.next_key::<String>()? {
+            budget.string::<A::Error>(&key, true)?;
+            if keys.contains(&key) {
+                return Err(de::Error::custom("duplicate portable JSON object key"));
+            }
+            budget.item::<A::Error>(keys.len())?;
+            keys.insert(key.clone());
+            if is_prohibited_field(&key) {
+                return Err(de::Error::custom("prohibited portable JSON field"));
+            }
+            let reject_false = normalize_field(&key) == "redistributionpermitted";
+            object.next_value_seed(StreamingJsonSeed {
+                budget: &mut *budget,
+                depth,
+                reject_false,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Streams JSON syntax and the shared nonsecret portable policy without
+/// constructing a semantic [`Value`] tree.
+///
+/// Duplicate keys, depth, aggregate and per-container items/nodes, strings,
+/// keys, host-specific content, credential fields, and restricted content are
+/// rejected while traversing.
+///
+/// # Errors
+///
+/// Returns a safe policy violation for malformed or over-budget JSON.
+pub fn validate_nonsecret_portable_json_bytes(
+    bytes: &[u8],
+    limits: &PortableJsonLimits,
+) -> Result<(), PortableJsonViolation> {
+    let mut budget = StreamingJsonBudget {
+        limits: *limits,
+        nodes: 0,
+        items: 0,
+        string_bytes: 0,
+    };
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    StreamingJsonSeed {
+        budget: &mut budget,
+        depth: 0,
+        reject_false: false,
+    }
+    .deserialize(&mut deserializer)
+    .map_err(|error| PortableJsonViolation(error.to_string()))?;
+    deserializer
+        .end()
+        .map_err(|error| PortableJsonViolation(error.to_string()))
 }
 
 fn validate_json_at(

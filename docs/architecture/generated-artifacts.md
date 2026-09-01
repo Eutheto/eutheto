@@ -23,6 +23,17 @@ A generated artifact is evidence derived from authoritative inputs. It is never 
 | Release/version manifests, checksum inputs, and compatibility matrices | Immutable source/locks, authoritative version declarations, build flags, target manifests, and exact artifact digests | `cargo xtask release assemble-manifest` and the protected release workflow | Explicitly unavailable until Phase 11 supplies finalized identity and artifacts; publication approval is Phase 12 |
 | Generated documentation or support matrices | Current schemas, manifests, tests, and support declarations | The owning `xtask` generator | The phase that introduces the authoritative contract |
 
+### Phase-02 domain and solver contract products
+
+`cargo xtask generate` owns the Phase-02 contract products below. `cargo xtask generate-check` verifies their complete inventory and exact bytes.
+
+| Authoritative input | Checked-in outputs |
+|---|---|
+| `schemas/domain-packs/official-test.contract.json` (source schema version 1) | `crates/eutheto-command/src/generated_official_test_pack_contract.rs`, `apps/desktop/src/api/generated-domain-pack-contracts.ts`, `schemas/generated/official-test.command-schemas.json`, `schemas/generated/official-test.portable.schema.json`, `schemas/generated/official-test.share-result.schema.json`, `xtask/generated/official-test-ai-tools.json`, `xtask/generated/official-test-ui-manifest.json`, and `docs/generated/official-test-pack-contract.md` |
+| `schemas/solver-support-matrix.json` (matrix schema version 1) | `crates/eutheto-solver-api/src/generated_support_matrix.rs` and `docs/generated/solver-support-matrix.md` |
+
+The generator parses both inputs with unknown-field rejection, validates sorted unique identities and complete metadata, and emits stable pretty JSON or deterministic source/document tables. Generated source and Markdown headers record a BLAKE3 digest of the exact authoritative input bytes. JSON products cannot carry ownership comments without changing their public schema, so this inventory records their authority and generator instead.
+
 The command names above are the required repository contract, not a claim that a successful release artifact has been generated. Ad hoc shell scripts, IDE generators, post-processors, and manually copied tool output do not own any artifact family.
 
 ### Desktop generator boundaries

@@ -1,20 +1,21 @@
-//! Headless Phase-01 command-line adapter over [`eutheto_core::EuthetoApp`].
+//! Headless command-line adapter over [`eutheto_core::EuthetoApp`].
 
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     AppliedPortableScenario, BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp,
-    FoundationStatusService, ProjectScope,
+    FoundationStatusService, ProjectScope, SolverSupportMatrixMetadata, SupportCell,
 };
-use eutheto_export::{CancellationSignal, FixedExclusion};
+use eutheto_export::FixedExclusion;
 use eutheto_import::{
-    CollisionAction, CollisionPlan, ImportOptions, RestoreAuthorization, RestoreMode,
-    SafetyBackupEvidence,
+    CollisionAction, CollisionPlan, ImportOptions, PreservedBundleMetadata, RestoreAuthorization,
+    RestoreMode, SafetyBackupEvidence,
 };
 use eutheto_types::{
-    ActorRef, AppError, CommandBatch, CommandEnvelope, CommandId, CommandSource, DomainPackRef,
-    GapPolicy, Horizon, IanaTimeZone, LocaleTag, RequestId, Revision, ScenarioCommand, ScenarioId,
-    ScenarioSettings, SystemClock, SystemIdGenerator, UnitSystem,
+    ActorRef, AppError, BackendId, CancellationToken, CommandBatch, CommandEnvelope, CommandId,
+    CommandSource, DomainPackRef, GapPolicy, Horizon, IanaTimeZone, LocaleTag, PackId, RequestId,
+    Revision, ScenarioCommand, ScenarioId, ScenarioSettings, SystemClock, SystemIdGenerator,
+    UnitSystem,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, json};
@@ -120,7 +121,7 @@ enum SolutionExportFormat {
     name = "optimizer",
     version,
     about = "Provisional development CLI for Eutheto",
-    long_about = "Provisional development-only Phase-01 CLI. The optimizer name and .eutheto extension are not final public identities."
+    long_about = "Provisional development-only CLI. The optimizer name and .eutheto extension are not final public identities."
 )]
 struct Cli {
     /// Select human-readable output or one versioned JSON result envelope.
@@ -157,6 +158,8 @@ enum Command {
     Status(StatusArgs),
     /// Inspect the domain-pack catalog.
     Packs(PacksArgs),
+    /// Safely inspect or exactly re-export an unopened portable bundle.
+    Bundle(BundleArgs),
     /// Manage persisted projects and portable scenario bundles.
     Projects(ProjectsArgs),
     /// Inspect, create, and restore full-library backups.
@@ -165,11 +168,11 @@ enum Command {
     Scenario(ScenarioArgs),
     /// Read and mutate application settings.
     Settings(SettingsArgs),
-    /// Solve a scenario (catalogued but unavailable in Phase 01).
+    /// Solve a scenario (catalogued but unavailable in Phase 02).
     Solve(SolveArgs),
-    /// Inspect or export solutions (catalogued but unavailable in Phase 01).
+    /// Inspect or export solutions (catalogued but unavailable in Phase 02).
     Solutions(SolutionsArgs),
-    /// Inspect solver backends (catalogued but unavailable in Phase 01).
+    /// Inspect registered solver backends and the Phase-02 support matrix.
     Solvers(SolversArgs),
     /// Optional AI commands (catalogued but unavailable in Phase 01).
     Ai(AiArgs),
@@ -191,10 +194,32 @@ struct PacksArgs {
 }
 #[derive(Debug, Subcommand)]
 enum PacksCommand {
-    /// List installed Phase-01 packs.
+    /// List compiled-in domain packs.
     List,
     /// Describe an installed pack.
     Describe { pack_id: String },
+}
+
+#[derive(Debug, Args)]
+struct BundleArgs {
+    #[command(subcommand)]
+    command: BundleCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum BundleCommand {
+    /// Inspect allowlisted metadata without importing or accepting the bundle.
+    Inspect {
+        #[arg(value_name = "BUNDLE")]
+        bundle: PathBuf,
+    },
+    /// Inspect and atomically publish the exact original bytes without overwriting.
+    ExactReexport {
+        #[arg(value_name = "BUNDLE")]
+        bundle: PathBuf,
+        #[arg(value_name = "OUTPUT")]
+        output: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -490,6 +515,107 @@ enum SolversCommand {
     Check { solver_id: String },
 }
 
+/// Pure support-matrix rendering used by the `solvers list` adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SolverSupportMatrixPresentation {
+    pub json: Value,
+    pub human: Vec<String>,
+}
+
+/// Renders validated core metadata without providing a registry or solver-injection path.
+#[must_use]
+pub fn present_solver_support_matrix(
+    matrix: &SolverSupportMatrixMetadata,
+) -> SolverSupportMatrixPresentation {
+    let mut human = vec![format!(
+        "Support matrix: schema {}, planning IR schema {}, {} features, {} production backends.",
+        matrix.schema_version,
+        matrix.planning_ir_schema_version,
+        matrix.features.len(),
+        matrix.backend_columns.len(),
+    )];
+    let backend_columns = matrix
+        .backend_columns
+        .iter()
+        .map(|column| {
+            let cells = column
+                .cells
+                .iter()
+                .map(|(feature_id, cell)| match cell {
+                    SupportCell::Supported { fixture_id } => json!({
+                        "featureId": feature_id,
+                        "support": "supported",
+                        "fixtureId": fixture_id,
+                    }),
+                    SupportCell::Degraded {
+                        restriction_id,
+                        reason,
+                        remediation,
+                        fixture_id,
+                    } => {
+                        human.push(format!(
+                            "Warning: backend {} feature {} is degraded ({}): {} Remediation: {} Fixture: {}.",
+                            column.backend_id,
+                            feature_id,
+                            restriction_id,
+                            reason,
+                            remediation,
+                            fixture_id,
+                        ));
+                        json!({
+                            "featureId": feature_id,
+                            "support": "degraded",
+                            "restrictionId": restriction_id,
+                            "reason": reason,
+                            "remediation": remediation,
+                            "fixtureId": fixture_id,
+                        })
+                    }
+                    SupportCell::Unsupported {
+                        reason,
+                        remediation,
+                        fixture_id,
+                    } => {
+                        human.push(format!(
+                            "Warning: backend {} feature {} is unsupported: {} Remediation: {} Fixture: {}.",
+                            column.backend_id,
+                            feature_id,
+                            reason,
+                            remediation,
+                            fixture_id,
+                        ));
+                        json!({
+                            "featureId": feature_id,
+                            "support": "unsupported",
+                            "reason": reason,
+                            "remediation": remediation,
+                            "fixtureId": fixture_id,
+                        })
+                    }
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "backendId": column.backend_id,
+                "backendVersion": column.backend_version,
+                "adapterVersion": column.adapter_version,
+                "cells": cells,
+            })
+        })
+        .collect::<Vec<_>>();
+    SolverSupportMatrixPresentation {
+        json: json!({
+            "schemaVersion": matrix.schema_version,
+            "planningIrSchemaVersion": matrix.planning_ir_schema_version,
+            "featureCount": matrix.features.len(),
+            "productionBackendCount": matrix.backend_columns.len(),
+            "features": matrix.features,
+            "productionBackendIds": matrix.production_backend_ids,
+            "backendColumns": backend_columns,
+        }),
+        human,
+    }
+}
+
 struct Outcome {
     command: &'static str,
     status: &'static str,
@@ -659,7 +785,7 @@ where
         let _ = render_error(&mut stdout, &mut stderr, format, "startup", &error);
         return error.exit;
     };
-    let cancellation = CancellationSignal::new();
+    let cancellation = CancellationToken::new();
     let interrupt_signal = cancellation.clone();
     let result = runtime.block_on(async move {
         let watcher = tokio::spawn(async move {
@@ -705,7 +831,7 @@ fn requests_json(args: &[OsString]) -> bool {
 
 async fn execute_cli(
     cli: Cli,
-    cancellation: CancellationSignal,
+    cancellation: CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     let _ = (cli.log_level, cli.no_color, &cli.config, cli.offline);
     match cli.command {
@@ -717,7 +843,12 @@ async fn execute_cli(
             json!({"packages": [{"name": "eutheto-cli", "license": "Apache-2.0"}]}),
             vec!["eutheto-cli: Apache-2.0".to_owned()],
         )),
-        Command::Packs(args) => execute_packs(args),
+        Command::Packs(args) => {
+            let app = open_app(cli.data_dir, &cancellation)
+                .await
+                .map_err(|error| ("packs", error))?;
+            execute_packs(&app, args).await
+        }
         Command::Serve => Err((
             "serve",
             SafeCliError::unavailable(
@@ -734,14 +865,11 @@ async fn execute_cli(
             )
             .await
         }
-        Command::Solvers(_) => {
-            execute_deferred(
-                cli.data_dir,
-                "solvers",
-                DeferredCapability::Solve,
-                &cancellation,
-            )
-            .await
+        Command::Solvers(args) => {
+            let app = open_app(cli.data_dir, &cancellation)
+                .await
+                .map_err(|error| ("solvers", error))?;
+            execute_solvers(&app, args).await
         }
         Command::Ai(_) => {
             execute_deferred(
@@ -761,28 +889,14 @@ async fn execute_cli(
             )
             .await
         }
-        Command::Doctor => {
-            open_app(cli.data_dir, &cancellation)
-                .await
-                .map_err(|error| ("doctor", error))?;
-            Ok(Outcome::new(
-                "doctor",
-                "ready",
-                json!({"ready": true, "capability": "phase_01_core"}),
-                vec!["Phase-01 application storage is ready.".to_owned()],
-            ))
-        }
-        Command::Projects(args) => {
-            if cancellation.is_cancelled()
-                && matches!(&args.command, ProjectsCommand::Export { .. })
-            {
-                return Err(("projects.export", SafeCliError::cancelled()));
-            }
+        Command::Bundle(args) => {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
-                .map_err(|error| ("projects", error))?;
-            execute_projects(&app, args).await
+                .map_err(|error| ("bundle", error))?;
+            execute_bundle(&app, args).await
         }
+        Command::Doctor => execute_doctor(cli.data_dir, &cancellation).await,
+        Command::Projects(args) => execute_projects_cli(cli.data_dir, args, &cancellation).await,
         Command::Backup(args) => {
             let app = open_app(cli.data_dir, &cancellation)
                 .await
@@ -802,6 +916,35 @@ async fn execute_cli(
             execute_settings(&app, args).await
         }
     }
+}
+
+async fn execute_doctor(
+    data_dir: Option<PathBuf>,
+    cancellation: &CancellationToken,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    open_app(data_dir, cancellation)
+        .await
+        .map_err(|error| ("doctor", error))?;
+    Ok(Outcome::new(
+        "doctor",
+        "ready",
+        json!({"ready": true, "capability": "phase_01_core"}),
+        vec!["Phase-01 application storage is ready.".to_owned()],
+    ))
+}
+
+async fn execute_projects_cli(
+    data_dir: Option<PathBuf>,
+    args: ProjectsArgs,
+    cancellation: &CancellationToken,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    if cancellation.is_cancelled() && matches!(&args.command, ProjectsCommand::Export { .. }) {
+        return Err(("projects.export", SafeCliError::cancelled()));
+    }
+    let app = open_app(data_dir, cancellation)
+        .await
+        .map_err(|error| ("projects", error))?;
+    execute_projects(&app, args).await
 }
 
 fn info_outcome(command: &'static str) -> Outcome {
@@ -828,40 +971,322 @@ fn info_outcome(command: &'static str) -> Outcome {
     )
 }
 
-fn execute_packs(args: PacksArgs) -> Result<Outcome, (&'static str, SafeCliError)> {
-    let pack = json!({
-        "id": "official.test",
-        "schemaVersion": 1,
-        "purpose": "Phase-01 application and command contract evidence"
-    });
+async fn execute_packs(
+    app: &EuthetoApp,
+    args: PacksArgs,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
     match args.command {
-        PacksCommand::List => Ok(Outcome::new(
-            "packs.list",
-            "available",
-            json!({"packs": [pack]}),
-            vec!["official.test (schema 1)".to_owned()],
-        )),
-        PacksCommand::Describe { pack_id } if pack_id == "official.test" => Ok(Outcome::new(
-            "packs.describe",
-            "available",
-            pack,
-            vec!["official.test: Phase-01 contract test pack (schema 1)".to_owned()],
-        )),
-        PacksCommand::Describe { .. } => Err((
-            "packs.describe",
-            SafeCliError::validation(
-                "pack.not_found",
-                "The requested domain pack is not installed.",
-            ),
-        )),
+        PacksCommand::List => {
+            let result = app
+                .query(AppQuery::ListDomainPacks)
+                .await
+                .map_err(|error| ("packs.list", app_error(error)))?;
+            let AppQueryResult::DomainPacks(packs) = result else {
+                return Err(("packs.list", unexpected_result()));
+            };
+            let human = if packs.is_empty() {
+                vec!["No domain packs are registered.".to_owned()]
+            } else {
+                packs
+                    .iter()
+                    .map(|pack| {
+                        format!(
+                            "{} (pack {}, scenario schema {})",
+                            pack.id, pack.pack_version, pack.scenario_versions.latest
+                        )
+                    })
+                    .collect()
+            };
+            Ok(Outcome::new(
+                "packs.list",
+                "available",
+                json!({"packs": packs}),
+                human,
+            ))
+        }
+        PacksCommand::Describe { pack_id } => {
+            let pack_id = pack_id.parse::<PackId>().map_err(|_| {
+                (
+                    "packs.describe",
+                    SafeCliError::validation(
+                        "pack.id_invalid",
+                        "The domain-pack identifier is invalid.",
+                    ),
+                )
+            })?;
+            let result = app
+                .query(AppQuery::DescribeDomainPack(pack_id))
+                .await
+                .map_err(|error| ("packs.describe", app_error(error)))?;
+            let AppQueryResult::DomainPack(metadata) = result else {
+                return Err(("packs.describe", unexpected_result()));
+            };
+            let metadata = *metadata;
+            let descriptor = metadata.descriptor;
+            let catalog = metadata.catalog;
+            let human = vec![
+                format!("{} (pack {})", descriptor.id, descriptor.pack_version),
+                format!(
+                    "Scenario schemas: latest {}, migratable from {}.",
+                    descriptor.scenario_versions.latest,
+                    descriptor.scenario_versions.migratable_from.len()
+                ),
+                format!(
+                    "Catalog: {} commands, {} AI tools, {} setup steps, {} entity kinds, {} rule kinds, {} goal kinds, {} result views.",
+                    catalog.commands.len(),
+                    catalog.ai_tools.len(),
+                    catalog.ui.setup_steps.len(),
+                    catalog.ui.entity_kinds.len(),
+                    catalog.ui.rule_kinds.len(),
+                    catalog.ui.goal_kinds.len(),
+                    catalog.ui.result_views.len(),
+                ),
+            ];
+            Ok(Outcome::new(
+                "packs.describe",
+                "available",
+                json!({"descriptor": descriptor, "catalog": catalog}),
+                human,
+            ))
+        }
     }
+}
+
+async fn execute_solvers(
+    app: &EuthetoApp,
+    args: SolversArgs,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    match args.command {
+        SolversCommand::List => {
+            let AppQueryResult::Solvers(solvers) = app
+                .query(AppQuery::ListSolvers)
+                .await
+                .map_err(|error| ("solvers.list", app_error(error)))?
+            else {
+                return Err(("solvers.list", unexpected_result()));
+            };
+            let AppQueryResult::SolverSupportMatrix(matrix) = app
+                .query(AppQuery::SolverSupportMatrix)
+                .await
+                .map_err(|error| ("solvers.list", app_error(error)))?
+            else {
+                return Err(("solvers.list", unexpected_result()));
+            };
+            let AppQueryResult::DeferredSolverGates(deferred_gates) = app
+                .query(AppQuery::DeferredSolverGates)
+                .await
+                .map_err(|error| ("solvers.list", app_error(error)))?
+            else {
+                return Err(("solvers.list", unexpected_result()));
+            };
+            let mut human = if solvers.is_empty() {
+                vec!["Production solvers: none.".to_owned()]
+            } else {
+                solvers
+                    .iter()
+                    .map(|solver| {
+                        format!(
+                            "{} {} (adapter {})",
+                            solver.id, solver.version, solver.adapter_version
+                        )
+                    })
+                    .collect()
+            };
+            let matrix_presentation = present_solver_support_matrix(&matrix);
+            human.extend(matrix_presentation.human);
+            human.extend(deferred_gates.iter().map(|gate| {
+                format!(
+                    "Deferred unclaimed candidate: {} {} (phase {}).",
+                    gate.backend_id, gate.candidate_version, gate.owning_phase
+                )
+            }));
+            Ok(Outcome::new(
+                "solvers.list",
+                "available",
+                json!({
+                    "solvers": solvers,
+                    "supportMatrix": matrix_presentation.json,
+                    "deferredGates": deferred_gates,
+                }),
+                human,
+            ))
+        }
+        SolversCommand::Describe { solver_id } => {
+            describe_solver(app, solver_id, "solvers.describe", false).await
+        }
+        SolversCommand::Check { solver_id } => {
+            describe_solver(app, solver_id, "solvers.check", true).await
+        }
+    }
+}
+
+async fn describe_solver(
+    app: &EuthetoApp,
+    solver_id: String,
+    command: &'static str,
+    checked: bool,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    let solver_id = solver_id.parse::<BackendId>().map_err(|_| {
+        (
+            command,
+            SafeCliError::validation(
+                "solver.id_invalid",
+                "The solver-backend identifier is invalid.",
+            ),
+        )
+    })?;
+    let result = app
+        .query(AppQuery::DescribeSolver(solver_id))
+        .await
+        .map_err(|error| (command, app_error(error)))?;
+    let AppQueryResult::Solver(solver) = result else {
+        return Err((command, unexpected_result()));
+    };
+    let human = if checked {
+        vec![format!("{} is registered and available.", solver.id)]
+    } else {
+        vec![
+            format!("{} {}", solver.id, solver.version),
+            format!("Adapter version: {}.", solver.adapter_version),
+        ]
+    };
+    Ok(Outcome::new(
+        command,
+        if checked { "available" } else { "described" },
+        if checked {
+            json!({"available": true, "solver": solver})
+        } else {
+            json!({"solver": solver})
+        },
+        human,
+    ))
+}
+
+async fn execute_bundle(
+    app: &EuthetoApp,
+    args: BundleArgs,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    match args.command {
+        BundleCommand::Inspect { bundle } => {
+            let (preview_id, metadata) =
+                inspect_unopened_bundle(app, &bundle, "bundle.inspect").await?;
+            let result = app
+                .execute(AppCommand::CancelPortablePreview { preview_id })
+                .await
+                .map_err(|error| ("bundle.inspect", app_error(error)))?;
+            if !matches!(result, AppCommandResult::PortablePreviewCancelled) {
+                return Err(("bundle.inspect", unexpected_result()));
+            }
+            Ok(unopened_bundle_outcome(
+                "bundle.inspect",
+                "inspected",
+                &metadata,
+                false,
+            ))
+        }
+        BundleCommand::ExactReexport { bundle, output } => {
+            let (preview_id, metadata) =
+                inspect_unopened_bundle(app, &bundle, "bundle.exact-reexport").await?;
+            let result = app
+                .execute(AppCommand::ExactReexportUnopenedBundle {
+                    preview_id,
+                    destination: output,
+                })
+                .await
+                .map_err(|error| ("bundle.exact-reexport", app_error(error)))?;
+            if !matches!(result, AppCommandResult::UnopenedBundleReexported) {
+                return Err(("bundle.exact-reexport", unexpected_result()));
+            }
+            Ok(unopened_bundle_outcome(
+                "bundle.exact-reexport",
+                "reexported",
+                &metadata,
+                true,
+            ))
+        }
+    }
+}
+
+async fn inspect_unopened_bundle(
+    app: &EuthetoApp,
+    bundle: &Path,
+    command: &'static str,
+) -> Result<(RequestId, PreservedBundleMetadata), (&'static str, SafeCliError)> {
+    let bytes = read_bounded(bundle, BUNDLE_LIMIT, "bundle.too_large")
+        .await
+        .map_err(|error| (command, error))?;
+    match app
+        .query(AppQuery::InspectUnopenedBundle { bytes })
+        .await
+        .map_err(|error| (command, app_error(error)))?
+    {
+        AppQueryResult::UnopenedBundlePreview {
+            preview_id,
+            metadata,
+        } => Ok((preview_id, metadata)),
+        _ => Err((command, unexpected_result())),
+    }
+}
+
+fn unopened_bundle_outcome(
+    command: &'static str,
+    status: &'static str,
+    metadata: &PreservedBundleMetadata,
+    reexported: bool,
+) -> Outcome {
+    let metadata_value = preserved_bundle_metadata_value(metadata);
+    let human = vec![
+        if reexported {
+            "The exact unopened bundle bytes were re-exported.".to_owned()
+        } else {
+            "The bundle was inspected without importing it.".to_owned()
+        },
+        format!("SHA-256: {}.", metadata.file_sha256),
+        format!(
+            "Format version {}; portable schema {}.",
+            metadata.format_version, metadata.portable_schema_version
+        ),
+        format!(
+            "Required semantic capabilities: {}.",
+            metadata.required_capabilities.len()
+        ),
+        format!("Scenarios: {}.", metadata.scenarios.len()),
+    ];
+    Outcome::new(
+        command,
+        status,
+        json!({"reexported": reexported, "metadata": metadata_value}),
+        human,
+    )
+}
+
+fn preserved_bundle_metadata_value(metadata: &PreservedBundleMetadata) -> Value {
+    json!({
+        "fileSha256": metadata.file_sha256,
+        "format": metadata.format,
+        "formatVersion": metadata.format_version,
+        "portableSchemaVersion": metadata.portable_schema_version,
+        "bundleKind": metadata.bundle_kind,
+        "title": metadata.title,
+        "requiredCapabilities": metadata.required_capabilities.iter().map(|capability| {
+            json!({"id": capability.id, "version": capability.version})
+        }).collect::<Vec<_>>(),
+        "scenarios": metadata.scenarios.iter().map(|scenario| {
+            json!({
+                "path": scenario.path,
+                "scenarioId": scenario.scenario_id,
+                "packId": scenario.pack_id,
+                "packSchemaVersion": scenario.pack_schema_version,
+            })
+        }).collect::<Vec<_>>(),
+    })
 }
 
 async fn execute_deferred(
     data_dir: Option<PathBuf>,
     command: &'static str,
     capability: DeferredCapability,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<Outcome, (&'static str, SafeCliError)> {
     let app = open_app(data_dir, cancellation)
         .await
@@ -881,7 +1306,7 @@ async fn execute_deferred(
 
 async fn open_app(
     data_dir: Option<PathBuf>,
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<EuthetoApp, SafeCliError> {
     let root = match data_dir {
         Some(path) => path,
@@ -2880,10 +3305,10 @@ mod tests {
         replace_review_token, restore_authorization,
     };
     use clap::Parser;
-    use eutheto_export::CancellationSignal;
     use eutheto_import::{
         CollisionPlan, PreviewBinding, SafetyBackupEvidence, SupplementalCollisionAction,
     };
+    use eutheto_types::CancellationToken;
     use eutheto_types::{
         AppError, ProtocolFailure, RequestId, Revision, StorageFailure, ValidationIssue,
         ValidationReport, ValidationSeverity,
@@ -2986,7 +3411,7 @@ mod tests {
             "--output",
             &destination_text,
         ])?;
-        let cancellation = CancellationSignal::new();
+        let cancellation = CancellationToken::new();
         cancellation.cancel();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

@@ -115,6 +115,7 @@ fn help_exposes_the_complete_roadmap_catalog_and_global_flags() -> Result<(), Bo
         "info",
         "licenses",
         "packs",
+        "bundle",
         "projects",
         "backup",
         "scenario",
@@ -304,7 +305,7 @@ fn scenario_apply_validate_history_undo_and_redo_use_authoritative_revisions()
             "type": "addEntity",
             "payload": {
                 "entityId": entity_id,
-                "value": {"id": entity_id, "name": "Ada"}
+                "value": {"id": entity_id, "enabled": true, "target": 3}
             }
         }))?,
     )?;

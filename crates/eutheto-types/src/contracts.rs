@@ -1,11 +1,12 @@
 //! Stable Phase-01 documents, commands, errors, views, and event contracts.
 
+use crate::budget::DurationMillis;
 use crate::ids::{
     AssignmentId, BackendId, CommandId, PackId, PersonId, RequestId, RuleId, ScenarioId,
     SolutionId, SolveRunId,
 };
 use crate::values::{
-    GapPolicy, Horizon, IanaTimeZone, LocaleTag, Minutes, OverlapPolicy, Revision, Rfc3339Timestamp,
+    GapPolicy, Horizon, IanaTimeZone, LocaleTag, OverlapPolicy, Revision, Rfc3339Timestamp,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -686,8 +687,8 @@ pub struct SolveOptions {
     pub backend: BackendSelection,
     /// User-facing effort mode.
     pub mode: SolveMode,
-    /// One whole-minute parent deadline budget.
-    pub time_limit: Minutes,
+    /// One whole-millisecond end-to-end parent deadline budget.
+    pub time_limit_milliseconds: DurationMillis,
     /// Optional process memory ceiling.
     pub memory_limit_bytes: Option<u64>,
     /// Worker thread policy.
@@ -1056,7 +1057,7 @@ pub enum EventPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::{SCENARIO_FORMAT_VERSION, ScenarioCommand, ScenarioDocument};
+    use super::{SCENARIO_FORMAT_VERSION, ScenarioCommand, ScenarioDocument, SolveOptions};
     use serde_json::{Value, json};
 
     fn scenario_json() -> Value {
@@ -1101,6 +1102,29 @@ mod tests {
         })
     }
 
+    fn solve_options_json() -> Value {
+        json!({
+            "backend": {"kind": "auto"},
+            "mode": "balanced",
+            "timeLimitMilliseconds": 750,
+            "memoryLimitBytes": null,
+            "workerThreads": {"kind": "auto"},
+            "randomSeed": 17,
+            "solutionLimit": null,
+            "stopAfterFirstFeasible": false,
+            "collectIntermediateSolutions": false,
+            "explanationMode": "standard",
+            "preserveExisting": "none",
+            "reproducibility": "deterministic",
+            "resourceLimits": {
+                "maxEntities": 100,
+                "maxRules": 100,
+                "maxVariables": 1_000,
+                "maxConstraints": 2_000
+            }
+        })
+    }
+
     #[test]
     fn scenario_envelope_round_trips_extensions() -> Result<(), serde_json::Error> {
         let input = scenario_json();
@@ -1134,6 +1158,31 @@ mod tests {
                 }
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn solve_options_use_only_strict_millisecond_time_limit() -> Result<(), serde_json::Error> {
+        let input = solve_options_json();
+        let options: SolveOptions = serde_json::from_value(input.clone())?;
+        assert_eq!(options.time_limit_milliseconds.value(), 750);
+        let serialized = serde_json::to_value(options)?;
+        assert_eq!(serialized, input);
+        assert!(serialized.get("timeLimit").is_none());
+
+        let mut old_only = solve_options_json();
+        let Some(object) = old_only.as_object_mut() else {
+            return Err(serde_json::Error::io(std::io::Error::other(
+                "solve options fixture must be an object",
+            )));
+        };
+        object.remove("timeLimitMilliseconds");
+        object.insert("timeLimit".to_owned(), json!(5));
+        assert!(serde_json::from_value::<SolveOptions>(old_only).is_err());
+
+        let mut unknown_old_field = solve_options_json();
+        unknown_old_field["timeLimit"] = json!(5);
+        assert!(serde_json::from_value::<SolveOptions>(unknown_old_field).is_err());
         Ok(())
     }
 }

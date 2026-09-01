@@ -1,37 +1,43 @@
 use eutheto_command::{
-    CommandError, FastValidator, OfficialTestPack, apply_command, validate_document_shape,
+    CommandError, apply_command_with_registry, official_registry, validate_document_shape,
 };
+use eutheto_domain_api::{DomainCatalog, DomainPackDescriptor, DomainPackRegistry};
 use eutheto_export::{
     ApplicationMetadata, BACKUP_SELECTION_EXTENSION, BACKUP_SELECTION_VERSION, BackupSections,
     BackupSelection as PortableBackupSelectionMetadata, BackupSelectionScope, BundleKind,
-    CancellationSignal, FixedExclusion, FullBackupSnapshot, OmittedAssetReason,
-    PortableBackupAssetSelection, PortableProjectMetadata, PortableScenario,
-    ScenarioExportSnapshot, assemble_full_backup, assemble_scenario_export,
-    backup_selection_extension_value, collect_scenario_owned_uuids, omitted_asset_placeholder,
-    parse_omitted_asset_placeholder, prepare_bundle_atomic_cancellable,
+    FixedExclusion, FullBackupSnapshot, OmittedAssetReason, PortableBackupAssetSelection,
+    PortableProjectMetadata, PortableScenario, ScenarioExportSnapshot, assemble_full_backup,
+    assemble_scenario_export, backup_selection_extension_value, collect_scenario_owned_uuids,
+    omitted_asset_placeholder, parse_omitted_asset_placeholder, prepare_bundle_atomic_cancellable,
     write_bundle_atomic_cancellable,
 };
 use eutheto_import::{
     CollisionPlan, ImportOptions, ImportPreview, InspectedBundle, InspectionPolicy,
-    LocalLibrarySnapshot, LocalScenarioSnapshot, MigrationRegistries, RestoreAuthorization,
-    RestoreMode, SafetyBackupEvidence, StagedDisposition, inspect_bundle,
+    LocalLibrarySnapshot, LocalScenarioSnapshot, MigrationRegistries, PreservedBundleMetadata,
+    RestoreAuthorization, RestoreMode, SafetyBackupEvidence, StagedDisposition, UnopenedBundle,
+    inspect_bundle, inspect_unopened_bundle_for_exact_reexport, preflight_bundle_metadata,
 };
+pub use eutheto_solver_api::{
+    BackendSupportColumn, CapabilityMatrix, SupportCell, SupportFeature, SupportFeatureCategory,
+    SupportFeatureGate, SupportFeatureId,
+};
+use eutheto_solver_api::{DeferredBackendCandidate, SolverDescriptor, SolverRegistry};
 use eutheto_store::{
     AppSetting, CommandWrite, HistoryCommand, HistoryEntry, InitializationOutcome, JournalWrite,
     NewProject, ProjectListScope, RedoBranchPolicy, SafetyBackupFailureReceipt,
     SqliteScenarioStore, StagedLibraryApply, StoreError, StoredProject,
 };
 use eutheto_types::{
-    ActorRef, AppError, BundleId, Change, ChangeKind, ChangeSet, Clock, CommandEnvelope,
-    CommandResult, CommandSource, DirectoryAvailabilityLabel, DomainPackRef, EventContext,
-    EventPayload, EventTopic, IdGenerator, PortableAsset, ProjectMetadataDto, ProjectSummaryDto,
-    ProtocolFailure, RequestId, ResourceRef, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION,
-    SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata,
-    ScenarioSettings, ScenarioViewDto, StorageFailure, SupportApplicationMetadataDto,
-    SupportDirectoryMetadataDto, SupportLibraryMetadataDto, SupportPreviewDto,
-    SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue, ValidationReport,
-    ValidationSeverity, extract_asset_references, extract_result_dependency, extract_result_id,
-    extract_scenario_references,
+    ActorRef, AppError, BackendId, BundleId, CancellationToken, Change, ChangeKind, ChangeSet,
+    Clock, CommandEnvelope, CommandResult, CommandSource, DirectoryAvailabilityLabel,
+    DomainPackRef, EventContext, EventPayload, EventTopic, IdGenerator, PackId, PortableAsset,
+    ProjectMetadataDto, ProjectSummaryDto, ProtocolFailure, RequestId, ResourceRef, Revision,
+    Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioDocument,
+    ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioViewDto,
+    StorageFailure, SupportApplicationMetadataDto, SupportDirectoryMetadataDto,
+    SupportLibraryMetadataDto, SupportPreviewDto, SupportSchemaMetadataDto, UnsupportedFeature,
+    ValidationIssue, ValidationReport, ValidationSeverity, extract_asset_references,
+    extract_result_dependency, extract_result_id, extract_scenario_references,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,6 +64,24 @@ fn collision_plan_sha256(collision_plan: &CollisionPlan) -> Result<String, AppEr
     domain_separated.extend_from_slice(&canonical);
     Ok(eutheto_export::sha256_hex(&domain_separated))
 }
+fn validated_static_registries() -> Result<(Arc<DomainPackRegistry>, Arc<SolverRegistry>), AppError>
+{
+    let packs = official_registry().map_err(|_| {
+        protocol_error(
+            "application.pack_registry_invalid",
+            "Compiled domain-pack metadata failed its startup invariant.",
+            false,
+        )
+    })?;
+    let solvers = SolverRegistry::production().map_err(|_| {
+        protocol_error(
+            "application.solver_registry_invalid",
+            "Compiled solver metadata failed its startup invariant.",
+            false,
+        )
+    })?;
+    Ok((Arc::new(packs), Arc::new(solvers)))
+}
 
 /// Host-resolved filesystem locations. Core never discovers platform paths.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,7 +96,7 @@ pub struct AppDependencies {
     pub paths: AppPaths,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdGenerator>,
-    pub cancellation: CancellationSignal,
+    pub cancellation: CancellationToken,
 }
 
 /// Scope used by the project-list application query.
@@ -117,7 +141,7 @@ pub struct BackupSummary {
     pub exclusion_scope: Option<String>,
 }
 
-/// Deferred capability families with stable unavailable responses in Phase 01.
+/// Deferred capability families with stable unavailable responses.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeferredCapability {
     Solve,
@@ -137,8 +161,24 @@ pub enum PreparedPortableBinding {
         expected_library_revision: Revision,
     },
 }
+/// Complete data-only metadata for one compiled-in pack.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DomainPackMetadata {
+    pub descriptor: DomainPackDescriptor,
+    pub catalog: DomainCatalog,
+}
 
-/// Phase-01 state-changing application operations.
+/// Runtime-visible generated solver matrix metadata. Feature and backend order is stable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SolverSupportMatrixMetadata {
+    pub schema_version: u32,
+    pub planning_ir_schema_version: u32,
+    pub features: Vec<SupportFeature>,
+    pub production_backend_ids: Vec<BackendId>,
+    pub backend_columns: Vec<BackendSupportColumn>,
+}
+
+/// State-changing application operations.
 #[derive(Clone, Debug)]
 pub enum AppCommand {
     /// Create a project under a request correlation identity.
@@ -223,10 +263,15 @@ pub enum AppCommand {
     CancelPortablePreview {
         preview_id: RequestId,
     },
+    /// Atomically writes and consumes one previously inspected unopened bundle.
+    ExactReexportUnopenedBundle {
+        preview_id: RequestId,
+        destination: PathBuf,
+    },
     Deferred(DeferredCapability),
 }
 
-/// Read-only Phase-01 application operations.
+/// Read-only application operations.
 #[derive(Clone, Debug)]
 pub enum AppQuery {
     ListProjects(ProjectScope),
@@ -251,6 +296,16 @@ pub enum AppQuery {
     },
     SupportPreview,
     Deferred(DeferredCapability),
+    ListDomainPacks,
+    DescribeDomainPack(PackId),
+    ListSolvers,
+    DescribeSolver(BackendId),
+    SolverSupportMatrix,
+    DeferredSolverGates,
+    /// Performs bounded archive/checksum inspection only and retains exact original bytes.
+    InspectUnopenedBundle {
+        bytes: Vec<u8>,
+    },
 }
 
 /// Source and persisted identities for one applied portable scenario.
@@ -274,6 +329,7 @@ pub enum AppCommandResult {
         scenarios: Vec<AppliedPortableScenario>,
     },
     PortablePreviewCancelled,
+    UnopenedBundleReexported,
 }
 
 /// Results from read-only application operations.
@@ -299,6 +355,17 @@ pub enum AppQueryResult {
         bytes: Vec<u8>,
         summary: BackupSummary,
         library_revision: Revision,
+    },
+    DomainPacks(Vec<DomainPackDescriptor>),
+    DomainPack(Box<DomainPackMetadata>),
+    Solvers(Vec<SolverDescriptor>),
+    Solver(SolverDescriptor),
+    SolverSupportMatrix(SolverSupportMatrixMetadata),
+    DeferredSolverGates(Vec<DeferredBackendCandidate>),
+    /// Opaque capability plus allowlisted metadata; this is not an import or authority claim.
+    UnopenedBundlePreview {
+        preview_id: RequestId,
+        metadata: PreservedBundleMetadata,
     },
 }
 
@@ -375,13 +442,28 @@ impl EventSubscription {
 }
 
 #[derive(Clone)]
-struct PendingPortablePreview {
+struct PendingImportPreview {
     inspected: InspectedBundle,
     preview: ImportPreview,
     options: ImportOptions,
     portable_settings: BTreeMap<String, AppSetting<Value>>,
     safety_backup_failure: Option<PendingSafetyBackupFailure>,
     retained_bytes: usize,
+}
+
+#[derive(Clone)]
+enum PendingPortablePreview {
+    Import(Box<PendingImportPreview>),
+    Unopened(UnopenedBundle),
+}
+
+impl PendingPortablePreview {
+    fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Import(preview) => preview.retained_bytes,
+            Self::Unopened(bundle) => bundle.retained_memory_bytes(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -407,15 +489,17 @@ enum ProjectLifecycleAction {
     Delete,
 }
 
-/// Reusable Phase-01 application service with no Tauri or CLI dependency.
+/// Reusable application service with no Tauri or CLI dependency.
 #[derive(Clone)]
 pub struct EuthetoApp {
     store: Arc<SqliteScenarioStore>,
     initialization: InitializationOutcome,
+    pack_registry: Arc<DomainPackRegistry>,
+    solver_registry: Arc<SolverRegistry>,
     paths: AppPaths,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGenerator>,
-    cancellation: CancellationSignal,
+    cancellation: CancellationToken,
     mutation_locks: ScenarioLocks,
     previews: Arc<Mutex<BTreeMap<RequestId, PendingPortablePreview>>>,
     events: broadcast::Sender<AppEvent>,
@@ -429,27 +513,76 @@ impl EuthetoApp {
     /// Returns a typed storage or protocol failure when directories, startup,
     /// migration, integrity recovery, or the database actor cannot initialize.
     pub async fn open(dependencies: AppDependencies) -> Result<Self, AppError> {
+        let (pack_registry, solver_registry) = validated_static_registries()?;
         let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database)
             .await
             .map_err(store_error)?;
-        Ok(Self::from_initialized_store(
+        Ok(Self::from_initialized_store_with_registries(
             Arc::new(store),
             initialization,
             dependencies,
+            pack_registry,
+            solver_registry,
         ))
     }
 
     /// Constructs the service from an explicitly initialized store.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe protocol failure if compiled pack or solver metadata has drifted.
     pub fn from_initialized_store(
         store: Arc<SqliteScenarioStore>,
         initialization: InitializationOutcome,
         dependencies: AppDependencies,
+    ) -> Result<Self, AppError> {
+        let (pack_registry, solver_registry) = validated_static_registries()?;
+        Ok(Self::from_initialized_store_with_registries(
+            store,
+            initialization,
+            dependencies,
+            pack_registry,
+            solver_registry,
+        ))
+    }
+
+    /// Constructs the service with an explicitly supplied compiled-in pack registry.
+    ///
+    /// This is the same initialization boundary as [`Self::from_initialized_store`], but lets
+    /// embedders supply their complete static pack set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe protocol failure if compiled solver metadata has drifted.
+    pub fn from_initialized_store_with_pack_registry(
+        store: Arc<SqliteScenarioStore>,
+        initialization: InitializationOutcome,
+        dependencies: AppDependencies,
+        pack_registry: DomainPackRegistry,
+    ) -> Result<Self, AppError> {
+        let (_, solver_registry) = validated_static_registries()?;
+        Ok(Self::from_initialized_store_with_registries(
+            store,
+            initialization,
+            dependencies,
+            Arc::new(pack_registry),
+            solver_registry,
+        ))
+    }
+
+    fn from_initialized_store_with_registries(
+        store: Arc<SqliteScenarioStore>,
+        initialization: InitializationOutcome,
+        dependencies: AppDependencies,
+        pack_registry: Arc<DomainPackRegistry>,
+        solver_registry: Arc<SolverRegistry>,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         Self {
             store,
             initialization,
+            pack_registry,
+            solver_registry,
             paths: dependencies.paths,
             clock: dependencies.clock,
             ids: dependencies.ids,
@@ -482,7 +615,7 @@ impl EuthetoApp {
         })
     }
 
-    /// Executes one Phase-01 application mutation.
+    /// Executes one application mutation.
     /// # Errors
     ///
     /// Returns validation, conflict, unsupported, storage, or protocol errors
@@ -549,6 +682,13 @@ impl EuthetoApp {
                 binding,
             } => {
                 self.publish_prepared_portable(destination, bytes, &expected_sha256, binding)
+                    .await
+            }
+            AppCommand::ExactReexportUnopenedBundle {
+                preview_id,
+                destination,
+            } => {
+                self.exact_reexport_unopened_bundle(preview_id, destination)
                     .await
             }
             command @ (AppCommand::ApplyImport { .. }
@@ -823,7 +963,7 @@ impl EuthetoApp {
         Ok(AppCommandResult::Deleted)
     }
 
-    /// Executes one read-only Phase-01 application query.
+    /// Executes one read-only application query.
     ///
     /// # Errors
     ///
@@ -849,22 +989,9 @@ impl EuthetoApp {
                 let project = self.store.get_project(id).await.map_err(store_error)?;
                 Ok(AppQueryResult::Project(project_metadata(&project)))
             }
-            AppQuery::OpenProject(id) => {
-                let project = self
-                    .store
-                    .open_project(id, self.clock.now())
-                    .await
-                    .map_err(store_error)?;
-                Ok(AppQueryResult::Scenario(Box::new(scenario_view(project))))
-            }
-            AppQuery::ScenarioView(id) => {
-                let project = self.store.get_project(id).await.map_err(store_error)?;
-                Ok(AppQueryResult::Scenario(Box::new(scenario_view(project))))
-            }
-            AppQuery::ValidateScenario(id) => {
-                let project = self.store.get_project(id).await.map_err(store_error)?;
-                Ok(AppQueryResult::Validation(validate(&project.document)))
-            }
+            AppQuery::OpenProject(id) => self.query_open_project(id).await,
+            AppQuery::ScenarioView(id) => self.query_scenario_view(id).await,
+            AppQuery::ValidateScenario(id) => self.query_scenario_validation(id).await,
             AppQuery::History(id) => self
                 .store
                 .history(id)
@@ -880,26 +1007,10 @@ impl EuthetoApp {
                     .map_err(store_error)
             }
             AppQuery::PreviewImport { bytes, options } => {
-                if options.restore_mode == RestoreMode::ImportScenario {
-                    self.preview_portable(bytes, options).await
-                } else {
-                    Err(validation_error(
-                        "portable.import_mode_invalid",
-                        "/restoreMode",
-                        "Project import requires import-scenario mode.",
-                    ))
-                }
+                self.query_preview_import(bytes, options).await
             }
             AppQuery::PreviewRestore { bytes, options } => {
-                if options.restore_mode == RestoreMode::ImportScenario {
-                    Err(validation_error(
-                        "portable.restore_mode_invalid",
-                        "/restoreMode",
-                        "Backup restore requires add-backup or replace-library mode.",
-                    ))
-                } else {
-                    self.preview_portable(bytes, options).await
-                }
+                self.query_preview_restore(bytes, options).await
             }
             AppQuery::ExportScenario(id) => {
                 let (bytes, scenario_revision, library_revision) = self.export_scenario(id).await?;
@@ -923,7 +1034,116 @@ impl EuthetoApp {
                 .await
                 .map(AppQueryResult::SupportPreview),
             AppQuery::Deferred(capability) => Err(unsupported(capability)),
+            AppQuery::ListDomainPacks => Ok(AppQueryResult::DomainPacks(
+                self.pack_registry.descriptors().cloned().collect(),
+            )),
+            AppQuery::DescribeDomainPack(id) => self.query_domain_pack_metadata(id),
+            AppQuery::ListSolvers => Ok(AppQueryResult::Solvers(
+                self.solver_registry.descriptors().cloned().collect(),
+            )),
+            AppQuery::DescribeSolver(id) => self
+                .solver_registry
+                .get(&id)
+                .map(|backend| backend.descriptor().clone())
+                .map(AppQueryResult::Solver)
+                .ok_or(AppError::NotFound(ResourceRef::Backend(id))),
+            AppQuery::SolverSupportMatrix => Ok(self.query_solver_support_matrix()),
+            AppQuery::DeferredSolverGates => {
+                let mut candidates = self.solver_registry.matrix().deferred_candidates().to_vec();
+                candidates.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
+                Ok(AppQueryResult::DeferredSolverGates(candidates))
+            }
+            AppQuery::InspectUnopenedBundle { bytes } => self.inspect_unopened_bundle(bytes).await,
         }
+    }
+
+    async fn query_open_project(&self, id: ScenarioId) -> Result<AppQueryResult, AppError> {
+        let project = self
+            .store
+            .open_project(id, self.clock.now())
+            .await
+            .map_err(store_error)?;
+        Ok(AppQueryResult::Scenario(Box::new(scenario_view(
+            project,
+            &self.pack_registry,
+        ))))
+    }
+
+    async fn query_scenario_view(&self, id: ScenarioId) -> Result<AppQueryResult, AppError> {
+        let project = self.store.get_project(id).await.map_err(store_error)?;
+        Ok(AppQueryResult::Scenario(Box::new(scenario_view(
+            project,
+            &self.pack_registry,
+        ))))
+    }
+
+    async fn query_scenario_validation(&self, id: ScenarioId) -> Result<AppQueryResult, AppError> {
+        let project = self.store.get_project(id).await.map_err(store_error)?;
+        Ok(AppQueryResult::Validation(validate(
+            &project.document,
+            &self.pack_registry,
+        )))
+    }
+
+    async fn query_preview_import(
+        &self,
+        bytes: Vec<u8>,
+        options: ImportOptions,
+    ) -> Result<AppQueryResult, AppError> {
+        if options.restore_mode == RestoreMode::ImportScenario {
+            self.preview_portable(bytes, options).await
+        } else {
+            Err(validation_error(
+                "portable.import_mode_invalid",
+                "/restoreMode",
+                "Project import requires import-scenario mode.",
+            ))
+        }
+    }
+
+    async fn query_preview_restore(
+        &self,
+        bytes: Vec<u8>,
+        options: ImportOptions,
+    ) -> Result<AppQueryResult, AppError> {
+        if options.restore_mode == RestoreMode::ImportScenario {
+            Err(validation_error(
+                "portable.restore_mode_invalid",
+                "/restoreMode",
+                "Backup restore requires add-backup or replace-library mode.",
+            ))
+        } else {
+            self.preview_portable(bytes, options).await
+        }
+    }
+
+    fn query_domain_pack_metadata(&self, id: PackId) -> Result<AppQueryResult, AppError> {
+        let descriptor = self
+            .pack_registry
+            .descriptors()
+            .find(|descriptor| descriptor.id == id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound(ResourceRef::Pack(id.clone())))?;
+        let catalog = self
+            .pack_registry
+            .catalog(&id)
+            .cloned()
+            .ok_or(AppError::NotFound(ResourceRef::Pack(id)))?;
+        Ok(AppQueryResult::DomainPack(Box::new(DomainPackMetadata {
+            descriptor,
+            catalog,
+        })))
+    }
+
+    fn query_solver_support_matrix(&self) -> AppQueryResult {
+        let matrix = self.solver_registry.matrix();
+        AppQueryResult::SolverSupportMatrix(SolverSupportMatrixMetadata {
+            schema_version: matrix.schema_version(),
+            planning_ir_schema_version: matrix.planning_ir_schema_version(),
+            features: matrix.features().cloned().collect(),
+            production_backend_ids: matrix.production_backend_ids().cloned().collect(),
+            backend_columns: matrix.backend_columns().collect(),
+        })
     }
 
     async fn support_preview(&self) -> Result<SupportPreviewDto, AppError> {
@@ -969,7 +1189,7 @@ impl EuthetoApp {
             library: SupportLibraryMetadataDto {
                 revision: library.revision,
                 scenario_count: library.scenario_count,
-                // Solve is deferred in Phase 01. Store startup also atomically
+                // Solve is deferred in Phase 02. Store startup also atomically
                 // transitions every formerly running row to interrupted before
                 // EuthetoApp can be constructed, so active is invariantly zero.
                 active_solve_run_count: 0,
@@ -997,17 +1217,20 @@ impl EuthetoApp {
                 "Project title must not be empty.",
             ));
         }
-        if domain_pack.id.as_str() != eutheto_command::OFFICIAL_TEST_PACK_ID
-            || domain_pack.schema_version != 1
-        {
-            return Err(AppError::Unsupported(UnsupportedFeature {
-                code: "domain_pack.unsupported".to_owned(),
-                capability: format!(
-                    "Domain pack {} schema {}",
-                    domain_pack.id, domain_pack.schema_version
-                ),
-            }));
+        let Some(descriptor) = self
+            .pack_registry
+            .descriptors()
+            .find(|descriptor| descriptor.id == domain_pack.id)
+        else {
+            return Err(unsupported_project_pack(&domain_pack));
+        };
+        if domain_pack.schema_version != descriptor.scenario_versions.latest {
+            return Err(unsupported_project_pack(&domain_pack));
         }
+        let pack = self
+            .pack_registry
+            .require(&domain_pack.id)
+            .map_err(|_| project_initialization_error())?;
         let library = self.store.library_snapshot().await.map_err(store_error)?;
         let LibraryUuidClosure { occupied, .. } = library_uuid_closure(&library);
         let scenario_id = ScenarioId::from_uuid(allocate_unique_uuid(
@@ -1016,7 +1239,7 @@ impl EuthetoApp {
             &mut BTreeSet::new(),
         )?);
         let now = self.clock.now();
-        let document = ScenarioDocument::new(
+        let shell = ScenarioDocument::new(
             scenario_id,
             domain_pack,
             ScenarioMetadata {
@@ -1029,6 +1252,28 @@ impl EuthetoApp {
             ScenarioDomain::default(),
             BTreeMap::new(),
         );
+        let document = pack
+            .new_document(shell.clone())
+            .map_err(|_| project_initialization_error())?;
+        if document.format != shell.format
+            || document.format_version != shell.format_version
+            || document.scenario_id != shell.scenario_id
+            || document.domain_pack != shell.domain_pack
+            || document.metadata != shell.metadata
+            || document.settings != shell.settings
+            || document.extensions != shell.extensions
+        {
+            return Err(project_initialization_error());
+        }
+        validate_document_shape(&document).map_err(|_| project_initialization_error())?;
+        if pack
+            .validate_full(&document)
+            .issues
+            .iter()
+            .any(|issue| issue.severity == ValidationSeverity::Error)
+        {
+            return Err(project_initialization_error());
+        }
         let project = self
             .store
             .create_project(NewProject { document })
@@ -1066,6 +1311,7 @@ impl EuthetoApp {
         let _guard = mutation.lock().await;
         let journal_envelope = envelope.clone();
         let applied_at = self.clock.now();
+        let pack_registry = Arc::clone(&self.pack_registry);
         let result = self
             .store
             .execute_command(
@@ -1077,10 +1323,14 @@ impl EuthetoApp {
                     RedoBranchPolicy::Reject
                 },
                 move |document| {
-                    ensure_supported_document(document)?;
-                    let mut applied =
-                        apply_command(document, envelope.expected_revision, &envelope)
-                            .map_err(|error| command_store_error(&error))?;
+                    ensure_supported_document(document, &pack_registry)?;
+                    let mut applied = apply_command_with_registry(
+                        document,
+                        envelope.expected_revision,
+                        &envelope,
+                        &pack_registry,
+                    )
+                    .map_err(|error| command_store_error(&error))?;
                     applied.document.metadata.updated_at = applied_at;
                     let result = applied.result.clone();
                     let command = serde_json::to_value(&journal_envelope.command)
@@ -1130,8 +1380,10 @@ impl EuthetoApp {
         } else {
             CommandSource::Redo
         };
-        let apply =
-            move |history: HistoryCommand| history_apply(history, expected_revision, source);
+        let pack_registry = Arc::clone(&self.pack_registry);
+        let apply = move |history: HistoryCommand| {
+            history_apply(history, expected_revision, source, &pack_registry)
+        };
         let committed = if undo {
             self.store
                 .undo(scenario_id, expected_revision, applied_at, apply)
@@ -1225,6 +1477,15 @@ impl EuthetoApp {
         bytes: Vec<u8>,
         options: ImportOptions,
     ) -> Result<AppQueryResult, AppError> {
+        let (metadata, bytes) = tokio::task::spawn_blocking(move || {
+            let metadata = preflight_bundle_metadata(&bytes, &InspectionPolicy::default())?;
+            Ok::<_, eutheto_import::ImportError>((metadata, bytes))
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(|error| import_error(&error))?;
+        self.check_cancelled()?;
+        preflight_import_packs(&metadata, &self.pack_registry)?;
         let mut inspected = tokio::task::spawn_blocking(move || {
             inspect_bundle(
                 &bytes,
@@ -1234,11 +1495,11 @@ impl EuthetoApp {
         })
         .await
         .map_err(join_error)?
-        .map_err(import_error)?;
+        .map_err(|error| import_error(&error))?;
         self.check_cancelled()?;
         let mut portable_settings =
-            prepare_portable_inspection(&mut inspected, options.restore_mode)?;
-        let retained_bytes = retained_preview_bytes(&inspected)?;
+            prepare_portable_inspection(&mut inspected, options.restore_mode, &self.pack_registry)?;
+        let retained_bytes = inspected.retained_memory_bytes;
         if retained_bytes > MAX_PENDING_PREVIEW_BYTES {
             return Err(protocol_error(
                 "portable.preview_too_large",
@@ -1247,8 +1508,8 @@ impl EuthetoApp {
             ));
         }
         let (local, local_settings) = self.local_library_snapshot().await?;
-        let mut preview =
-            eutheto_import::build_preview(&inspected, &options, &local).map_err(import_error)?;
+        let mut preview = eutheto_import::build_preview(&inspected, &options, &local)
+            .map_err(|error| import_error(&error))?;
         self.check_cancelled()?;
         preview.settings_changed = portable_settings
             .iter()
@@ -1286,20 +1547,91 @@ impl EuthetoApp {
         }
         previews.insert(
             preview_id,
-            PendingPortablePreview {
+            PendingPortablePreview::Import(Box::new(PendingImportPreview {
                 inspected,
                 preview: preview.clone(),
                 options,
                 portable_settings,
                 safety_backup_failure: None,
                 retained_bytes,
-            },
+            })),
         );
         drop(previews);
         Ok(AppQueryResult::PortablePreview {
             preview_id,
             preview: Box::new(preview),
         })
+    }
+    async fn inspect_unopened_bundle(&self, bytes: Vec<u8>) -> Result<AppQueryResult, AppError> {
+        let unopened = tokio::task::spawn_blocking(move || {
+            inspect_unopened_bundle_for_exact_reexport(&bytes, &InspectionPolicy::default())
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(|error| import_error(&error))?;
+        self.check_cancelled()?;
+        let retained_bytes = unopened.retained_memory_bytes();
+        if retained_bytes > MAX_PENDING_PREVIEW_BYTES {
+            return Err(protocol_error(
+                "portable.preview_too_large",
+                "The unopened bundle exceeds the retained preview limit.",
+                false,
+            ));
+        }
+        let metadata = unopened.metadata().clone();
+        let preview_id = RequestId::new(self.ids.as_ref()).map_err(id_error)?;
+        self.check_cancelled()?;
+        let mut previews = self.previews.lock().await;
+        while previews.len() >= MAX_PENDING_PREVIEWS
+            || preview_total_bytes(&previews)
+                .checked_add(retained_bytes)
+                .is_none_or(|total| total > MAX_PENDING_PREVIEW_BYTES)
+        {
+            let Some(oldest) = previews.keys().next().copied() else {
+                break;
+            };
+            previews.remove(&oldest);
+        }
+        previews.insert(preview_id, PendingPortablePreview::Unopened(unopened));
+        drop(previews);
+        Ok(AppQueryResult::UnopenedBundlePreview {
+            preview_id,
+            metadata,
+        })
+    }
+
+    async fn exact_reexport_unopened_bundle(
+        &self,
+        preview_id: RequestId,
+        destination: PathBuf,
+    ) -> Result<AppCommandResult, AppError> {
+        let pending = self
+            .previews
+            .lock()
+            .await
+            .remove(&preview_id)
+            .ok_or(protocol_error(
+                "portable.preview_not_found",
+                "The portable preview is no longer available.",
+                false,
+            ))?;
+        let PendingPortablePreview::Unopened(unopened) = pending else {
+            return Err(protocol_error(
+                "portable.preview_capability_mismatch",
+                "The opaque portable capability does not authorize exact unopened re-export.",
+                false,
+            ));
+        };
+        self.check_cancelled()?;
+        let bytes = unopened.into_exact_bytes();
+        let cancellation = self.cancellation.clone();
+        tokio::task::spawn_blocking(move || {
+            write_bundle_atomic_cancellable(&destination, &bytes, &cancellation)
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(|error| export_error(&error))?;
+        Ok(AppCommandResult::UnopenedBundleReexported)
     }
 
     async fn local_library_snapshot(
@@ -1356,7 +1688,7 @@ impl EuthetoApp {
     ) -> Result<AppCommandResult, AppError> {
         self.check_cancelled()?;
         let (pending, local) = self.take_pending_portable_preview(preview_id).await?;
-        let staged = Self::stage_portable_apply(&pending, &local, &collision_plan)?;
+        let staged = self.stage_portable_apply(&pending, &local, &collision_plan)?;
         self.check_cancelled()?;
         let committed = self
             .commit_staged_portable(
@@ -1384,7 +1716,7 @@ impl EuthetoApp {
     async fn take_pending_portable_preview(
         &self,
         preview_id: RequestId,
-    ) -> Result<(PendingPortablePreview, LocalLibrarySnapshot), AppError> {
+    ) -> Result<(PendingImportPreview, LocalLibrarySnapshot), AppError> {
         let pending = self
             .previews
             .lock()
@@ -1395,6 +1727,13 @@ impl EuthetoApp {
                 "The portable preview is no longer available.",
                 false,
             ))?;
+        let PendingPortablePreview::Import(pending) = pending else {
+            return Err(protocol_error(
+                "portable.preview_capability_mismatch",
+                "The opaque portable capability cannot be used for import.",
+                false,
+            ));
+        };
         let (local, _) = self.local_library_snapshot().await?;
         if pending.preview.binding.local_library_revision != local.revision {
             return Err(AppError::Conflict {
@@ -1408,12 +1747,13 @@ impl EuthetoApp {
             &pending.options,
             local.revision,
         )
-        .map_err(import_error)?;
-        Ok((pending, local))
+        .map_err(|error| import_error(&error))?;
+        Ok((*pending, local))
     }
 
     fn stage_portable_apply(
-        pending: &PendingPortablePreview,
+        &self,
+        pending: &PendingImportPreview,
         local: &LocalLibrarySnapshot,
         collision_plan: &CollisionPlan,
     ) -> Result<StagedPortableApply, AppError> {
@@ -1424,13 +1764,14 @@ impl EuthetoApp {
             local,
             collision_plan,
         )
-        .map_err(import_error)?;
+        .map_err(|error| import_error(&error))?;
         validate_import_documents(
             import
                 .scenarios
                 .iter()
                 .map(|item| &item.scenario.document)
                 .chain(import.scenario_revisions.iter().map(|item| &item.document)),
+            &self.pack_registry,
         )?;
         let scenarios = import
             .scenarios
@@ -1451,7 +1792,7 @@ impl EuthetoApp {
     async fn commit_staged_portable(
         &self,
         preview_id: RequestId,
-        mut pending: PendingPortablePreview,
+        mut pending: PendingImportPreview,
         local: LocalLibrarySnapshot,
         collision_plan: &CollisionPlan,
         authorization: Option<RestoreAuthorization>,
@@ -1530,7 +1871,7 @@ impl EuthetoApp {
     async fn authorize_portable_restore(
         &self,
         preview_id: RequestId,
-        pending: &mut PendingPortablePreview,
+        pending: &mut PendingImportPreview,
         collision_plan: &CollisionPlan,
         authorization: RestoreAuthorization,
     ) -> Result<RestoreAuthorization, AppError> {
@@ -1568,7 +1909,7 @@ impl EuthetoApp {
     async fn authorize_replace_restore(
         &self,
         preview_id: RequestId,
-        pending: &mut PendingPortablePreview,
+        pending: &mut PendingImportPreview,
         collision_plan: &CollisionPlan,
         authorization: RestoreAuthorization,
     ) -> Result<RestoreAuthorization, AppError> {
@@ -1630,7 +1971,7 @@ impl EuthetoApp {
     async fn authorize_first_replace_attempt(
         &self,
         preview_id: RequestId,
-        pending: &mut PendingPortablePreview,
+        pending: &mut PendingImportPreview,
         collision_plan_sha256: &str,
         prospective_token: Option<String>,
     ) -> Result<RestoreAuthorization, AppError> {
@@ -1693,11 +2034,7 @@ impl EuthetoApp {
         }
     }
 
-    async fn retain_portable_preview(
-        &self,
-        preview_id: RequestId,
-        pending: PendingPortablePreview,
-    ) {
+    async fn retain_portable_preview(&self, preview_id: RequestId, pending: PendingImportPreview) {
         let mut previews = self.previews.lock().await;
         while previews.len() >= MAX_PENDING_PREVIEWS
             || preview_total_bytes(&previews)
@@ -1709,7 +2046,10 @@ impl EuthetoApp {
             };
             previews.remove(&oldest);
         }
-        previews.insert(preview_id, pending);
+        previews.insert(
+            preview_id,
+            PendingPortablePreview::Import(Box::new(pending)),
+        );
     }
 
     async fn create_portable_safety_backup(&self) -> Result<String, AppError> {
@@ -1883,7 +2223,7 @@ impl EuthetoApp {
         })
         .await
         .map_err(join_error)?
-        .map_err(import_error)?;
+        .map_err(|error| import_error(&error))?;
         self.check_cancelled()?;
         let (expected_library_revision, expected_scenario) = match binding {
             PreparedPortableBinding::Scenario {
@@ -2078,9 +2418,43 @@ fn safe_backup_failure_reason(error: &AppError) -> Option<String> {
     })
 }
 
+fn preflight_import_packs(
+    metadata: &PreservedBundleMetadata,
+    registry: &DomainPackRegistry,
+) -> Result<(), AppError> {
+    for scenario in &metadata.scenarios {
+        let Some(pack_id) = scenario
+            .pack_id
+            .as_deref()
+            .and_then(|pack_id| pack_id.parse::<PackId>().ok())
+        else {
+            return Err(unsupported_import_pack());
+        };
+        let Some(schema_version) = scenario.pack_schema_version else {
+            return Err(unsupported_import_pack());
+        };
+        let Some(descriptor) = registry
+            .descriptors()
+            .find(|descriptor| descriptor.id == pack_id)
+        else {
+            return Err(unsupported_import_pack());
+        };
+        if schema_version != descriptor.scenario_versions.latest
+            && !descriptor
+                .scenario_versions
+                .migratable_from
+                .contains(&schema_version)
+        {
+            return Err(unsupported_import_pack());
+        }
+    }
+    Ok(())
+}
+
 fn prepare_portable_inspection(
     inspected: &mut InspectedBundle,
     restore_mode: RestoreMode,
+    registry: &DomainPackRegistry,
 ) -> Result<BTreeMap<String, AppSetting<Value>>, AppError> {
     let expected_kind = if restore_mode == RestoreMode::ImportScenario {
         BundleKind::ScenarioExport
@@ -2108,72 +2482,160 @@ fn prepare_portable_inspection(
         }
     }
     let portable_settings = take_portable_settings(&mut portable_preferences, restore_mode)?;
+    migrate_import_documents(
+        inspected
+            .scenarios
+            .iter_mut()
+            .chain(&mut inspected.scenario_revisions)
+            .map(|item| &mut item.document),
+        registry,
+    )?;
     validate_import_documents(
         inspected
             .scenarios
             .iter()
             .chain(&inspected.scenario_revisions)
             .map(|item| &item.document),
+        registry,
     )?;
     Ok(portable_settings)
 }
 
 fn preview_total_bytes(previews: &BTreeMap<RequestId, PendingPortablePreview>) -> usize {
     previews.values().fold(0_usize, |total, preview| {
-        total.saturating_add(preview.retained_bytes)
+        total.saturating_add(preview.retained_bytes())
     })
 }
 
-fn retained_preview_bytes(inspected: &InspectedBundle) -> Result<usize, AppError> {
-    let mut total = inspected
-        .additional_entries
-        .values()
-        .try_fold(0_usize, |total, bytes| total.checked_add(bytes.len()))
-        .ok_or_else(|| {
-            protocol_error(
-                "portable.preview_size_overflow",
-                "The portable preview size could not be represented.",
-                false,
-            )
-        })?;
-    for scenario in inspected
-        .scenarios
-        .iter()
-        .chain(&inspected.scenario_revisions)
-    {
-        let length = serde_json::to_vec(scenario)
-            .map_err(|_| {
-                protocol_error(
-                    "portable.preview_size_failed",
-                    "The portable preview size could not be determined.",
-                    false,
-                )
-            })?
-            .len();
-        total = total.checked_add(length).ok_or_else(|| {
-            protocol_error(
-                "portable.preview_size_overflow",
-                "The portable preview size could not be represented.",
-                false,
-            )
-        })?;
+fn migrate_import_documents<'a>(
+    documents: impl IntoIterator<Item = &'a mut ScenarioDocument>,
+    registry: &DomainPackRegistry,
+) -> Result<(), AppError> {
+    for document in documents {
+        migrate_import_document(document, registry)?;
     }
-    Ok(total)
+    Ok(())
+}
+
+fn migrate_import_document(
+    document: &mut ScenarioDocument,
+    registry: &DomainPackRegistry,
+) -> Result<(), AppError> {
+    let Some(descriptor) = registry
+        .descriptors()
+        .find(|descriptor| descriptor.id == document.domain_pack.id)
+    else {
+        return Err(unsupported_import_pack());
+    };
+    let source_version = document.domain_pack.schema_version;
+    let target_version = descriptor.scenario_versions.latest;
+    if source_version == target_version {
+        return Ok(());
+    }
+    if !descriptor
+        .scenario_versions
+        .migratable_from
+        .contains(&source_version)
+    {
+        return Err(unsupported_import_pack());
+    }
+    let pack = registry
+        .require(&document.domain_pack.id)
+        .map_err(|_| unsupported_import_pack())?;
+    let original_format = document.format;
+    let original_format_version = document.format_version;
+    let original_scenario_id = document.scenario_id;
+    let original_pack_id = document.domain_pack.id.clone();
+    let original_metadata = document.metadata.clone();
+    let original_settings = document.settings.clone();
+    let original_extensions = document.extensions.clone();
+    let mut migrated = document.clone();
+    while migrated.domain_pack.schema_version != target_version {
+        let previous_version = migrated.domain_pack.schema_version;
+        let expected_version = previous_version.checked_add(1).ok_or_else(|| {
+            migration_contract_error("The imported scenario migration version overflowed.")
+        })?;
+        if expected_version != target_version
+            && !descriptor
+                .scenario_versions
+                .migratable_from
+                .contains(&expected_version)
+        {
+            return Err(migration_contract_error(
+                "The imported scenario does not have a complete sequential migration path.",
+            ));
+        }
+        migrated = pack.migrate_document(migrated).map_err(|_| {
+            migration_contract_error("The imported scenario domain document could not be migrated.")
+        })?;
+        if migrated.domain_pack.schema_version != expected_version
+            || migrated.domain_pack.schema_version > target_version
+        {
+            return Err(migration_contract_error(
+                "The domain pack did not perform exactly one sequential migration step.",
+            ));
+        }
+        if migrated.format != original_format
+            || migrated.format_version != original_format_version
+            || migrated.scenario_id != original_scenario_id
+            || migrated.domain_pack.id != original_pack_id
+            || migrated.metadata != original_metadata
+            || migrated.settings != original_settings
+            || migrated.extensions != original_extensions
+        {
+            return Err(migration_contract_error(
+                "The domain pack migration changed host-owned scenario data.",
+            ));
+        }
+    }
+    validate_document_shape(&migrated).map_err(|error| {
+        validation_error(
+            error.code(),
+            "/domain",
+            "The migrated domain payload is malformed.",
+        )
+    })?;
+    if pack
+        .validate_full(&migrated)
+        .issues
+        .iter()
+        .any(|issue| issue.severity == ValidationSeverity::Error)
+    {
+        return Err(migration_contract_error(
+            "The migrated scenario failed domain-pack validation.",
+        ));
+    }
+    *document = migrated;
+    Ok(())
+}
+
+fn unsupported_import_pack() -> AppError {
+    validation_error(
+        "domain_pack.unsupported",
+        "/domainPack",
+        "The imported scenario domain pack is not available.",
+    )
+}
+
+fn migration_contract_error(message: &str) -> AppError {
+    validation_error("domain_pack.migration_failed", "/domainPack", message)
 }
 
 fn validate_import_documents<'a>(
     documents: impl IntoIterator<Item = &'a ScenarioDocument>,
+    registry: &DomainPackRegistry,
 ) -> Result<(), AppError> {
     for document in documents {
-        if document.domain_pack.id.as_str() != eutheto_command::OFFICIAL_TEST_PACK_ID
-            || document.domain_pack.schema_version != 1
-        {
+        if available_pack(document, registry).is_none() {
             return Err(validation_error(
                 "domain_pack.unsupported",
                 "/domainPack",
                 "The imported scenario domain pack is not available.",
             ));
         }
+        // Every document passes the generic shape gate. Historical documents have already
+        // passed pack validation after migration; current documents retain the established
+        // contract in which pack validation is observable through ValidateScenario and commands.
         validate_document_shape(document).map_err(|error| {
             validation_error(
                 error.code(),
@@ -2181,13 +2643,6 @@ fn validate_import_documents<'a>(
                 "The imported domain payload is malformed.",
             )
         })?;
-        let issues = OfficialTestPack.validate(document);
-        if issues
-            .iter()
-            .any(|issue| issue.severity == ValidationSeverity::Error)
-        {
-            return Err(AppError::Validation(ValidationReport { issues }));
-        }
     }
     Ok(())
 }
@@ -2742,6 +3197,7 @@ fn history_apply(
     history: HistoryCommand,
     current_revision: Revision,
     source: CommandSource,
+    registry: &DomainPackRegistry,
 ) -> Result<(ScenarioDocument, CommandResult), StoreError> {
     let envelope = CommandEnvelope {
         command_id: history.entry.id,
@@ -2754,17 +3210,31 @@ fn history_apply(
         source,
         command: serde_json::from_value(history.command).map_err(StoreError::Json)?,
     };
-    ensure_supported_document(&history.document)?;
-    let mut applied = apply_command(&history.document, current_revision, &envelope)
-        .map_err(|error| command_store_error(&error))?;
+    ensure_supported_document(&history.document, registry)?;
+    let mut applied =
+        apply_command_with_registry(&history.document, current_revision, &envelope, registry)
+            .map_err(|error| command_store_error(&error))?;
     applied.document.metadata.updated_at = history.target_document_updated_at;
     Ok((applied.document, applied.result))
 }
 
-fn validate(document: &ScenarioDocument) -> ValidationReport {
-    if document.domain_pack.id.as_str() != eutheto_command::OFFICIAL_TEST_PACK_ID
-        || document.domain_pack.schema_version != 1
-    {
+fn available_pack<'a>(
+    document: &ScenarioDocument,
+    registry: &'a DomainPackRegistry,
+) -> Option<&'a dyn eutheto_domain_api::DomainPack> {
+    let supports_schema = registry.descriptors().any(|descriptor| {
+        descriptor.id == document.domain_pack.id
+            && descriptor
+                .scenario_versions
+                .supports(document.domain_pack.schema_version)
+    });
+    supports_schema
+        .then(|| registry.require(&document.domain_pack.id).ok())
+        .flatten()
+}
+
+fn validate(document: &ScenarioDocument, registry: &DomainPackRegistry) -> ValidationReport {
+    let Some(pack) = available_pack(document, registry) else {
         return ValidationReport {
             issues: vec![ValidationIssue {
                 code: "domain_pack.unsupported".to_owned(),
@@ -2775,16 +3245,17 @@ fn validate(document: &ScenarioDocument) -> ValidationReport {
                 resource: Some(ResourceRef::Pack(document.domain_pack.id.clone())),
             }],
         };
-    }
+    };
     ValidationReport {
-        issues: OfficialTestPack.validate(document),
+        issues: pack.validate_fast(document).issues,
     }
 }
 
-fn ensure_supported_document(document: &ScenarioDocument) -> Result<(), StoreError> {
-    if document.domain_pack.id.as_str() == eutheto_command::OFFICIAL_TEST_PACK_ID
-        && document.domain_pack.schema_version == 1
-    {
+fn ensure_supported_document(
+    document: &ScenarioDocument,
+    registry: &DomainPackRegistry,
+) -> Result<(), StoreError> {
+    if available_pack(document, registry).is_some() {
         Ok(())
     } else {
         Err(StoreError::CommandApplication {
@@ -2797,8 +3268,8 @@ fn ensure_supported_document(document: &ScenarioDocument) -> Result<(), StoreErr
     }
 }
 
-fn scenario_view(project: StoredProject) -> ScenarioViewDto {
-    let validation = validate(&project.document);
+fn scenario_view(project: StoredProject, registry: &DomainPackRegistry) -> ScenarioViewDto {
+    let validation = validate(&project.document, registry);
     ScenarioViewDto {
         revision: project.summary.revision,
         document: project.document,
@@ -2912,6 +3383,7 @@ fn store_error(error: StoreError) -> AppError {
             retryable: false,
             diagnostic_id: None,
         }),
+
         _ => AppError::Storage(StorageFailure {
             code: "storage.operation_failed".to_owned(),
             message: "The local data operation failed safely.".to_owned(),
@@ -2919,6 +3391,23 @@ fn store_error(error: StoreError) -> AppError {
             diagnostic_id: None,
         }),
     }
+}
+fn unsupported_project_pack(domain_pack: &DomainPackRef) -> AppError {
+    AppError::Unsupported(UnsupportedFeature {
+        code: "domain_pack.unsupported".to_owned(),
+        capability: format!(
+            "Domain pack {} schema {}",
+            domain_pack.id, domain_pack.schema_version
+        ),
+    })
+}
+
+fn project_initialization_error() -> AppError {
+    protocol_error(
+        "application.pack_initialization_invalid",
+        "The selected domain pack could not initialize a valid project.",
+        false,
+    )
 }
 
 fn validation_error(code: &str, path: &str, message: &str) -> AppError {
@@ -3055,19 +3544,19 @@ fn import_limit_error(kind: ImportLimitKind) -> AppError {
     validation_error(code, "/bundle", message)
 }
 
-fn import_error(error: eutheto_import::ImportError) -> AppError {
+fn import_error(error: &eutheto_import::ImportError) -> AppError {
     use eutheto_import::ImportError;
     match error {
         ImportError::UnsupportedNewerVersion {
             space,
             found,
             current,
-        } => import_version_error(ImportVersionKind::Newer, space, found, current),
+        } => import_version_error(ImportVersionKind::Newer, *space, *found, *current),
         ImportError::UnsupportedOlderVersion {
             space,
             found,
             current,
-        } => import_version_error(ImportVersionKind::Older, space, found, current),
+        } => import_version_error(ImportVersionKind::Older, *space, *found, *current),
         ImportError::ArchiveTooLarge => import_limit_error(ImportLimitKind::ArchiveBytes),
         ImportError::TooManyEntries => import_limit_error(ImportLimitKind::EntryCount),
         ImportError::EntryTooLarge { .. } => import_limit_error(ImportLimitKind::EntryBytes),
@@ -3080,12 +3569,10 @@ fn import_error(error: eutheto_import::ImportError) -> AppError {
             code: "portable.kind_unsupported".to_owned(),
             capability: "Portable bundle kind".to_owned(),
         }),
-        ImportError::UnsupportedCapability { id, version } => {
-            AppError::Unsupported(UnsupportedFeature {
-                code: "portable.capability_unsupported".to_owned(),
-                capability: format!("{id} version {version}"),
-            })
-        }
+        ImportError::UnsupportedCapability { .. } => AppError::Unsupported(UnsupportedFeature {
+            code: "portable.capability_unsupported".to_owned(),
+            capability: "Required portable semantic capability".to_owned(),
+        }),
         ImportError::StalePreview => validation_error(
             "portable.preview_stale",
             "/preview",
@@ -3221,7 +3708,7 @@ mod tests {
 
     #[test]
     fn portable_error_mapping_is_typed_and_does_not_expose_internal_details() {
-        let version = import_error(eutheto_import::ImportError::UnsupportedNewerVersion {
+        let version = import_error(&eutheto_import::ImportError::UnsupportedNewerVersion {
             space: eutheto_import::VersionSpace::PortableSchema,
             found: 3,
             current: 1,
@@ -3238,7 +3725,7 @@ mod tests {
 
         let secret_path = "/home/operator/private-library/scenario.json";
         let secret_backend = "backend parse details";
-        let invalid = import_error(eutheto_import::ImportError::InvalidJson {
+        let invalid = import_error(&eutheto_import::ImportError::InvalidJson {
             path: secret_path.to_owned(),
             message: secret_backend.to_owned(),
         });

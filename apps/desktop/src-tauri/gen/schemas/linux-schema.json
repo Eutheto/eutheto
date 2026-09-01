@@ -321,6 +321,18 @@
           "markdownDescription": "Enables the app_open_data_folder command without any pre-configured scope."
         },
         {
+          "description": "Enables the pack_describe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pack-describe",
+          "markdownDescription": "Enables the pack_describe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pack_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pack-list",
+          "markdownDescription": "Enables the pack_list command without any pre-configured scope."
+        },
+        {
           "description": "Allows the main local window to call exactly the stable desktop command catalog.",
           "type": "string",
           "const": "allow-phase-01-api",
@@ -421,6 +433,18 @@
           "type": "string",
           "const": "allow-project-unarchive",
           "markdownDescription": "Enables the project_unarchive command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_unopened_bundle_inspect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-unopened-bundle-inspect",
+          "markdownDescription": "Enables the project_unopened_bundle_inspect command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the project_unopened_bundle_reexport command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-project-unopened-bundle-reexport",
+          "markdownDescription": "Enables the project_unopened_bundle_reexport command without any pre-configured scope."
         },
         {
           "description": "Enables the scenario_apply_batch command without any pre-configured scope.",
@@ -681,6 +705,30 @@
           "markdownDescription": "Enables the solve_start command without any pre-configured scope."
         },
         {
+          "description": "Enables the solver_describe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solver-describe",
+          "markdownDescription": "Enables the solver_describe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solver_get_deferred_gates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solver-get-deferred-gates",
+          "markdownDescription": "Enables the solver_get_deferred_gates command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solver_get_support_matrix command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solver-get-support-matrix",
+          "markdownDescription": "Enables the solver_get_support_matrix command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the solver_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-solver-list",
+          "markdownDescription": "Enables the solver_list command without any pre-configured scope."
+        },
+        {
           "description": "Denies the ai_apply_proposal command without any pre-configured scope.",
           "type": "string",
           "const": "deny-ai-apply-proposal",
@@ -825,6 +873,18 @@
           "markdownDescription": "Denies the app_open_data_folder command without any pre-configured scope."
         },
         {
+          "description": "Denies the pack_describe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pack-describe",
+          "markdownDescription": "Denies the pack_describe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pack_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pack-list",
+          "markdownDescription": "Denies the pack_list command without any pre-configured scope."
+        },
+        {
           "description": "Denies the project_archive command without any pre-configured scope.",
           "type": "string",
           "const": "deny-project-archive",
@@ -919,6 +979,18 @@
           "type": "string",
           "const": "deny-project-unarchive",
           "markdownDescription": "Denies the project_unarchive command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_unopened_bundle_inspect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-unopened-bundle-inspect",
+          "markdownDescription": "Denies the project_unopened_bundle_inspect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the project_unopened_bundle_reexport command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-project-unopened-bundle-reexport",
+          "markdownDescription": "Denies the project_unopened_bundle_reexport command without any pre-configured scope."
         },
         {
           "description": "Denies the scenario_apply_batch command without any pre-configured scope.",
@@ -1177,6 +1249,30 @@
           "type": "string",
           "const": "deny-solve-start",
           "markdownDescription": "Denies the solve_start command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solver_describe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solver-describe",
+          "markdownDescription": "Denies the solver_describe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solver_get_deferred_gates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solver-get-deferred-gates",
+          "markdownDescription": "Denies the solver_get_deferred_gates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solver_get_support_matrix command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solver-get-support-matrix",
+          "markdownDescription": "Denies the solver_get_support_matrix command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the solver_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-solver-list",
+          "markdownDescription": "Denies the solver_list command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

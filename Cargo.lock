@@ -924,8 +924,12 @@ dependencies = [
 name = "eutheto-command"
 version = "0.1.0"
 dependencies = [
+ "eutheto-domain-api",
+ "eutheto-domain-ir",
+ "eutheto-planning-ir",
  "eutheto-types",
  "proptest",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -937,14 +941,20 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "eutheto-command",
+ "eutheto-domain-api",
+ "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-import",
+ "eutheto-planning-ir",
+ "eutheto-solver-api",
+ "eutheto-solver-router",
  "eutheto-store",
  "eutheto-types",
  "serde_json",
  "tempfile",
  "tokio",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -963,6 +973,30 @@ dependencies = [
  "tauri-plugin-dialog",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "eutheto-domain-api"
+version = "0.1.0"
+dependencies = [
+ "eutheto-domain-ir",
+ "eutheto-planning-ir",
+ "eutheto-types",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "eutheto-domain-ir"
+version = "0.1.0"
+dependencies = [
+ "eutheto-types",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -995,6 +1029,42 @@ dependencies = [
  "thiserror 2.0.20",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "eutheto-planning-ir"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "eutheto-domain-ir",
+ "eutheto-types",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "eutheto-solver-api"
+version = "0.1.0"
+dependencies = [
+ "eutheto-planning-ir",
+ "eutheto-types",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "eutheto-solver-router"
+version = "0.1.0"
+dependencies = [
+ "eutheto-domain-ir",
+ "eutheto-planning-ir",
+ "eutheto-solver-api",
+ "eutheto-types",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -5270,10 +5340,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "blake3",
  "clap",
  "eutheto-types",
  "prost",
  "prost-build",
+ "semver",
  "serde",
  "serde_json",
 ]

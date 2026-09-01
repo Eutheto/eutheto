@@ -1,0 +1,81 @@
+{
+  "commands": {
+    "official.test.configure_entity": {
+      "aiGroupingAllowed": true,
+      "change": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "after": {},
+          "before": {},
+          "path": {
+            "pattern": "^/domain/entities/",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "before",
+          "after"
+        ],
+        "type": "object"
+      },
+      "invalidExamples": [
+        {
+          "enabled": true,
+          "entityId": "not-a-uuid",
+          "target": 11
+        }
+      ],
+      "payload": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "entityId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "target": {
+            "maximum": 10,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entityId",
+          "enabled",
+          "target"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "entityId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entityId"
+        ],
+        "type": "object"
+      },
+      "reversibility": "inverseCommand",
+      "risk": "ordinaryMutation",
+      "validExamples": [
+        {
+          "enabled": true,
+          "entityId": "018f25a7-8b3c-7d11-8000-000000000001",
+          "target": 3
+        }
+      ]
+    }
+  },
+  "packId": "official.test",
+  "schemaVersion": 1
+}

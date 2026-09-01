@@ -5,7 +5,7 @@ use eutheto_export::{
 };
 use eutheto_import::{
     ImportError, InspectedBundle, InspectionPolicy, MigrationRegistries, VersionSpace,
-    inspect_bundle,
+    inspect_bundle, inspect_unopened_bundle_for_exact_reexport, preflight_bundle_metadata,
 };
 use eutheto_types::{BundleId, Revision};
 use serde_json::{Value, json};
@@ -725,5 +725,230 @@ fn every_declarative_adversarial_case_reaches_its_typed_refusal() -> TestResult 
             required_str(case, "name")?
         );
     }
+    Ok(())
+}
+
+fn replace_scenario_extension_with_tiny_array(
+    entries: &mut BTreeMap<String, Vec<u8>>,
+    path: &str,
+    count: usize,
+) -> TestResult {
+    let mut scenario: Value = serde_json::from_slice(
+        entries
+            .get(path)
+            .ok_or_else(|| std::io::Error::other(format!("missing {path}")))?,
+    )?;
+    scenario["extensions"]["vendor.mass"] = json!("__TINY_ARRAY__");
+    let encoded = String::from_utf8(canonical_json(&scenario)?)?;
+    let mut tiny = String::with_capacity(
+        count
+            .checked_mul(2)
+            .ok_or_else(|| std::io::Error::other("tiny-array capacity overflow"))?,
+    );
+    for index in 0..count {
+        if index != 0 {
+            tiny.push(',');
+        }
+        tiny.push('0');
+    }
+    let encoded = encoded.replace(
+        "\"vendor.mass\":\"__TINY_ARRAY__\"",
+        &format!("\"vendor.mass\":[{tiny}]"),
+    );
+    entries.insert(path.to_owned(), encoded.into_bytes());
+    Ok(())
+}
+
+#[test]
+fn unopened_preflight_streams_unknown_domain_without_constructing_it() -> TestResult {
+    let wrapper = fixture(PORTABLE_V1, "eutheto.test/portable-scenario-fixture")?;
+    let bundle = production_bundle(
+        portable_input(&wrapper)?,
+        "018f1e2d-3c4b-7a69-8def-0123456789aa",
+        "2026-08-31T00:00:00Z",
+        "Streaming preflight",
+    )?;
+    let mut entries = archive_entries(&bundle)?;
+    let scenario_path = entries
+        .keys()
+        .find(|path| path.starts_with("scenarios/"))
+        .cloned()
+        .ok_or("fixture scenario is missing")?;
+    let mut scenario: Value = serde_json::from_slice(
+        entries
+            .get(&scenario_path)
+            .ok_or("fixture scenario is missing")?,
+    )?;
+    scenario["document"]["domainPack"]["id"] = json!("vendor.unknown");
+    scenario["document"]["domain"] = json!("__SKIPPED_DOMAIN__");
+    let encoded = String::from_utf8(canonical_json(&scenario)?)?;
+    let padding = std::iter::repeat_n("null", 100_000)
+        .collect::<Vec<_>>()
+        .join(",");
+    let hostile_domain =
+        format!("\"domain\":{{\"entities\":[],\"entities\":{{}},\"padding\":[{padding}]}}");
+    let encoded = encoded.replace("\"domain\":\"__SKIPPED_DOMAIN__\"", &hostile_domain);
+    assert!(encoded.contains("\"entities\":[],\"entities\":{}"));
+    entries.insert(scenario_path.clone(), encoded.into_bytes());
+    recompute_checksums(&mut entries)?;
+    let bytes = standard_zip(
+        entries.into_iter().map(|(path, bytes)| ArchiveEntry {
+            path,
+            bytes,
+            unix_mode: 0o100_600,
+        }),
+        CompressionMethod::Stored,
+    )?;
+
+    let metadata = preflight_bundle_metadata(&bytes, &InspectionPolicy::default())?;
+    assert_eq!(metadata.scenarios.len(), 1);
+    assert_eq!(
+        metadata.scenarios[0].pack_id.as_deref(),
+        Some("vendor.unknown")
+    );
+    let unopened =
+        inspect_unopened_bundle_for_exact_reexport(&bytes, &InspectionPolicy::default())?;
+    assert_eq!(unopened.metadata(), &metadata);
+    assert_eq!(unopened.exact_bytes(), bytes.as_slice());
+    assert!(unopened.retained_memory_bytes() >= bytes.len());
+    let full_inspection = inspect_bundle(
+        &bytes,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::current_only(),
+    );
+    assert!(
+        matches!(
+            full_inspection,
+            Err(ImportError::InvalidJson { .. } | ImportError::InvalidManifest(_))
+        ),
+        "{full_inspection:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn hostile_capability_identifier_is_never_reflected_by_public_errors() -> TestResult {
+    let wrapper = fixture(PORTABLE_V1, "eutheto.test/portable-scenario-fixture")?;
+    let bundle = production_bundle(
+        portable_input(&wrapper)?,
+        "018f1e2d-3c4b-7a69-8def-0123456789ab",
+        "2026-08-31T00:00:00Z",
+        "Capability diagnostics",
+    )?;
+    let mut entries = archive_entries(&bundle)?;
+    mutate_json_entry(&mut entries, MANIFEST_PATH, |manifest| {
+        manifest["requiredCapabilities"] =
+            json!([{ "id": "vendor.bad\n\u{1b}]0;owned\u{7}", "version": 1 }]);
+        Ok(())
+    })?;
+    recompute_checksums(&mut entries)?;
+    let bytes = standard_zip(
+        entries.into_iter().map(|(path, bytes)| ArchiveEntry {
+            path,
+            bytes,
+            unix_mode: 0o100_600,
+        }),
+        CompressionMethod::Deflated,
+    )?;
+    let Err(error) = preflight_bundle_metadata(&bytes, &InspectionPolicy::default()) else {
+        return Err("hostile capability namespace must be rejected".into());
+    };
+    let diagnostic = error.to_string();
+    assert!(!diagnostic.contains("vendor.bad"));
+    assert!(!diagnostic.contains('\n'));
+    assert!(!diagnostic.contains('\u{1b}'));
+    Ok(())
+}
+
+#[test]
+fn known_current_pack_rejects_compact_multi_million_tiny_nodes_before_value_growth() -> TestResult {
+    let wrapper = fixture(PORTABLE_V1, "eutheto.test/portable-scenario-fixture")?;
+    let bundle = production_bundle(
+        portable_input(&wrapper)?,
+        "018f1e2d-3c4b-7a69-8def-0123456789ac",
+        "2026-08-31T00:00:00Z",
+        "Aggregate nodes",
+    )?;
+    let mut entries = archive_entries(&bundle)?;
+    let scenario_path = entries
+        .keys()
+        .find(|path| path.starts_with("scenarios/"))
+        .cloned()
+        .ok_or("fixture scenario is missing")?;
+    replace_scenario_extension_with_tiny_array(&mut entries, &scenario_path, 2_000_000)?;
+    recompute_checksums(&mut entries)?;
+    let bytes = standard_zip(
+        entries.into_iter().map(|(path, bytes)| ArchiveEntry {
+            path,
+            bytes,
+            unix_mode: 0o100_600,
+        }),
+        CompressionMethod::Stored,
+    )?;
+    assert!(matches!(
+        inspect_bundle(
+            &bytes,
+            &InspectionPolicy::default(),
+            &MigrationRegistries::current_only()
+        ),
+        Err(ImportError::InvalidManifest(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn cumulative_multi_entry_representation_is_rejected_incrementally() -> TestResult {
+    let wrapper = fixture(PORTABLE_V1, "eutheto.test/portable-scenario-fixture")?;
+    let current = portable_input(&wrapper)?;
+    let mut historical = current.clone();
+    historical.revision = Revision::new(6);
+    let bundle = assemble_scenario_export(&ScenarioExportSnapshot {
+        bundle_id: "018f1e2d-3c4b-7a69-8def-0123456789ad".parse::<BundleId>()?,
+        created_at: "2026-08-31T00:00:00Z".to_owned(),
+        application: ApplicationMetadata {
+            name: "Eutheto".to_owned(),
+            version: "0.1.0".to_owned(),
+        },
+        title: "Cumulative representation".to_owned(),
+        scenario: current,
+        scenario_revisions: vec![historical],
+        sections: BackupSections::default(),
+        nonsemantic_extensions: BTreeSet::from(["vendor.mass".to_owned()]),
+        manifest_extensions: BTreeMap::new(),
+    })?;
+    let mut entries = archive_entries(&bundle)?;
+    let scenario_paths = entries
+        .keys()
+        .filter(|path| path.starts_with("scenarios/") || path.starts_with("scenario-revisions/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(scenario_paths.len(), 2);
+    for path in &scenario_paths {
+        replace_scenario_extension_with_tiny_array(&mut entries, path, 400_000)?;
+    }
+    recompute_checksums(&mut entries)?;
+    let bytes = standard_zip(
+        entries.into_iter().map(|(path, bytes)| ArchiveEntry {
+            path,
+            bytes,
+            unix_mode: 0o100_600,
+        }),
+        CompressionMethod::Stored,
+    )?;
+    let inspection = inspect_bundle(
+        &bytes,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::current_only(),
+    );
+    assert!(
+        matches!(
+            inspection,
+            Err(ImportError::JsonLimit {
+                limit: "representation bytes",
+                ..
+            })
+        ),
+        "{inspection:?}"
+    );
     Ok(())
 }

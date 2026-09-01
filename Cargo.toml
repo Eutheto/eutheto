@@ -2,6 +2,11 @@
 resolver = "3"
 members = [
   "crates/eutheto-types",
+  "crates/eutheto-domain-ir",
+  "crates/eutheto-planning-ir",
+  "crates/eutheto-domain-api",
+  "crates/eutheto-solver-api",
+  "crates/eutheto-solver-router",
   "crates/eutheto-core",
   "crates/eutheto-store",
   "crates/eutheto-command",
