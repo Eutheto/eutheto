@@ -129,6 +129,7 @@ function(append_inspection log_name subject working_directory)
     RESULT_VARIABLE inspection_result
     OUTPUT_VARIABLE inspection_output
     ERROR_VARIABLE inspection_error
+    TIMEOUT 60
     ENCODING UTF-8
   )
   file(APPEND "${log_file}"
