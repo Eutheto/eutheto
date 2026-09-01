@@ -440,8 +440,10 @@ record_cache_entry(worker "${worker_cache}" Protobuf_DIR)
 run_stage(worker-build "${PROBE_ROOT}"
   "${CMAKE_COMMAND}" --build "${worker_build_dir}" --config Release --parallel 2)
 
-if(WIN32)
+if(WIN32 AND PROBE_GENERATOR MATCHES "^Visual Studio")
   set(worker_executable "${worker_build_dir}/Release/ortools-worker.exe")
+elseif(WIN32)
+  set(worker_executable "${worker_build_dir}/ortools-worker.exe")
 else()
   set(worker_executable "${worker_build_dir}/ortools-worker")
 endif()

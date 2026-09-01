@@ -295,8 +295,8 @@ jobs:
           - name: Windows x86_64
             os: windows-2025
             target: windows-x86_64
-            generator: Visual Studio 17 2022
-            generator-platform: x64
+            generator: Ninja
+            generator-platform: ""
           - name: macOS arm64
             os: macos-15
             target: macos-arm64
@@ -316,6 +316,7 @@ jobs:
           persist-credentials: false
 
       - name: Build and test non-distributable candidate
+        if: runner.os != 'Windows'
         run: >-
           cmake
           "-DREPOSITORY_ROOT=${{ github.workspace }}"
@@ -326,6 +327,13 @@ jobs:
           "-DPROBE_GENERATOR=${{ matrix.generator }}"
           "-DPROBE_GENERATOR_PLATFORM=${{ matrix.generator-platform }}"
           -P "${{ github.workspace }}/workers/ortools/cmake/candidate_probe.cmake"
+
+      - name: Build and test non-distributable candidate
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          cmake "-DREPOSITORY_ROOT=${{ github.workspace }}" "-DPROBE_ROOT=${{ runner.temp }}/eutheto-ortools-candidate" "-DPROBE_TARGET=${{ matrix.target }}" "-DPROBE_RUNNER_OS=${{ runner.os }}" "-DPROBE_RUNNER_ARCH=${{ runner.arch }}" "-DPROBE_GENERATOR=${{ matrix.generator }}" "-DPROBE_GENERATOR_PLATFORM=${{ matrix.generator-platform }}" -P "${{ github.workspace }}/workers/ortools/cmake/candidate_probe.cmake"
 
       - name: Upload candidate non-distributable text evidence
         if: always()
