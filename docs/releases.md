@@ -8,6 +8,10 @@ The repository is in [Phase 00](roadmap/00-repository-and-reproducible-tooling.m
 
 Release evidence follows [ADR-016](adr/016-release-evidence.md). Platform reproducibility boundaries follow [ADR-015](adr/015-reproducible-platform-tooling.md). Product, application, hosting, contact, and signing identities remain open in [identity gates](architecture/identity-gates.md).
 
+## Pre-release contract changes
+
+- Phase 02 cleanly replaces the ambiguous `SolveOptions.timeLimit` whole-minute field with `timeLimitMilliseconds` and unifies cancellable work on the shared `CancellationToken`; no compatibility alias or reinterpretation is retained.
+
 ## Phase-00 preflight boundary
 
 `cargo xtask release verify-clean` is the implemented Phase-00 release preflight. It fails when the tracked Git tree has staged or unstaged changes, when the normal generated-source inventory drifts, when worker-protocol verification fails, or when the generated license notice/inventory or SPDX smoke SBOM differs from the committed Cargo/pnpm locks and reviewed `xtask/supply-chain-inputs.json`. The preflight only verifies repository evidence; it does not construct or authorize a release.

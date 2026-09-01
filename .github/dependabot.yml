@@ -72,8 +72,6 @@ updates:
       node-tauri-compatible:
         patterns:
           - "@tauri-apps/*"
-          - "@wdio/*"
-          - "@wdio/tauri-service"
         update-types:
           - minor
           - patch
@@ -91,8 +89,6 @@ updates:
           - "*"
         exclude-patterns:
           - "@tauri-apps/*"
-          - "@wdio/*"
-          - "@wdio/tauri-service"
           - typescript
           - typescript-eslint
           - "@typescript-eslint/*"

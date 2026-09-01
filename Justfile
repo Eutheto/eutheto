@@ -35,6 +35,10 @@ protocol-check:
 fixtures-check:
     cargo xtask fixtures validate
 
+# Enforce Phase-02 workspace dependency direction.
+architecture-check:
+    cargo xtask architecture verify
+
 # Format the Vue/TypeScript frontend.
 frontend-format:
     pnpm --filter @eutheto/desktop run format
@@ -219,7 +223,7 @@ fuzz-check: fuzz-build
             exit 1
         fi
     done
-    targets=(scenario_envelope bundle migration_chain bundle_remap)
+    targets=(scenario_envelope bundle migration_chain bundle_remap planning_ir integer_expression projection component_graph)
     if [[ "$scratch_corpus" == "$scratch_artifacts" || "$scratch_corpus" == "$scratch_artifacts/"* || "$scratch_artifacts" == "$scratch_corpus/"* ]]; then
         printf 'error: fuzz corpus and artifact scratch paths must not overlap\n' >&2
         exit 1
@@ -319,7 +323,7 @@ dco-self-test:
     python3 scripts/check_dco.py --self-test
 
 # Run the complete non-deferred Phase-01 repository suite.
-check: generate-check protocol-check fixtures-check dco-self-test fmt-check lint typecheck test
+check: generate-check protocol-check fixtures-check architecture-check dco-self-test fmt-check lint typecheck test
 
 # Run real clean-tree checks, then stop at the unresolved Phase-11 release gate.
 release-preflight: check

@@ -8,8 +8,10 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+eutheto-domain-ir = { path = "../../eutheto-domain-ir", version = "=0.1.0" }
 eutheto-export = { path = "../../eutheto-export", version = "=0.1.0" }
 eutheto-import = { path = "..", version = "=0.1.0" }
+eutheto-planning-ir = { path = "../../eutheto-planning-ir", version = "=0.1.0" }
 eutheto-types = { path = "../../eutheto-types", version = "=0.1.0" }
 libfuzzer-sys = "=0.4.13"
 serde_json = "=1.0.151"
@@ -39,6 +41,34 @@ bench = false
 [[bin]]
 name = "bundle_remap"
 path = "fuzz_targets/bundle_remap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "planning_ir"
+path = "fuzz_targets/planning_ir.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "integer_expression"
+path = "fuzz_targets/integer_expression.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "projection"
+path = "fuzz_targets/projection.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "component_graph"
+path = "fuzz_targets/component_graph.rs"
 test = false
 doc = false
 bench = false

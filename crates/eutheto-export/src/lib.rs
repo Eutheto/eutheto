@@ -5,22 +5,23 @@
 //! snapshot and receive deterministic bytes or an atomically published file.
 
 use eutheto_types::{
-    BundleId, MAX_SCENARIO_DOCUMENT_BYTES, PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset,
-    PortableJsonLimits, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, ScenarioDocument,
-    ScenarioFormat, ScenarioId, extract_asset_references, extract_result_dependency,
-    extract_result_id, extract_scenario_references, validate_nonsecret_portable_json,
+    BundleId, CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, PORTABLE_LARGE_ASSET_BYTES_V1,
+    PortableAsset, PortableJsonLimits, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION,
+    ScenarioDocument, ScenarioFormat, ScenarioId, extract_asset_references,
+    extract_result_dependency, extract_result_id, extract_scenario_references,
+    validate_nonsecret_portable_json, validate_nonsecret_portable_json_bytes,
 };
 use image::{ImageFormat, ImageReader, Limits as ImageLimits};
+use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::{Builder as TempFileBuilder, NamedTempFile};
 use thiserror::Error;
 use uuid::Uuid;
@@ -549,29 +550,6 @@ pub enum ExportError {
     DestinationExists(PathBuf),
     #[error("bundle publication was cancelled")]
     Cancelled,
-}
-
-/// Cloneable cancellation signal checked only before the atomic publication
-/// commit point.
-#[derive(Clone, Debug, Default)]
-pub struct CancellationSignal {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl CancellationSignal {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-    }
-
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
 }
 
 /// Serialize as compact deterministic JSON. Struct field order is declared and
@@ -1969,6 +1947,51 @@ fn validate_portable_payload(
     Ok((section_index, size))
 }
 
+struct ProjectPresence(bool);
+
+impl<'de> Deserialize<'de> for ProjectPresence {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ProjectPresenceVisitor;
+
+        impl<'de> Visitor<'de> for ProjectPresenceVisitor {
+            type Value = ProjectPresence;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a portable scenario envelope")
+            }
+
+            fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut present = false;
+                while let Some(key) = object.next_key::<String>()? {
+                    if key == "project" {
+                        present = true;
+                    }
+                    object.next_value::<IgnoredAny>()?;
+                }
+                Ok(ProjectPresence(present))
+            }
+        }
+
+        deserializer.deserialize_map(ProjectPresenceVisitor)
+    }
+}
+
+fn project_presence(path: &str, bytes: &[u8]) -> Result<bool, PortablePolicyViolation> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let presence = ProjectPresence::deserialize(&mut deserializer)
+        .map_err(|error| PortablePolicyViolation(format!("invalid JSON in {path}: {error}")))?;
+    deserializer
+        .end()
+        .map_err(|error| PortablePolicyViolation(format!("invalid JSON in {path}: {error}")))?;
+    Ok(presence.0)
+}
+
 fn validate_json_payload(
     manifest: &BundleManifest,
     limits: &PortableLimits,
@@ -1985,26 +2008,31 @@ fn validate_json_payload(
             "JSON entry {path} exceeds its byte limit"
         )));
     }
-    let value: Value = serde_json::from_slice(bytes)
+    let json_limits = PortableJsonLimits {
+        max_depth: limits.max_json_depth,
+        max_string_bytes: limits.max_string_bytes,
+        max_collection_items: limits.max_collection_items,
+    };
+    validate_nonsecret_portable_json_bytes(bytes, &json_limits)
         .map_err(|error| PortablePolicyViolation(format!("invalid JSON in {path}: {error}")))?;
-    validate_portable_json_value(&value, limits, 0)?;
+    let has_project = project_presence(path, bytes)?;
     match (
         manifest.schema_version == CURRENT_PORTABLE_SCHEMA_VERSION,
         manifest.bundle_kind,
         section,
-        value.get("project"),
+        has_project,
     ) {
-        (true, BundleKind::ScenarioExport, "scenarios", Some(_)) => {
+        (true, BundleKind::ScenarioExport, "scenarios", true) => {
             return Err(PortablePolicyViolation(
                 "scenario exports must omit project wrapper metadata".to_owned(),
             ));
         }
-        (true, BundleKind::FullBackup, "scenarios", None) => {
+        (true, BundleKind::FullBackup, "scenarios", false) => {
             return Err(PortablePolicyViolation(
                 "full backups must include project wrapper metadata".to_owned(),
             ));
         }
-        (true, _, "scenario-revisions", Some(_)) => {
+        (true, _, "scenario-revisions", true) => {
             return Err(PortablePolicyViolation(
                 "historical scenario revisions must omit project wrapper metadata".to_owned(),
             ));
@@ -2256,7 +2284,7 @@ impl PreparedBundlePublication {
     /// # Errors
     ///
     /// Returns a destination, cancellation, or filesystem publication error.
-    pub fn publish_cancellable(self, cancellation: &CancellationSignal) -> Result<(), ExportError> {
+    pub fn publish_cancellable(self, cancellation: &CancellationToken) -> Result<(), ExportError> {
         let mut cancelled = || cancellation.is_cancelled();
         publish_prepared_with_control(self, PublicationFailpoint::None, &mut cancelled)
     }
@@ -2272,7 +2300,7 @@ impl PreparedBundlePublication {
 pub fn prepare_bundle_atomic_cancellable(
     destination: &Path,
     bytes: &[u8],
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<PreparedBundlePublication, ExportError> {
     let mut cancelled = || cancellation.is_cancelled();
     prepare_bundle_atomic_with_control(
@@ -2305,7 +2333,7 @@ pub fn write_bundle_atomic(destination: &Path, bytes: &[u8]) -> Result<(), Expor
 pub fn write_bundle_atomic_cancellable(
     destination: &Path,
     bytes: &[u8],
-    cancellation: &CancellationSignal,
+    cancellation: &CancellationToken,
 ) -> Result<(), ExportError> {
     write_bundle_atomic_with_control(destination, bytes, PublicationFailpoint::None, || {
         cancellation.is_cancelled()
@@ -3448,7 +3476,7 @@ mod tests {
 
         let before = directory.path().join("before.eutheto");
         std::fs::write(&before, b"sentinel")?;
-        let signal = CancellationSignal::new();
+        let signal = CancellationToken::new();
         signal.cancel();
         assert!(matches!(
             write_bundle_atomic_cancellable(&before, &bundle, &signal),
@@ -3476,7 +3504,7 @@ mod tests {
         }));
 
         let normal = directory.path().join("normal.eutheto");
-        write_bundle_atomic_cancellable(&normal, &bundle, &CancellationSignal::new())?;
+        write_bundle_atomic_cancellable(&normal, &bundle, &CancellationToken::new())?;
         assert_eq!(std::fs::read(normal)?, bundle);
         Ok(())
     }

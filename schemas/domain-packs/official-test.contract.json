@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "pack": {
+    "id": "official.test",
+    "packVersion": "0.1.0",
+    "latestSchemaVersion": 1,
+    "portableSchemaVersion": 1,
+    "shareResultSchemaVersion": 1
+  },
+  "commands": [
+    {
+      "id": "official.test.configure_entity",
+      "title": {
+        "key": "official.test.command.configure_entity.title",
+        "defaultText": "Configure test entity"
+      },
+      "description": {
+        "key": "official.test.command.configure_entity.description",
+        "defaultText": "Sets the bounded Boolean and integer values used by the contract fixture."
+      },
+      "risk": "ordinaryMutation",
+      "reversibility": "inverseCommand",
+      "aiGroupingAllowed": true,
+      "payloadSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entityId", "enabled", "target"],
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "target": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          }
+        }
+      },
+      "resultSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entityId"],
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "changeSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "before", "after"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/domain/entities/"
+          },
+          "before": {},
+          "after": {}
+        }
+      },
+      "validExamples": [
+        {
+          "entityId": "018f25a7-8b3c-7d11-8000-000000000001",
+          "enabled": true,
+          "target": 3
+        }
+      ],
+      "invalidExamples": [
+        {
+          "entityId": "not-a-uuid",
+          "enabled": true,
+          "target": 11
+        }
+      ]
+    }
+  ],
+  "portableSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schemaVersion", "entities", "extensions"],
+    "properties": {
+      "schemaVersion": {
+        "const": 1
+      },
+      "entities": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "target"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "target": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10
+            }
+          }
+        }
+      },
+      "extensions": {
+        "type": "object"
+      }
+    }
+  },
+  "shareResultSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schemaVersion", "assignments"],
+    "properties": {
+      "schemaVersion": {
+        "const": 1
+      },
+      "assignments": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["assignmentId", "value"],
+          "properties": {
+            "assignmentId": {
+              "type": "string"
+            },
+            "value": {
+              "oneOf": [
+                { "type": "boolean" },
+                { "type": "integer" },
+                { "type": "null" }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "aiTools": [
+    {
+      "commandId": "official.test.configure_entity",
+      "name": "configure_test_entity",
+      "description": "Configure one synthetic contract entity with bounded values."
+    }
+  ],
+  "uiManifest": {
+    "setupSteps": [
+      {
+        "id": "official.test.setup.entity",
+        "titleKey": "official.test.setup.entity.title"
+      }
+    ],
+    "entityKinds": [
+      {
+        "id": "official.test.entity",
+        "titleKey": "official.test.entity.title"
+      }
+    ],
+    "ruleKinds": [
+      {
+        "id": "official.test.required-target",
+        "titleKey": "official.test.rule.required_target.title"
+      }
+    ],
+    "resultViews": [
+      {
+        "id": "official.test.result.summary",
+        "titleKey": "official.test.result.summary.title"
+      }
+    ],
+    "importers": [
+      {
+        "id": "official.test.import.portable-v1",
+        "titleKey": "official.test.import.title"
+      }
+    ],
+    "exporters": [
+      {
+        "id": "official.test.export.portable-v1",
+        "titleKey": "official.test.export.title"
+      }
+    ]
+  }
+}

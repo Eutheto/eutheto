@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail unless the complete, exact Phase-01 fuzz harness is present."""
+"""Fail unless the complete, exact Phase-01/02 fuzz harness is present."""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ REQUIRED_TARGETS = (
     "bundle",
     "migration_chain",
     "bundle_remap",
+    "planning_ir",
+    "integer_expression",
+    "projection",
+    "component_graph",
 )
 REQUIRED_SEEDS = {
     "migration_chain": {"historical-to-current"},
@@ -22,6 +26,10 @@ REQUIRED_SEEDS = {
         "malformed-declared-list",
         "tombstone-revision-floor",
     },
+    "planning_ir": {"canonical-empty-problem"},
+    "integer_expression": {"duplicate-terms-and-bounds"},
+    "projection": {"complete-candidate"},
+    "component_graph": {"projection-joined"},
 }
 
 

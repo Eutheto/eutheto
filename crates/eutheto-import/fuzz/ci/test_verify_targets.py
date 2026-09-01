@@ -50,14 +50,14 @@ class VerifyTargetsTests(unittest.TestCase):
             (len(REQUIRED_TARGETS), expected_seeds),
         )
 
-    def test_missing_required_target_fails(self) -> None:
-        (self.fuzz_dir / "fuzz_targets" / "migration_chain.rs").unlink()
+    def test_missing_required_phase02_target_fails(self) -> None:
+        (self.fuzz_dir / "fuzz_targets" / "planning_ir.rs").unlink()
         with self.assertRaises(HarnessError):
             verify(self.fuzz_dir)
 
     def test_manifest_omission_fails_even_when_source_exists(self) -> None:
         manifest = (self.fuzz_dir / "Cargo.toml").read_text(encoding="utf-8")
-        start = manifest.index('[[bin]]\nname = "bundle_remap"')
+        start = manifest.index('[[bin]]\nname = "component_graph"')
         (self.fuzz_dir / "Cargo.toml").write_text(manifest[:start], encoding="utf-8")
         with self.assertRaises(HarnessError):
             verify(self.fuzz_dir)

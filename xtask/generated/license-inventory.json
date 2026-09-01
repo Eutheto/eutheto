@@ -1217,6 +1217,22 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-domain-api",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-domain-api"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-domain-ir",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-domain-ir"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-export",
       "version": "0.1.0",
       "kind": "workspace",
@@ -1230,6 +1246,30 @@
       "kind": "workspace",
       "licenseConcluded": "Apache-2.0",
       "source": "crates/eutheto-import"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-planning-ir",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-planning-ir"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-solver-api",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-solver-api"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-solver-router",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-solver-router"
     },
     {
       "ecosystem": "cargo",

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "documentName": "eutheto Phase-01 workspace dependency inventory",
-  "documentNamespace": "urn:eutheto:spdx:phase-01-workspace:0.1.0",
+  "documentName": "eutheto Phase-02 workspace dependency inventory",
+  "documentNamespace": "urn:eutheto:spdx:phase-02-workspace:0.1.0",
   "created": "2026-08-30T00:00:00Z",
   "workspacePackages": [
     {
@@ -34,6 +34,20 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-domain-api",
+      "version": "0.1.0",
+      "path": "crates/eutheto-domain-api",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-domain-ir",
+      "version": "0.1.0",
+      "path": "crates/eutheto-domain-ir",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-export",
       "version": "0.1.0",
       "path": "crates/eutheto-export",
@@ -44,6 +58,27 @@
       "name": "eutheto-import",
       "version": "0.1.0",
       "path": "crates/eutheto-import",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-planning-ir",
+      "version": "0.1.0",
+      "path": "crates/eutheto-planning-ir",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-solver-api",
+      "version": "0.1.0",
+      "path": "crates/eutheto-solver-api",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-solver-router",
+      "version": "0.1.0",
+      "path": "crates/eutheto-solver-router",
       "license": "Apache-2.0"
     },
     {

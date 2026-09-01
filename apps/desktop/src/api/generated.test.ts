@@ -9,23 +9,35 @@ import type {
   ApiResponseDto,
   BackupSummaryDto,
   CatalogCommand,
+  DeferredSolverGateDto,
+  DomainPackDescriptorDto,
   FixedExclusion,
   ImportOptions,
-  PortableCountsDto,
   OmittedAssetDto,
+  PortableCountsDto,
   PortableScenarioDto,
   ProjectScope,
   ProjectSummaryDto,
+  SolverSupportMatrixDto,
   SourceBackupSelectionDto,
+  UnopenedBundlePreviewDto,
 } from "./generated";
 
 const REPRESENTATIVE_COMMANDS = [
   "app_get_info",
+  "pack_list",
+  "pack_describe",
+  "solver_list",
+  "solver_describe",
+  "solver_get_support_matrix",
+  "solver_get_deferred_gates",
   "project_list",
   "project_import_preview",
   "project_backup_create",
   "project_restore_apply",
   "scenario_apply_command",
+  "project_unopened_bundle_inspect",
+  "project_unopened_bundle_reexport",
   "settings_update",
 ] as const satisfies readonly CatalogCommand[];
 
@@ -204,6 +216,15 @@ describe("generated desktop API", () => {
       previewRestore: expect.any(Function),
       applyRestore: expect.any(Function),
       previewSupportBundle: expect.any(Function),
+      listDomainPacks: expect.any(Function),
+      describeDomainPack: expect.any(Function),
+      listSolvers: expect.any(Function),
+      describeSolver: expect.any(Function),
+      getSolverSupportMatrix: expect.any(Function),
+      getDeferredSolverGates: expect.any(Function),
+      inspectUnopenedBundle: expect.any(Function),
+      reexportUnopenedBundle: expect.any(Function),
+      cancelPortablePreview: expect.any(Function),
     });
     expect(tauri.invoke).not.toHaveBeenCalled();
   });
@@ -255,6 +276,161 @@ describe("generated desktop API", () => {
         expect.arrayContaining([expect.stringMatching(PATH_BEARING_REQUEST_KEY)]),
       );
     }
+  });
+
+  it("keeps unopened bundle bytes and native paths behind the Rust capability", async () => {
+    const previewId = "01900000-0000-7000-8000-000000000071";
+    tauri.invoke.mockResolvedValue(undefined);
+
+    await generated.inspectUnopenedBundle();
+    await generated.reexportUnopenedBundle(previewId);
+    await generated.cancelPortablePreview(previewId);
+
+    expect(tauri.invoke).toHaveBeenNthCalledWith(1, "project_unopened_bundle_inspect", {
+      request: {
+        requestId: expect.stringMatching(UUID_V7_PATTERN),
+      },
+    });
+    expect(tauri.invoke).toHaveBeenNthCalledWith(2, "project_unopened_bundle_reexport", {
+      request: {
+        requestId: expect.stringMatching(UUID_V7_PATTERN),
+        previewId,
+      },
+    });
+    expect(tauri.invoke).toHaveBeenNthCalledWith(3, "project_operation_cancel", {
+      request: {
+        requestId: expect.stringMatching(UUID_V7_PATTERN),
+        previewId,
+      },
+    });
+    for (const [, payload] of tauri.invoke.mock.calls) {
+      expect(collectKeys(payload)).not.toEqual(
+        expect.arrayContaining(["bytes", expect.stringMatching(PATH_BEARING_REQUEST_KEY)]),
+      );
+    }
+  });
+
+  it("models registry metadata, empty solver authority, and safe unopened previews", () => {
+    const pack = {
+      id: "official.test",
+      displayName: { key: "official.test.name", defaultText: "Official synthetic test pack" },
+      description: { key: "official.test.description", defaultText: "Conformance pack" },
+      packVersion: "0.1.0",
+      scenarioVersions: { latest: 1, migratableFrom: [0] },
+      iconId: "official.test",
+      capabilities: ["commands", "portableData"],
+      portableSchemaVersion: 1,
+      portableCapabilities: [],
+      shareResultSchemaVersion: 1,
+      documentationUrl: null,
+      license: { spdxExpression: "Apache-2.0", attribution: "Eutheto contributors" },
+      syntheticTestOnly: true,
+    } satisfies DomainPackDescriptorDto;
+    const matrix = {
+      schemaVersion: 1,
+      planningIrSchemaVersion: 1,
+      features: [
+        {
+          id: "solve.cancellation",
+          category: "solve",
+          gate: { kind: "unconditional" },
+        },
+      ],
+      productionBackendIds: [],
+      backendColumns: [],
+    } satisfies SolverSupportMatrixDto;
+    const deferred = [
+      { backendId: "solver.ortools-cp-sat", candidateVersion: "9.15", owningPhase: 3 },
+      { backendId: "solver.pumpkin", candidateVersion: "0.5.0", owningPhase: 8 },
+    ] satisfies readonly DeferredSolverGateDto[];
+    const unopened = {
+      previewId: "01900000-0000-7000-8000-000000000071",
+      metadata: {
+        fileSha256: "a".repeat(64),
+        format: "eutheto/bundle",
+        formatVersion: 2,
+        portableSchemaVersion: 3,
+        bundleKind: "scenario-export",
+        title: "Newer unopened bundle",
+        requiredCapabilities: [{ id: "future.pack", version: 2 }],
+        scenarios: [
+          {
+            path: "scenarios/01900000-0000-7000-8000-000000000072.json",
+            scenarioId: "01900000-0000-7000-8000-000000000072",
+            packId: "future.pack",
+            packSchemaVersion: 4,
+          },
+        ],
+      },
+    } satisfies UnopenedBundlePreviewDto;
+
+    expect(pack.id).toBe("official.test");
+    expect(matrix.productionBackendIds).toEqual([]);
+    expect(matrix.backendColumns).toEqual([]);
+    expect(deferred.map(({ backendId }) => backendId)).toEqual([
+      "solver.ortools-cp-sat",
+      "solver.pumpkin",
+    ]);
+    expect(collectKeys(unopened)).not.toContain("bytes");
+  });
+
+  it("preserves exact unsupported and degraded solver matrix cells", async () => {
+    const matrix = {
+      schemaVersion: 1,
+      planningIrSchemaVersion: 1,
+      features: [
+        {
+          id: "primitive.fixture-unsupported",
+          category: "primitive",
+          gate: { kind: "unconditional" },
+        },
+        {
+          id: "solve.fixture-degraded",
+          category: "solve",
+          gate: { kind: "enabled", gateId: "phase.fixture" },
+        },
+      ],
+      productionBackendIds: ["solver.fixture"],
+      backendColumns: [
+        {
+          backendId: "solver.fixture",
+          backendVersion: "0.0-fixture",
+          adapterVersion: "adapter-fixture-v2",
+          cells: [
+            {
+              featureId: "primitive.fixture-unsupported",
+              support: "unsupported",
+              reason: "Fixture unsupported reason",
+              remediation: "Choose the fixture alternative",
+              fixtureId: "fixture.unsupported-exact",
+            },
+            {
+              featureId: "solve.fixture-degraded",
+              support: "degraded",
+              restrictionId: "restriction.fixture-cap",
+              reason: "Fixture degradation reason",
+              remediation: "Use the unrestricted fixture mode",
+              fixtureId: "fixture.degraded-exact",
+            },
+          ],
+        },
+      ],
+    } satisfies SolverSupportMatrixDto;
+    const response = {
+      schemaVersion: generated.API_SCHEMA_VERSION,
+      requestId: "01900000-0000-7000-8000-000000000070",
+      currentRevision: null,
+      warnings: [],
+      result: matrix,
+    } satisfies ApiResponseDto<SolverSupportMatrixDto>;
+    tauri.invoke.mockResolvedValue(response);
+
+    const actual = await generated.getSolverSupportMatrix();
+
+    expect(tauri.invoke).toHaveBeenCalledWith("solver_get_support_matrix", {
+      request: { requestId: expect.stringMatching(UUID_V7_PATTERN) },
+    });
+    expect(actual.result.backendColumns).toEqual(matrix.backendColumns);
   });
 
   it("preserves the maximum safe revision exactly in invoke payloads", async () => {

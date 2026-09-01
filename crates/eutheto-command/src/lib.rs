@@ -3,21 +3,29 @@
 //! This crate deliberately owns no persistence. Callers pass an immutable
 //! document and revision and receive a replacement document plus journal-ready
 //! metadata. The input is never modified, including on batch failure.
+mod generated_official_test_pack_contract;
+mod official_test_pack;
 
+use eutheto_domain_api::{
+    DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainPack, DomainPackError,
+    DomainPackRegistry,
+};
 use eutheto_types::{
     AddEntity, AddRule, AssignmentId, Change, ChangeKind, ChangeSet, CommandBatch, CommandEnvelope,
     CommandResult, DomainCommandEnvelope, LockAssignment, PersonId, PortableJsonLimits, Revision,
     RuleId, ScenarioCommand, ScenarioDocument, SetPreference, UnlockAssignment, UpdateEntity,
     UpdateRule, ValidationDelta, ValidationIssue, validate_nonsecret_portable_json,
 };
+/// Generated authoritative metadata for the synthetic conformance pack.
+pub use generated_official_test_pack_contract::{
+    OFFICIAL_TEST_COMMAND_IDS, OFFICIAL_TEST_PACK_CONTRACT_JSON, OFFICIAL_TEST_PACK_ID,
+    OFFICIAL_TEST_PACK_VERSION,
+};
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
-/// The only concrete domain pack available in Phase 01.
-pub const OFFICIAL_TEST_PACK_ID: &str = "official.test";
 /// Protects pure application from adversarially deep nested batches.
 pub const MAX_BATCH_DEPTH: usize = 8;
 /// Bounds total leaf commands in one atomic batch.
@@ -103,68 +111,30 @@ impl CommandError {
     }
 }
 
-/// Effect returned by a domain-pack implementation for one non-batch command.
+/// Effect produced while applying one non-batch command to a private working copy.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PackCommandEffect {
-    pub changes: Vec<Change>,
-    pub inverse: ScenarioCommand,
-    pub summary: String,
-    pub command_type: String,
+struct PackCommandEffect {
+    changes: Vec<Change>,
+    inverse: ScenarioCommand,
+    summary: String,
+    command_type: String,
 }
 
-/// Pure seam implemented by future domain packs.
-pub trait DomainPackApplication {
-    /// Stable pack identifier handled by this implementation.
-    fn pack_id(&self) -> &str;
-
-    /// Apply one non-batch command to a private working copy.
-    ///
-    /// The engine discards the copy if this method returns an error.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommandError::Validation`] when the command references a
-    /// missing or duplicate entity, rule, or lock, or violates record-shape
-    /// invariants.  Returns [`CommandError::Unsupported`] when the pack
-    /// cannot handle the supplied command variant.
-    fn apply(
-        &self,
-        document: &mut ScenarioDocument,
-        command: &ScenarioCommand,
-    ) -> Result<PackCommandEffect, CommandError>;
-}
-
-/// Fast, deterministic validation seam implemented by future packs.
-pub trait FastValidator {
-    /// Report current issues in deterministic order.
-    fn validate(&self, document: &ScenarioDocument) -> Vec<ValidationIssue>;
-}
-
-/// Phase-01 generic pack handler.
+/// Synthetic Phase-02 conformance pack. It is never a production domain or authority.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OfficialTestPack;
 
-impl FastValidator for OfficialTestPack {
-    fn validate(&self, _document: &ScenarioDocument) -> Vec<ValidationIssue> {
-        Vec::new()
-    }
+/// Builds the validated deterministic compiled-in pack registry.
+///
+/// # Errors
+/// Returns a descriptor/catalog contract error if generated static metadata has drifted.
+pub fn official_registry() -> Result<DomainPackRegistry, DomainPackError> {
+    DomainPackRegistry::builder()
+        .register(OfficialTestPack)
+        .build()
 }
 
-impl DomainPackApplication for OfficialTestPack {
-    fn pack_id(&self) -> &str {
-        OFFICIAL_TEST_PACK_ID
-    }
-
-    fn apply(
-        &self,
-        document: &mut ScenarioDocument,
-        command: &ScenarioCommand,
-    ) -> Result<PackCommandEffect, CommandError> {
-        apply_official_test_leaf(document, command)
-    }
-}
-
-/// Apply using the sole concrete Phase-01 pack implementation.
+/// Apply using the validated compiled-in Phase-02 pack registry.
 ///
 /// The function performs no I/O, does not mutate `document`, increments the
 /// revision exactly once (including for a batch), and returns no document on
@@ -172,41 +142,31 @@ impl DomainPackApplication for OfficialTestPack {
 ///
 /// # Errors
 ///
-/// Propagates [`CommandError::ScenarioMismatch`],
-/// [`CommandError::Conflict`], [`CommandError::Unsupported`], and
-/// [`CommandError::RevisionOverflow`] for envelope/precondition
-/// failures.  Returns [`CommandError::Validation`] when the batch
-/// exceeds depth or size limits, or when any leaf command fails.
+/// Propagates typed command precondition, pack-dispatch, validation, and
+/// revision-overflow failures.
 pub fn apply_command(
     document: &ScenarioDocument,
     current_revision: Revision,
     envelope: &CommandEnvelope,
 ) -> Result<AppliedCommand, CommandError> {
-    let pack = OfficialTestPack;
-    apply_command_with(document, current_revision, envelope, &pack, &pack)
+    let registry = official_registry().map_err(|error| domain_pack_error(&error))?;
+    apply_command_with_registry(document, current_revision, envelope, &registry)
 }
 
-/// Apply with explicitly supplied future pack and fast-validation seams.
+/// Apply using an already validated Phase-02 compiled-in pack registry.
+///
+/// Application services should retain one registry and pass it here rather
+/// than rebuilding static metadata for every command.
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::ScenarioMismatch`] when the envelope targets
-/// a different scenario, [`CommandError::Conflict`] on revision
-/// mismatch, [`CommandError::Unsupported`] when the pack id does not
-/// match the document, and [`CommandError::Validation`] for structural
-/// or batch-limit violations.  [`CommandError::RevisionOverflow`] is
-/// returned when the revision counter cannot advance.
-pub fn apply_command_with<P, V>(
+/// Returns the same typed failures as [`apply_command`].
+pub fn apply_command_with_registry(
     document: &ScenarioDocument,
     current_revision: Revision,
     envelope: &CommandEnvelope,
-    pack: &P,
-    validator: &V,
-) -> Result<AppliedCommand, CommandError>
-where
-    P: DomainPackApplication + ?Sized,
-    V: FastValidator + ?Sized,
-{
+    registry: &DomainPackRegistry,
+) -> Result<AppliedCommand, CommandError> {
     validate_safe_serialized(&envelope.command, "/command")?;
     if envelope.scenario_id != document.scenario_id {
         return Err(CommandError::ScenarioMismatch {
@@ -221,7 +181,20 @@ where
         });
     }
 
-    if document.domain_pack.id.as_str() != pack.pack_id() {
+    let pack =
+        registry
+            .require(&document.domain_pack.id)
+            .map_err(|_| CommandError::Unsupported {
+                pack_id: document.domain_pack.id.to_string(),
+                command_type: command_type(&envelope.command),
+            })?;
+    let supports_schema = registry.descriptors().any(|descriptor| {
+        descriptor.id == document.domain_pack.id
+            && descriptor
+                .scenario_versions
+                .supports(document.domain_pack.schema_version)
+    });
+    if !supports_schema {
         return Err(CommandError::Unsupported {
             pack_id: document.domain_pack.id.to_string(),
             command_type: command_type(&envelope.command),
@@ -229,12 +202,12 @@ where
     }
 
     validate_document_shape(document)?;
-    let before_issues = validator.validate(document);
+    let before_issues = pack.validate_fast(document).issues;
     let mut working = document.clone();
     let mut leaf_count = 0_usize;
     let effect = apply_nested(&mut working, &envelope.command, pack, 0, &mut leaf_count)?;
     validate_document_shape(&working)?;
-    let after_issues = validator.validate(&working);
+    let after_issues = pack.validate_fast(&working).issues;
     let validation_delta = validation_delta(&before_issues, &after_issues);
     let new_revision =
         current_revision
@@ -258,10 +231,10 @@ where
     })
 }
 
-fn apply_nested<P: DomainPackApplication + ?Sized>(
+fn apply_nested(
     document: &mut ScenarioDocument,
     command: &ScenarioCommand,
-    pack: &P,
+    pack: &dyn DomainPack,
     depth: usize,
     leaf_count: &mut usize,
 ) -> Result<PackCommandEffect, CommandError> {
@@ -276,13 +249,24 @@ fn apply_nested<P: DomainPackApplication + ?Sized>(
             format!("batch may contain at most {MAX_BATCH_COMMANDS} commands"),
         ));
     }
-    pack.apply(document, command)
+    match command {
+        ScenarioCommand::ApplyDomainCommand(envelope) => {
+            apply_registered_domain_command(document, envelope, pack)
+        }
+        _ if document.domain_pack.id.as_str() == OFFICIAL_TEST_PACK_ID => {
+            apply_official_test_leaf(document, command)
+        }
+        _ => Err(CommandError::Unsupported {
+            pack_id: document.domain_pack.id.to_string(),
+            command_type: command_type(command),
+        }),
+    }
 }
 
-fn apply_batch<P: DomainPackApplication + ?Sized>(
+fn apply_batch(
     document: &mut ScenarioDocument,
     batch: &CommandBatch,
-    pack: &P,
+    pack: &dyn DomainPack,
     depth: usize,
     leaf_count: &mut usize,
 ) -> Result<PackCommandEffect, CommandError> {
@@ -339,12 +323,13 @@ fn apply_official_test_leaf(
         ScenarioCommand::SetPreference(value) => set_preference(document, value),
         ScenarioCommand::LockAssignment(value) => lock_assignment(document, value),
         ScenarioCommand::UnlockAssignment(value) => unlock_assignment(document, value),
-        ScenarioCommand::ApplyDomainCommand(value) => apply_domain_command(document, value),
-        ScenarioCommand::ApplyBatch(_) => Err(validation_error(
-            CODE_INVALID_RECORD_SHAPE,
-            "/command",
-            "the command engine, not a pack, must apply batches",
-        )),
+        ScenarioCommand::ApplyDomainCommand(_) | ScenarioCommand::ApplyBatch(_) => {
+            Err(validation_error(
+                CODE_INVALID_RECORD_SHAPE,
+                "/command",
+                "the command engine, not the legacy leaf applicator, must dispatch this command",
+            ))
+        }
     }
 }
 
@@ -624,77 +609,109 @@ fn unlock_assignment(
     ))
 }
 
-fn apply_domain_command(
+fn apply_registered_domain_command(
     document: &mut ScenarioDocument,
     envelope: &DomainCommandEnvelope,
+    pack: &dyn DomainPack,
 ) -> Result<PackCommandEffect, CommandError> {
-    let command = match envelope.command_type.as_str() {
-        "add_entity" => ScenarioCommand::AddEntity(decode_domain(envelope)?),
-        "update_entity" => ScenarioCommand::UpdateEntity(decode_domain(envelope)?),
-        "remove_entity" => ScenarioCommand::RemoveEntity(decode_domain(envelope)?),
-        "add_rule" => ScenarioCommand::AddRule(decode_domain(envelope)?),
-        "update_rule" => ScenarioCommand::UpdateRule(decode_domain(envelope)?),
-        "remove_rule" => ScenarioCommand::RemoveRule(decode_domain(envelope)?),
-        "set_preference" => ScenarioCommand::SetPreference(decode_domain(envelope)?),
-        "lock_assignment" => ScenarioCommand::LockAssignment(decode_domain(envelope)?),
-        "unlock_assignment" => ScenarioCommand::UnlockAssignment(decode_domain(envelope)?),
-        _ => {
-            return Err(CommandError::Unsupported {
-                pack_id: OFFICIAL_TEST_PACK_ID.to_owned(),
-                command_type: envelope.command_type.clone(),
-            });
-        }
+    let batch = DomainBatchCommand {
+        schema_version: DOMAIN_BATCH_SCHEMA_VERSION,
+        pack_id: document.domain_pack.id.clone(),
+        scenario_schema_version: document.domain_pack.schema_version,
+        label: None,
+        commands: vec![envelope.clone()],
     };
-    let underlying = apply_official_test_leaf(document, &command)?;
-    let inverse = domain_inverse(underlying.inverse)?;
+    let mutation = pack
+        .apply_batch(document, &batch)
+        .map_err(|error| match error {
+            DomainPackError::PackUnavailable(_) | DomainPackError::UnknownCommand(_) => {
+                CommandError::Unsupported {
+                    pack_id: document.domain_pack.id.to_string(),
+                    command_type: envelope.command_type.clone(),
+                }
+            }
+            DomainPackError::InvalidPayload { message, .. } => CommandError::InvalidDomainPayload {
+                command_type: envelope.command_type.clone(),
+                message,
+            },
+            other => domain_pack_error(&other),
+        })?;
+    let changes = mutation
+        .changes
+        .into_iter()
+        .map(|change| domain_change(&change.value))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut inverses = mutation.inverse.commands;
+    if inverses.len() != 1 {
+        return Err(validation_error(
+            CODE_INVALID_RECORD_SHAPE,
+            "/inverse/commands",
+            "one domain command must produce exactly one inverse command",
+        ));
+    }
+    let Some(inverse) = inverses.pop() else {
+        return Err(validation_error(
+            CODE_INVALID_RECORD_SHAPE,
+            "/inverse/commands",
+            "domain-pack inverse command is missing",
+        ));
+    };
+    *document = mutation.document;
     Ok(PackCommandEffect {
-        changes: underlying.changes,
+        changes,
         inverse: ScenarioCommand::ApplyDomainCommand(inverse),
         summary: format!("Apply {} domain command", envelope.command_type),
         command_type: format!("domain.{}", envelope.command_type),
     })
 }
 
-fn decode_domain<T: DeserializeOwned>(envelope: &DomainCommandEnvelope) -> Result<T, CommandError> {
-    serde_json::from_value(envelope.payload.clone()).map_err(|error| {
-        CommandError::InvalidDomainPayload {
-            command_type: envelope.command_type.clone(),
-            message: error.to_string(),
-        }
-    })
-}
-
-fn domain_inverse(command: ScenarioCommand) -> Result<DomainCommandEnvelope, CommandError> {
-    let command_type = command_type(&command);
-    let payload = match command {
-        ScenarioCommand::AddEntity(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::UpdateEntity(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::RemoveEntity(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::AddRule(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::UpdateRule(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::RemoveRule(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::SetPreference(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::LockAssignment(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::UnlockAssignment(value) => encode_domain(value, &command_type)?,
-        ScenarioCommand::ApplyDomainCommand(value) => return Ok(value),
-        ScenarioCommand::ApplyBatch(_) => {
-            return Err(CommandError::Unsupported {
-                pack_id: OFFICIAL_TEST_PACK_ID.to_owned(),
-                command_type,
-            });
-        }
+fn domain_change(value: &Value) -> Result<Change, CommandError> {
+    let object = value.as_object().ok_or_else(|| {
+        validation_error(
+            CODE_INVALID_RECORD_SHAPE,
+            "/domainChange",
+            "domain-pack change must be an object",
+        )
+    })?;
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|path| path.starts_with('/'))
+        .ok_or_else(|| {
+            validation_error(
+                CODE_INVALID_RECORD_SHAPE,
+                "/domainChange/path",
+                "domain-pack change path must be absolute",
+            )
+        })?
+        .to_owned();
+    let before = object
+        .get("before")
+        .filter(|value| !value.is_null())
+        .cloned();
+    let after = object
+        .get("after")
+        .filter(|value| !value.is_null())
+        .cloned();
+    let kind = match (&before, &after) {
+        (None, Some(_)) => ChangeKind::Added,
+        (Some(_), None) => ChangeKind::Removed,
+        _ => ChangeKind::Updated,
     };
-    Ok(DomainCommandEnvelope {
-        command_type,
-        payload,
+    Ok(Change {
+        kind,
+        path,
+        before,
+        after,
     })
 }
 
-fn encode_domain<T: Serialize>(value: T, command_type: &str) -> Result<Value, CommandError> {
-    serde_json::to_value(value).map_err(|error| CommandError::InvalidDomainPayload {
-        command_type: command_type.to_owned(),
-        message: error.to_string(),
-    })
+fn domain_pack_error(error: &DomainPackError) -> CommandError {
+    validation_error(
+        CODE_INVALID_RECORD_SHAPE,
+        "/domainPack",
+        format!("domain-pack contract rejected the operation: {error}"),
+    )
 }
 
 fn effect(
@@ -718,10 +735,10 @@ fn effect(
         command_type: command_type.to_owned(),
     }
 }
-/// Validate the structural invariants required by the official Phase-01 command seam.
+/// Validate generic structural invariants before pack-owned typed validation.
 ///
-/// This is used by import staging as well as command application so malformed
-/// records are rejected before they can reach persistence.
+/// Import staging and command application share this narrow private-data check
+/// so malformed records cannot reach persistence or a pack decoder.
 ///
 /// # Errors
 ///

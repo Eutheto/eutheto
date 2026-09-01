@@ -1,13 +1,12 @@
 use eutheto_command::{
     CODE_DUPLICATE_ENTITY, CODE_MISSING_ENTITY, CODE_PROHIBITED_DATA, CODE_RECORD_ID_MISMATCH,
-    CommandError, FastValidator, OFFICIAL_TEST_PACK_ID, OfficialTestPack, apply_command,
-    apply_command_with, command_type, human_summary,
+    CommandError, OFFICIAL_TEST_PACK_ID, apply_command, apply_command_with_registry, command_type,
+    human_summary, official_registry,
 };
 use eutheto_types::{
     ActorRef, AddEntity, AddRule, AssignmentId, CommandBatch, CommandEnvelope, CommandId,
     CommandSource, DomainCommandEnvelope, LockAssignment, PersonId, Revision, RuleId,
     ScenarioCommand, ScenarioDocument, SetPreference, UnlockAssignment, UpdateEntity, UpdateRule,
-    ValidationIssue, ValidationSeverity,
 };
 use serde_json::{Value, json};
 use std::error::Error;
@@ -286,22 +285,31 @@ fn batch_is_atomic_and_inverse_runs_in_reverse_order() -> Result<(), Box<dyn Err
 }
 
 #[test]
-fn domain_command_uses_the_pack_seam_and_is_reversible() -> Result<(), Box<dyn Error>> {
-    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+fn domain_command_uses_the_phase_02_pack_and_is_reversible() -> Result<(), Box<dyn Error>> {
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
     let revision = Revision::new(0);
     let entity_id = PersonId::from_str(ENTITY_ID)?;
-    let payload = serde_json::to_value(AddEntity {
+    scenario.domain.entities.insert(
         entity_id,
-        value: json!({ "name": "Domain-added" }),
-    })?;
+        json!({ "id": entity_id, "enabled": false, "target": 0 }),
+    );
     let command = ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
-        command_type: "add_entity".to_owned(),
-        payload,
+        command_type: "official.test.configure_entity".to_owned(),
+        payload: json!({ "entityId": entity_id, "enabled": true, "target": 4 }),
     });
-    assert_eq!(command_type(&command), "domain.add_entity");
-    assert_eq!(human_summary(&command), "Apply add_entity domain command");
+    assert_eq!(
+        command_type(&command),
+        "domain.official.test.configure_entity"
+    );
+    assert_eq!(
+        human_summary(&command),
+        "Apply official.test.configure_entity domain command"
+    );
     let applied = apply(&scenario, revision, command)?;
-    assert_eq!(applied.command_type, "domain.add_entity");
+    assert_eq!(
+        applied.command_type,
+        "domain.official.test.configure_entity"
+    );
     let inverse = applied.result.inverse.ok_or("domain inverse is required")?;
     assert!(matches!(inverse, ScenarioCommand::ApplyDomainCommand(_)));
     let restored = apply(&applied.document, applied.result.new_revision, inverse)?;
@@ -337,17 +345,20 @@ fn unsupported_pack_and_domain_commands_are_typed_failures() -> Result<(), Box<d
         &scenario,
         revision,
         ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
-            command_type: "future_solver_action".to_owned(),
+            command_type: "official.test.future_solver_action".to_owned(),
             payload: Value::Object(serde_json::Map::default()),
         }),
     )
     .err()
     .ok_or("unknown domain command must fail")?;
-    assert!(matches!(
-        error.downcast_ref::<CommandError>(),
-        Some(CommandError::Unsupported { command_type, .. })
-            if command_type == "future_solver_action"
-    ));
+    assert!(
+        matches!(
+            error.downcast_ref::<CommandError>(),
+            Some(CommandError::Unsupported { command_type, .. })
+                if command_type == "official.test.future_solver_action"
+        ),
+        "unexpected error: {error:?}"
+    );
     Ok(())
 }
 
@@ -426,38 +437,23 @@ fn validation_codes_and_application_are_stable_and_deterministic() -> Result<(),
     Ok(())
 }
 
-struct EntityPresenceValidator;
-
-impl FastValidator for EntityPresenceValidator {
-    fn validate(&self, document: &ScenarioDocument) -> Vec<ValidationIssue> {
-        if document.domain.entities.is_empty() {
-            Vec::new()
-        } else {
-            vec![ValidationIssue {
-                code: "official.test.entity_present".to_owned(),
-                severity: ValidationSeverity::Info,
-                message: "The test scenario contains an entity".to_owned(),
-                field_path: Some("/domain/entities".to_owned()),
-                resource: None,
-            }]
-        }
-    }
-}
-
 #[test]
-fn fast_validation_delta_tracks_added_and_resolved_codes() -> Result<(), Box<dyn Error>> {
-    let scenario = document(OFFICIAL_TEST_PACK_ID)?;
+fn fast_validation_is_derived_from_the_registered_phase_02_pack() -> Result<(), Box<dyn Error>> {
+    let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
     let revision = Revision::new(0);
     let entity_id = PersonId::from_str(ENTITY_ID)?;
-    let command = ScenarioCommand::AddEntity(AddEntity {
+    scenario.domain.entities.insert(
         entity_id,
-        value: json!({ "name": "Ada" }),
+        json!({ "id": entity_id, "enabled": false, "target": 0 }),
+    );
+    let command = ScenarioCommand::ApplyDomainCommand(DomainCommandEnvelope {
+        command_type: "official.test.configure_entity".to_owned(),
+        payload: json!({ "entityId": entity_id, "enabled": true, "target": 2 }),
     });
     let command_envelope = envelope(scenario.scenario_id, revision, command)?;
-    let pack = OfficialTestPack;
-    let validator = EntityPresenceValidator;
-    let applied = apply_command_with(&scenario, revision, &command_envelope, &pack, &validator)?;
-    assert_eq!(applied.result.validation_delta.added.len(), 1);
+    let registry = official_registry()?;
+    let applied = apply_command_with_registry(&scenario, revision, &command_envelope, &registry)?;
+    assert!(applied.result.validation_delta.added.is_empty());
     assert!(applied.result.validation_delta.resolved.is_empty());
 
     let inverse = applied.result.inverse.ok_or("inverse is required")?;
@@ -466,18 +462,14 @@ fn fast_validation_delta_tracks_added_and_resolved_codes() -> Result<(), Box<dyn
         applied.result.new_revision,
         inverse,
     )?;
-    let restored = apply_command_with(
+    let restored = apply_command_with_registry(
         &applied.document,
         applied.result.new_revision,
         &inverse_envelope,
-        &pack,
-        &validator,
+        &registry,
     )?;
     assert!(restored.result.validation_delta.added.is_empty());
-    assert_eq!(
-        restored.result.validation_delta.resolved,
-        vec!["official.test.entity_present".to_owned()]
-    );
+    assert!(restored.result.validation_delta.resolved.is_empty());
     Ok(())
 }
 

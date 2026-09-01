@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "school.phase02-mini-infeasible",
+  "section": {
+    "id": "school.section.s1",
+    "teacherId": "school.teacher.t1",
+    "cohortId": "school.cohort.c1",
+    "size": 40
+  },
+  "occurrences": [
+    {
+      "id": "school.occurrence.s1-lecture",
+      "kind": "lecture",
+      "requiredCount": 1,
+      "requiredEquipment": "projector"
+    },
+    {
+      "id": "school.occurrence.s1-lab",
+      "kind": "lab",
+      "requiredCount": 1,
+      "requiredEquipment": "lab"
+    }
+  ],
+  "rooms": [
+    {
+      "id": "school.room.lecture",
+      "capacity": 30,
+      "equipment": ["projector"]
+    },
+    {
+      "id": "school.room.lab",
+      "capacity": 20,
+      "equipment": ["lab"]
+    }
+  ],
+  "periods": [0, 1, 2, 3],
+  "patterns": [
+    {
+      "id": "school.pattern.early",
+      "lecturePeriod": 0,
+      "labPeriod": 2
+    },
+    {
+      "id": "school.pattern.late",
+      "lecturePeriod": 1,
+      "labPeriod": 3
+    }
+  ],
+  "linkedRule": {
+    "id": "school.rule.lecture-before-lab",
+    "minimumSeparation": 2
+  }
+}

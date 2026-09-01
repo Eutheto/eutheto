@@ -22,7 +22,6 @@ node_modules/
 test-results/
 playwright-report/
 allure-results/
-.wdio/
 
 # Native and CMake builds
 /build/

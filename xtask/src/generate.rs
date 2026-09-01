@@ -18,6 +18,12 @@ const COMMAND_CATALOG: &[&str] = &[
     "app_check_for_update",
     "app_install_update",
     "app_get_license_inventory",
+    "pack_list",
+    "pack_describe",
+    "solver_list",
+    "solver_describe",
+    "solver_get_support_matrix",
+    "solver_get_deferred_gates",
     "project_list",
     "project_get_metadata",
     "project_create",
@@ -34,6 +40,8 @@ const COMMAND_CATALOG: &[&str] = &[
     "project_restore_preview",
     "project_restore_apply",
     "project_operation_cancel",
+    "project_unopened_bundle_inspect",
+    "project_unopened_bundle_reexport",
     "scenario_get_summary",
     "scenario_get_setup_status",
     "scenario_get_view",
@@ -239,6 +247,198 @@ export interface SupportPreviewDto {
   readonly schemas: SupportSchemaMetadataDto;
   readonly library: SupportLibraryMetadataDto;
   readonly directories: SupportDirectoryMetadataDto;
+}
+export interface LocalizedTextDto {
+  readonly key: string;
+  readonly defaultText: string;
+}
+
+export type DomainCapability =
+  | "commands"
+  | "compilation"
+  | "projection"
+  | "verification"
+  | "scoring"
+  | "portableData"
+  | "shareResult"
+  | "uiManifest"
+  | "aiTools";
+
+export interface DomainPackDescriptorDto {
+  readonly id: string;
+  readonly displayName: LocalizedTextDto;
+  readonly description: LocalizedTextDto;
+  readonly packVersion: string;
+  readonly scenarioVersions: {
+    readonly latest: number;
+    readonly migratableFrom: readonly number[];
+  };
+  readonly iconId: string;
+  readonly capabilities: readonly DomainCapability[];
+  readonly portableSchemaVersion: number;
+  readonly portableCapabilities: readonly string[];
+  readonly shareResultSchemaVersion: number;
+  readonly documentationUrl: string | null;
+  readonly license: {
+    readonly spdxExpression: string;
+    readonly attribution: string;
+  };
+  readonly syntheticTestOnly: boolean;
+}
+
+export interface DomainCommandDescriptorDto {
+  readonly id: string;
+  readonly title: LocalizedTextDto;
+  readonly description: LocalizedTextDto;
+  readonly risk: "ordinaryMutation" | "destructiveMutation";
+  readonly reversibility: "inverseCommand" | "irreversible";
+  readonly aiGroupingAllowed: boolean;
+  readonly payloadSchema: JsonValue;
+  readonly resultSchema: JsonValue;
+  readonly changeSchema: JsonValue;
+  readonly validExamples: readonly JsonValue[];
+  readonly invalidExamples: readonly JsonValue[];
+}
+
+export interface DomainKindDescriptorDto {
+  readonly id: string;
+  readonly title: LocalizedTextDto;
+  readonly description: LocalizedTextDto;
+}
+
+export interface DomainCatalogDto {
+  readonly packId: string;
+  readonly scenarioSchemaVersion: number;
+  readonly portableSchema: JsonValue;
+  readonly shareResultSchema: JsonValue;
+  readonly commands: readonly DomainCommandDescriptorDto[];
+  readonly aiTools: readonly {
+    readonly commandId: string;
+    readonly name: string;
+    readonly description: string;
+    readonly inputSchema: JsonValue;
+    readonly validExamples: readonly JsonValue[];
+  }[];
+  readonly ui: {
+    readonly setupSteps: readonly DomainKindDescriptorDto[];
+    readonly entityKinds: readonly DomainKindDescriptorDto[];
+    readonly ruleKinds: readonly DomainKindDescriptorDto[];
+    readonly goalKinds: readonly DomainKindDescriptorDto[];
+    readonly scoreKinds: readonly {
+      readonly id: string;
+      readonly title: LocalizedTextDto;
+      readonly minimize: boolean;
+    }[];
+    readonly provenanceKinds: readonly DomainKindDescriptorDto[];
+    readonly resultViews: readonly DomainKindDescriptorDto[];
+    readonly importers: readonly {
+      readonly id: string;
+      readonly title: LocalizedTextDto;
+      readonly schemaVersion: number;
+    }[];
+    readonly exporters: readonly {
+      readonly id: string;
+      readonly title: LocalizedTextDto;
+      readonly schemaVersion: number;
+    }[];
+  };
+}
+
+export interface DomainPackMetadataDto {
+  readonly descriptor: DomainPackDescriptorDto;
+  readonly catalog: DomainCatalogDto;
+}
+
+export interface SolverDescriptorDto {
+  readonly id: string;
+  readonly displayName: string;
+  readonly version: string;
+  readonly adapterVersion: string;
+  readonly distribution: "builtIn" | "bundledWorker" | "userProvided";
+  readonly license: {
+    readonly spdxExpression: string;
+    readonly licenseName: string;
+    readonly sourceUrl: string | null;
+  };
+  readonly stability: "stable" | "beta" | "experimental";
+  readonly capabilities: {
+    readonly supported: readonly string[];
+    readonly degraded: readonly string[];
+  };
+}
+
+export type SupportFeatureCategory = "primitive" | "objective" | "projection" | "solve";
+export type SupportFeatureGate =
+  { readonly kind: "unconditional" } | { readonly kind: "enabled"; readonly gateId: string };
+
+export interface SolverSupportFeatureDto {
+  readonly id: string;
+  readonly category: SupportFeatureCategory;
+  readonly gate: SupportFeatureGate;
+}
+
+export type SolverSupportCellDto =
+  | {
+      readonly featureId: string;
+      readonly support: "supported";
+      readonly fixtureId: string;
+    }
+  | {
+      readonly featureId: string;
+      readonly support: "degraded";
+      readonly restrictionId: string;
+      readonly reason: string;
+      readonly remediation: string;
+      readonly fixtureId: string;
+    }
+  | {
+      readonly featureId: string;
+      readonly support: "unsupported";
+      readonly reason: string;
+      readonly remediation: string;
+      readonly fixtureId: string;
+    };
+
+export interface SolverSupportBackendColumnDto {
+  readonly backendId: string;
+  readonly backendVersion: string;
+  readonly adapterVersion: string;
+  readonly cells: readonly SolverSupportCellDto[];
+}
+
+export interface SolverSupportMatrixDto {
+  readonly schemaVersion: number;
+  readonly planningIrSchemaVersion: number;
+  readonly features: readonly SolverSupportFeatureDto[];
+  readonly productionBackendIds: readonly string[];
+  readonly backendColumns: readonly SolverSupportBackendColumnDto[];
+}
+
+export interface DeferredSolverGateDto {
+  readonly backendId: string;
+  readonly candidateVersion: string;
+  readonly owningPhase: number;
+}
+
+export interface UnopenedBundleMetadataDto {
+  readonly fileSha256: string;
+  readonly format: string;
+  readonly formatVersion: number;
+  readonly portableSchemaVersion: number;
+  readonly bundleKind: string | null;
+  readonly title: string | null;
+  readonly requiredCapabilities: readonly PortableCapabilityDto[];
+  readonly scenarios: readonly {
+    readonly path: string;
+    readonly scenarioId: string | null;
+    readonly packId: string | null;
+    readonly packSchemaVersion: number | null;
+  }[];
+}
+
+export interface UnopenedBundlePreviewDto {
+  readonly previewId: UuidV7;
+  readonly metadata: UnopenedBundleMetadataDto;
 }
 
 export interface DomainPackRef {
@@ -705,6 +905,31 @@ export function getAppPathsSummary(): Promise<ApiResponseDto<AppPathsSummaryDto>
 export function previewSupportBundle(): Promise<ApiResponseDto<SupportPreviewDto>> {
   return call("app_create_support_bundle_preview", { requestId: newRequestId() });
 }
+export function listDomainPacks(): Promise<ApiResponseDto<readonly DomainPackDescriptorDto[]>> {
+  return call("pack_list", { requestId: newRequestId() });
+}
+
+export function describeDomainPack(packId: string): Promise<ApiResponseDto<DomainPackMetadataDto>> {
+  return call("pack_describe", { requestId: newRequestId(), packId });
+}
+
+export function listSolvers(): Promise<ApiResponseDto<readonly SolverDescriptorDto[]>> {
+  return call("solver_list", { requestId: newRequestId() });
+}
+
+export function describeSolver(backendId: string): Promise<ApiResponseDto<SolverDescriptorDto>> {
+  return call("solver_describe", { requestId: newRequestId(), backendId });
+}
+
+export function getSolverSupportMatrix(): Promise<ApiResponseDto<SolverSupportMatrixDto>> {
+  return call("solver_get_support_matrix", { requestId: newRequestId() });
+}
+
+export function getDeferredSolverGates(): Promise<
+  ApiResponseDto<readonly DeferredSolverGateDto[]>
+> {
+  return call("solver_get_deferred_gates", { requestId: newRequestId() });
+}
 
 export function listProjects(
   scope: ProjectScope = "active",
@@ -804,6 +1029,15 @@ export function applyRestore(input: {
 
 export function cancelPortablePreview(previewId: UuidV7): Promise<ApiResponseDto<EmptyDto>> {
   return call("project_operation_cancel", { requestId: newRequestId(), previewId });
+}
+export function inspectUnopenedBundle(): Promise<ApiResponseDto<UnopenedBundlePreviewDto>> {
+  return call("project_unopened_bundle_inspect", { requestId: newRequestId() });
+}
+
+export function reexportUnopenedBundle(
+  previewId: UuidV7,
+): Promise<ApiResponseDto<PortableArtifactDto>> {
+  return call("project_unopened_bundle_reexport", { requestId: newRequestId(), previewId });
 }
 
 export function getScenarioView(scenarioId: UuidV7): Promise<ApiResponseDto<ScenarioViewDto>> {
@@ -906,7 +1140,7 @@ fn generated_rust_command_catalog() -> String {
 }
 
 pub fn generate(repo_root: &Path) -> Result<()> {
-    let generated_files = generated_files();
+    let generated_files = all_generated_files()?;
     for (relative_path, contents) in &generated_files {
         let path = repo_root.join(relative_path);
         let parent = path
@@ -926,7 +1160,7 @@ pub fn generate(repo_root: &Path) -> Result<()> {
 }
 
 pub fn check(repo_root: &Path) -> Result<()> {
-    let generated_files = generated_files();
+    let generated_files = all_generated_files()?;
     let mut drifted = Vec::new();
 
     for (relative_path, expected) in &generated_files {
@@ -956,6 +1190,12 @@ fn generated_files() -> Vec<(&'static str, String)> {
             generated_rust_command_catalog(),
         ),
     ]
+}
+
+fn all_generated_files() -> Result<Vec<(&'static str, String)>> {
+    let mut files = generated_files();
+    files.extend(crate::phase02_generate::generated_files()?);
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -994,6 +1234,14 @@ mod tests {
             "onLibraryRefreshRequired",
             "onScenarioValidationChanged",
             "previewSupportBundle",
+            "listDomainPacks",
+            "describeDomainPack",
+            "listSolvers",
+            "describeSolver",
+            "getSolverSupportMatrix",
+            "getDeferredSolverGates",
+            "inspectUnopenedBundle",
+            "reexportUnopenedBundle",
         ] {
             assert!(generated_api.contains(&format!("function {wrapper}")));
         }
@@ -1014,12 +1262,24 @@ mod tests {
             "call(\"project_export_create\", { requestId: newRequestId(), scenarioId, previewId })",
             "function previewSupportBundle()",
             "call(\"app_create_support_bundle_preview\", { requestId: newRequestId() })",
+            "function inspectUnopenedBundle()",
+            "call(\"project_unopened_bundle_inspect\", { requestId: newRequestId() })",
+            "function reexportUnopenedBundle(\n  previewId: UuidV7,\n)",
+            "call(\"project_unopened_bundle_reexport\", { requestId: newRequestId(), previewId })",
         ] {
             assert!(generated_api.contains(expected), "missing `{expected}`");
         }
         assert!(!generated_api.contains("sourceArtifact"));
         assert!(!generated_api.contains("readonly fileName"));
         assert!(generated_api.contains("interface SupportPreviewDto"));
+        assert!(generated_api.contains("interface UnopenedBundlePreviewDto"));
+        assert!(generated_api.contains("export type SolverSupportCellDto"));
+        assert!(generated_api.contains("interface SolverSupportBackendColumnDto"));
+        assert!(
+            generated_api
+                .contains("readonly backendColumns: readonly SolverSupportBackendColumnDto[];")
+        );
+        assert!(!generated_api.contains("readonly bytes"));
     }
 
     #[test]
@@ -1060,7 +1320,7 @@ mod tests {
 
         let generated_api = generated_desktop_api();
         let generated_rust = generated_rust_command_catalog();
-        assert_eq!(COMMAND_CATALOG.len(), 83);
+        assert_eq!(COMMAND_CATALOG.len(), 91);
         assert_eq!(
             COMMAND_CATALOG
                 .iter()

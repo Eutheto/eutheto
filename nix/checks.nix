@@ -83,6 +83,11 @@
         cargo = tomllib.load(stream)
     assert cargo["workspace"]["members"] == [
         "crates/eutheto-types",
+        "crates/eutheto-domain-ir",
+        "crates/eutheto-planning-ir",
+        "crates/eutheto-domain-api",
+        "crates/eutheto-solver-api",
+        "crates/eutheto-solver-router",
         "crates/eutheto-core",
         "crates/eutheto-store",
         "crates/eutheto-command",
@@ -222,14 +227,19 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 9 and
+      (.workspace_members | length) == 14 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
         "eutheto-core",
         "eutheto-desktop",
+        "eutheto-domain-api",
+        "eutheto-domain-ir",
         "eutheto-export",
         "eutheto-import",
+        "eutheto-planning-ir",
+        "eutheto-solver-api",
+        "eutheto-solver-router",
         "eutheto-store",
         "eutheto-types",
         "xtask"

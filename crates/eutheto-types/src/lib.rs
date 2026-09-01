@@ -1,10 +1,12 @@
 //! Stable serialized value types shared by Eutheto application boundaries.
 
+mod budget;
 mod contracts;
 mod ids;
 mod portable;
 mod values;
 
+pub use budget::*;
 pub use contracts::*;
 pub use ids::*;
 pub use portable::*;
