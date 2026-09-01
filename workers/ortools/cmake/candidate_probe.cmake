@@ -474,14 +474,7 @@ file(APPEND "${report_file}" "worker_executable_inspected=true\n")
 
 if(WIN32)
   file(GLOB runtime_libraries "${ortools_install_dir}/bin/*.dll")
-  file(GLOB dumpbin_candidates
-    "C:/Program Files/Microsoft Visual Studio/2022/*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe")
-  list(SORT dumpbin_candidates COMPARE NATURAL ORDER DESCENDING)
-  list(LENGTH dumpbin_candidates dumpbin_candidate_count)
-  if(dumpbin_candidate_count EQUAL 0)
-    message(FATAL_ERROR "Could not locate the x64 Visual Studio 2022 dumpbin.exe.")
-  endif()
-  list(GET dumpbin_candidates 0 dumpbin_executable)
+  find_program(dumpbin_executable dumpbin REQUIRED)
 elseif(APPLE)
   file(GLOB runtime_libraries
     "${ortools_install_dir}/lib/*.dylib"
