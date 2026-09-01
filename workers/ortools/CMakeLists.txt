@@ -206,7 +206,7 @@ foreach(worker_target
     eutheto-ortools-worker-lib
     ortools-worker)
   if(MSVC)
-    target_compile_options(${worker_target} PRIVATE /W4 /WX /permissive-)
+    target_compile_options(${worker_target} PRIVATE /W4 /WX /permissive- /wd4702)
   else()
     target_compile_options(${worker_target} PRIVATE
       -Wall -Wextra -Wpedantic -Werror
