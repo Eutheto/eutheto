@@ -1,5 +1,12 @@
 #![forbid(unsafe_code)]
 
+mod status;
+
+pub use status::{
+    AdapterDefectKind, CandidateProofClaim, CandidateStopCause, NormalizedWorkerTerminal,
+    WorkerFailureKind, WorkerLimitKind, WorkerUnavailableKind, normalize_terminal,
+};
+
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
