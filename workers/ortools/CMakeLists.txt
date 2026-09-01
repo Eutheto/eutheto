@@ -191,6 +191,7 @@ add_library(eutheto-ortools-worker-lib STATIC
 )
 target_include_directories(eutheto-ortools-worker-lib PUBLIC src)
 target_compile_features(eutheto-ortools-worker-lib PUBLIC cxx_std_20)
+target_compile_definitions(eutheto-ortools-worker-lib PUBLIC EIGEN_MPL2_ONLY)
 target_link_libraries(eutheto-ortools-worker-lib
   PUBLIC
     eutheto-worker-protocol

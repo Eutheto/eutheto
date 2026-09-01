@@ -48,6 +48,11 @@ set(source_commit "551ad10d94835c99e5e1e684500d3db398c0e345")
 set(source_url "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz")
 set(expected_source_sha256
   "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026")
+set(source_patch_relative
+  "workers/ortools/patches/9.15-disable-gurobi-model-builder.patch")
+set(source_patch "${REPOSITORY_ROOT}/${source_patch_relative}")
+set(expected_source_patch_sha256
+  "7cff195dab904bb7285411e611df8fa429d0a409553d1385ce83dc0053e185e6")
 string(LENGTH "${expected_source_sha256}" expected_source_sha256_length)
 if(NOT expected_source_sha256_length EQUAL 64
    OR NOT expected_source_sha256 MATCHES "^[0-9a-f]+$")
@@ -82,6 +87,8 @@ file(WRITE "${report_file}"
   "source_commit=${source_commit}\n"
   "source_archive_url=${source_url}\n"
   "source_archive_sha256_expected=${expected_source_sha256}\n"
+  "source_patch=${source_patch_relative}\n"
+  "source_patch_sha256_expected=${expected_source_patch_sha256}\n"
   "protobuf_dependency_expected=v33.1\n"
   "linkage_probe=shared\n"
   "linkage_policy=measured-candidate-evidence-not-final-target-policy\n")
@@ -105,6 +112,28 @@ function(run_stage stage working_directory)
     message(FATAL_ERROR "${stage} failed with exit code ${stage_result}; see ${log_file}.")
   endif()
 endfunction()
+function(append_inspection log_name subject working_directory)
+  set(log_file "${evidence_dir}/${log_name}.log")
+  execute_process(
+    COMMAND ${ARGN}
+    WORKING_DIRECTORY "${working_directory}"
+    RESULT_VARIABLE inspection_result
+    OUTPUT_VARIABLE inspection_output
+    ERROR_VARIABLE inspection_error
+    ENCODING UTF-8
+  )
+  file(APPEND "${log_file}"
+    "subject=${subject}\n"
+    "exit_code=${inspection_result}\n"
+    "stdout:\n${inspection_output}\n"
+    "stderr:\n${inspection_error}\n---\n")
+  if(NOT "${inspection_result}" STREQUAL "0")
+    message(FATAL_ERROR
+      "${log_name} inspection failed for ${subject} with exit code "
+      "${inspection_result}; see ${log_file}.")
+  endif()
+endfunction()
+
 
 function(require_cache_entry scope cache_file entry_name expected_value)
   file(STRINGS "${cache_file}" matching_lines REGEX "^${entry_name}:[^=]*=")
@@ -194,6 +223,21 @@ run_stage(extract-source "${source_parent}"
 if(NOT EXISTS "${source_dir}/CMakeLists.txt")
   message(FATAL_ERROR "The verified archive did not extract the expected or-tools-9.15 source root.")
 endif()
+if(NOT EXISTS "${source_patch}")
+  message(FATAL_ERROR "The required OR-Tools source patch is missing.")
+endif()
+file(SHA256 "${source_patch}" actual_source_patch_sha256)
+file(APPEND "${report_file}"
+  "source_patch_sha256_actual=${actual_source_patch_sha256}\n")
+if(NOT actual_source_patch_sha256 STREQUAL expected_source_patch_sha256)
+  message(FATAL_ERROR
+    "OR-Tools source patch SHA-256 is ${actual_source_patch_sha256}, "
+    "expected ${expected_source_patch_sha256}.")
+endif()
+run_stage(check-source-patch "${source_dir}"
+  "${git_executable}" apply --check "${source_patch}")
+run_stage(apply-source-patch "${source_dir}"
+  "${git_executable}" apply "${source_patch}")
 
 set(dependency_file "${source_dir}/cmake/dependencies/CMakeLists.txt")
 file(STRINGS "${dependency_file}" dependency_lines)
@@ -251,6 +295,14 @@ file(APPEND "${report_file}"
   "version_normalization_value=$ENV{OR_TOOLS_PATCH}\n"
   "version_normalization_source_approval=false\n")
 
+if(WIN32)
+  set(eigen_license_cxx_flag "/DEIGEN_MPL2_ONLY")
+else()
+  set(eigen_license_cxx_flag "-DEIGEN_MPL2_ONLY")
+endif()
+file(APPEND "${report_file}"
+  "eigen_license_compile_guard=EIGEN_MPL2_ONLY\n")
+
 set(ortools_configure_command
   "${CMAKE_COMMAND}"
   -S "${source_dir}"
@@ -263,6 +315,7 @@ endif()
 list(APPEND ortools_configure_command
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=${ortools_install_dir}"
+  "-DCMAKE_CXX_FLAGS=${eigen_license_cxx_flag}"
   "-DBUILD_SHARED_LIBS=ON"
   "-DBUILD_CXX=ON"
   "-DBUILD_DEPS=ON"
@@ -320,6 +373,7 @@ endif()
 set(ortools_cache "${ortools_build_dir}/CMakeCache.txt")
 foreach(cache_expectation
     "CMAKE_BUILD_TYPE|Release"
+    "CMAKE_CXX_FLAGS|${eigen_license_cxx_flag}"
     "BUILD_SHARED_LIBS|ON"
     "BUILD_CXX|ON"
     "BUILD_DEPS|ON"
@@ -394,9 +448,10 @@ endif()
 if(NOT EXISTS "${worker_executable}")
   message(FATAL_ERROR "Expected worker executable does not exist: ${worker_executable}")
 endif()
-file(APPEND "${report_file}" "worker_executable_inspected=${worker_executable}\n")
+file(APPEND "${report_file}" "worker_executable_inspected=true\n")
 
 if(WIN32)
+  file(GLOB runtime_libraries "${ortools_install_dir}/bin/*.dll")
   file(GLOB dumpbin_candidates
     "C:/Program Files/Microsoft Visual Studio/2022/*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe")
   list(SORT dumpbin_candidates COMPARE NATURAL ORDER DESCENDING)
@@ -405,25 +460,48 @@ if(WIN32)
     message(FATAL_ERROR "Could not locate the x64 Visual Studio 2022 dumpbin.exe.")
   endif()
   list(GET dumpbin_candidates 0 dumpbin_executable)
-  run_stage(binary-architecture "${PROBE_ROOT}"
-    "${dumpbin_executable}" /headers "${worker_executable}")
-  run_stage(binary-linkage "${PROBE_ROOT}"
-    "${dumpbin_executable}" /dependents "${worker_executable}")
 elseif(APPLE)
+  file(GLOB runtime_libraries
+    "${ortools_install_dir}/lib/*.dylib"
+    "${ortools_install_dir}/lib64/*.dylib")
   find_program(file_executable file REQUIRED)
   find_program(otool_executable otool REQUIRED)
-  run_stage(binary-architecture "${PROBE_ROOT}"
-    "${file_executable}" "${worker_executable}")
-  run_stage(binary-linkage "${PROBE_ROOT}"
-    "${otool_executable}" -L "${worker_executable}")
 else()
+  file(GLOB runtime_libraries
+    "${ortools_install_dir}/lib/*.so"
+    "${ortools_install_dir}/lib/*.so.*"
+    "${ortools_install_dir}/lib64/*.so"
+    "${ortools_install_dir}/lib64/*.so.*")
   find_program(file_executable file REQUIRED)
   find_program(ldd_executable ldd REQUIRED)
-  run_stage(binary-architecture "${PROBE_ROOT}"
-    "${file_executable}" "${worker_executable}")
-  run_stage(binary-linkage "${PROBE_ROOT}"
-    "${ldd_executable}" "${worker_executable}")
 endif()
+list(APPEND runtime_libraries "${worker_executable}")
+list(REMOVE_DUPLICATES runtime_libraries)
+list(SORT runtime_libraries)
+list(LENGTH runtime_libraries runtime_binary_count)
+file(APPEND "${report_file}" "runtime_binary_count=${runtime_binary_count}\n")
+
+foreach(runtime_binary IN LISTS runtime_libraries)
+  set(runtime_subject "${runtime_binary}")
+  cmake_path(RELATIVE_PATH runtime_subject BASE_DIRECTORY "${PROBE_ROOT}")
+  if(WIN32)
+    append_inspection(binary-architecture "${runtime_subject}" "${PROBE_ROOT}"
+      "${dumpbin_executable}" /headers "${runtime_binary}")
+    append_inspection(binary-linkage "${runtime_subject}" "${PROBE_ROOT}"
+      "${dumpbin_executable}" /dependents "${runtime_binary}")
+  elseif(APPLE)
+    append_inspection(binary-architecture "${runtime_subject}" "${PROBE_ROOT}"
+      "${file_executable}" "${runtime_binary}")
+    append_inspection(binary-linkage "${runtime_subject}" "${PROBE_ROOT}"
+      "${otool_executable}" -L "${runtime_binary}")
+  else()
+    append_inspection(binary-architecture "${runtime_subject}" "${PROBE_ROOT}"
+      "${file_executable}" "${runtime_binary}")
+    append_inspection(binary-linkage "${runtime_subject}" "${PROBE_ROOT}"
+      "${ldd_executable}" "${runtime_binary}")
+  endif()
+endforeach()
+file(APPEND "${report_file}" "runtime_closure_inspection=passed\n")
 
 if(WIN32)
   set(ENV{PATH} "${ortools_install_dir}/bin;$ENV{PATH}")
