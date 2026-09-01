@@ -1,0 +1,409 @@
+# SPDX-License-Identifier: Apache-2.0
+cmake_minimum_required(VERSION 3.25)
+
+foreach(required_variable
+    REPOSITORY_ROOT
+    PROBE_ROOT
+    PROBE_TARGET
+    PROBE_RUNNER_OS
+    PROBE_RUNNER_ARCH
+    PROBE_GENERATOR)
+  if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
+    message(FATAL_ERROR "${required_variable} is required.")
+  endif()
+endforeach()
+
+cmake_path(ABSOLUTE_PATH REPOSITORY_ROOT NORMALIZE)
+cmake_path(ABSOLUTE_PATH PROBE_ROOT NORMALIZE)
+if(PROBE_ROOT STREQUAL REPOSITORY_ROOT OR PROBE_ROOT STREQUAL "/")
+  message(FATAL_ERROR "PROBE_ROOT must be a dedicated directory outside the repository root.")
+endif()
+
+set(expected_runner_os "")
+set(expected_runner_arch "")
+if(PROBE_TARGET STREQUAL "linux-x86_64")
+  set(expected_runner_os "Linux")
+  set(expected_runner_arch "X64")
+elseif(PROBE_TARGET STREQUAL "windows-x86_64")
+  set(expected_runner_os "Windows")
+  set(expected_runner_arch "X64")
+elseif(PROBE_TARGET STREQUAL "macos-arm64")
+  set(expected_runner_os "macOS")
+  set(expected_runner_arch "ARM64")
+elseif(PROBE_TARGET STREQUAL "macos-x86_64")
+  set(expected_runner_os "macOS")
+  set(expected_runner_arch "X64")
+else()
+  message(FATAL_ERROR "Unsupported Phase 03 candidate target: ${PROBE_TARGET}")
+endif()
+if(NOT PROBE_RUNNER_OS STREQUAL expected_runner_os
+   OR NOT PROBE_RUNNER_ARCH STREQUAL expected_runner_arch)
+  message(FATAL_ERROR
+    "Target ${PROBE_TARGET} requires ${expected_runner_os}/${expected_runner_arch}, "
+    "not ${PROBE_RUNNER_OS}/${PROBE_RUNNER_ARCH}.")
+endif()
+
+set(source_tag "v9.15")
+set(source_commit "551ad10d94835c99e5e1e684500d3db398c0e345")
+set(source_url "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz")
+set(expected_source_sha256
+  "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026")
+string(LENGTH "${expected_source_sha256}" expected_source_sha256_length)
+if(NOT expected_source_sha256_length EQUAL 64
+   OR NOT expected_source_sha256 MATCHES "^[0-9a-f]+$")
+  message(FATAL_ERROR "The pinned source SHA-256 must be 64 lowercase hexadecimal characters.")
+endif()
+
+file(REMOVE_RECURSE "${PROBE_ROOT}")
+set(download_dir "${PROBE_ROOT}/download")
+set(source_parent "${PROBE_ROOT}/source")
+set(source_dir "${source_parent}/or-tools-9.15")
+set(ortools_build_dir "${PROBE_ROOT}/ortools-build")
+set(ortools_install_dir "${PROBE_ROOT}/ortools-install")
+set(worker_build_dir "${PROBE_ROOT}/worker-build")
+set(evidence_dir "${PROBE_ROOT}/evidence")
+file(MAKE_DIRECTORY "${download_dir}" "${source_parent}" "${evidence_dir}")
+set(source_archive "${download_dir}/or-tools-v9.15.tar.gz")
+set(report_file "${evidence_dir}/candidate-evidence.txt")
+set(cache_evidence_file "${evidence_dir}/cmake-cache-entries.txt")
+set(test_outcome_file "${evidence_dir}/test-outcome.txt")
+
+file(WRITE "${report_file}"
+  "classification=candidate\n"
+  "distribution=non-distributable\n"
+  "artifact_contents=text-evidence-only\n"
+  "target=${PROBE_TARGET}\n"
+  "runner_os=${PROBE_RUNNER_OS}\n"
+  "runner_arch=${PROBE_RUNNER_ARCH}\n"
+  "cmake_host_system_name=${CMAKE_HOST_SYSTEM_NAME}\n"
+  "cmake_host_system_processor=${CMAKE_HOST_SYSTEM_PROCESSOR}\n"
+  "cmake_generator=${PROBE_GENERATOR}\n"
+  "source_tag=${source_tag}\n"
+  "source_commit=${source_commit}\n"
+  "source_archive_url=${source_url}\n"
+  "source_archive_sha256_expected=${expected_source_sha256}\n"
+  "protobuf_dependency_expected=v33.1\n"
+  "linkage_probe=shared\n"
+  "linkage_policy=measured-candidate-evidence-not-final-target-policy\n")
+file(WRITE "${cache_evidence_file}"
+  "classification=candidate-non-distributable\n")
+file(WRITE "${test_outcome_file}" "ctest=not-run\n")
+
+function(run_stage stage working_directory)
+  set(log_file "${evidence_dir}/${stage}.log")
+  execute_process(
+    COMMAND ${ARGN}
+    WORKING_DIRECTORY "${working_directory}"
+    RESULT_VARIABLE stage_result
+    OUTPUT_FILE "${log_file}"
+    ERROR_FILE "${log_file}"
+    COMMAND_ECHO STDOUT
+    ENCODING UTF-8
+  )
+  file(APPEND "${report_file}" "${stage}_exit_code=${stage_result}\n")
+  if(NOT "${stage_result}" STREQUAL "0")
+    message(FATAL_ERROR "${stage} failed with exit code ${stage_result}; see ${log_file}.")
+  endif()
+endfunction()
+
+function(require_cache_entry scope cache_file entry_name expected_value)
+  file(STRINGS "${cache_file}" matching_lines REGEX "^${entry_name}:[^=]*=")
+  list(LENGTH matching_lines matching_line_count)
+  if(NOT matching_line_count EQUAL 1)
+    file(APPEND "${cache_evidence_file}"
+      "ERROR.${scope}.${entry_name}=expected-one-cache-entry-found-${matching_line_count}\n")
+    message(FATAL_ERROR "Expected exactly one ${entry_name} entry in ${cache_file}.")
+  endif()
+  list(GET matching_lines 0 matching_line)
+  string(REGEX REPLACE "^[^=]*=" "" actual_value "${matching_line}")
+  file(APPEND "${cache_evidence_file}" "${scope}.${entry_name}=${actual_value}\n")
+  if(NOT actual_value STREQUAL expected_value)
+    file(APPEND "${cache_evidence_file}"
+      "ERROR.${scope}.${entry_name}=expected-${expected_value}\n")
+    message(FATAL_ERROR
+      "${scope} cache entry ${entry_name} is '${actual_value}', expected '${expected_value}'.")
+  endif()
+endfunction()
+
+function(record_cache_entry scope cache_file entry_name)
+  file(STRINGS "${cache_file}" matching_lines REGEX "^${entry_name}:[^=]*=")
+  list(LENGTH matching_lines matching_line_count)
+  if(NOT matching_line_count EQUAL 1)
+    file(APPEND "${cache_evidence_file}"
+      "ERROR.${scope}.${entry_name}=expected-one-cache-entry-found-${matching_line_count}\n")
+    message(FATAL_ERROR "Expected exactly one ${entry_name} entry in ${cache_file}.")
+  endif()
+  list(GET matching_lines 0 matching_line)
+  string(REGEX REPLACE "^[^=]*=" "" actual_value "${matching_line}")
+  file(APPEND "${cache_evidence_file}" "${scope}.${entry_name}=${actual_value}\n")
+endfunction()
+
+find_program(git_executable git REQUIRED)
+set(expected_source_ref "${source_commit}\trefs/tags/${source_tag}")
+execute_process(
+  COMMAND "${git_executable}" ls-remote --refs
+    https://github.com/google/or-tools.git "refs/tags/${source_tag}"
+  RESULT_VARIABLE source_ref_result
+  OUTPUT_VARIABLE actual_source_ref
+  ERROR_VARIABLE source_ref_error
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ENCODING UTF-8
+)
+file(WRITE "${evidence_dir}/source-tag-ref.log"
+  "command=git ls-remote --refs https://github.com/google/or-tools.git refs/tags/${source_tag}\n"
+  "exit_code=${source_ref_result}\n"
+  "stdout=${actual_source_ref}\n"
+  "stderr=${source_ref_error}")
+file(APPEND "${report_file}" "source_tag_ref_exit_code=${source_ref_result}\n")
+if(NOT "${source_ref_result}" STREQUAL "0"
+   OR NOT actual_source_ref STREQUAL expected_source_ref)
+  message(FATAL_ERROR
+    "OR-Tools ${source_tag} did not resolve exactly to the required commit ${source_commit}.")
+endif()
+file(APPEND "${report_file}" "source_commit_actual=${source_commit}\n")
+
+file(DOWNLOAD
+  "${source_url}"
+  "${source_archive}"
+  STATUS download_status
+  LOG download_log
+  SHOW_PROGRESS
+  TLS_VERIFY ON
+)
+list(GET download_status 0 download_result)
+list(GET download_status 1 download_message)
+file(WRITE "${evidence_dir}/download.log"
+  "url=${source_url}\nstatus=${download_result}\nmessage=${download_message}\n${download_log}")
+file(APPEND "${report_file}" "download_exit_code=${download_result}\n")
+if(NOT download_result EQUAL 0)
+  message(FATAL_ERROR "OR-Tools candidate source download failed: ${download_message}")
+endif()
+
+file(SHA256 "${source_archive}" actual_source_sha256)
+file(APPEND "${report_file}" "source_archive_sha256_actual=${actual_source_sha256}\n")
+string(LENGTH "${actual_source_sha256}" actual_source_sha256_length)
+if(NOT actual_source_sha256_length EQUAL 64
+   OR NOT actual_source_sha256 MATCHES "^[0-9a-f]+$"
+   OR NOT actual_source_sha256 STREQUAL expected_source_sha256)
+  message(FATAL_ERROR
+    "OR-Tools source archive SHA-256 is ${actual_source_sha256}, expected ${expected_source_sha256}.")
+endif()
+
+run_stage(extract-source "${source_parent}"
+  "${CMAKE_COMMAND}" -E tar xzf "${source_archive}")
+if(NOT EXISTS "${source_dir}/CMakeLists.txt")
+  message(FATAL_ERROR "The verified archive did not extract the expected or-tools-9.15 source root.")
+endif()
+
+set(dependency_file "${source_dir}/cmake/dependencies/CMakeLists.txt")
+file(STRINGS "${dependency_file}" dependency_lines)
+set(pending_fetch_content FALSE)
+set(in_protobuf_declaration FALSE)
+set(found_protobuf_declaration FALSE)
+set(protobuf_git_tags "")
+foreach(dependency_line IN LISTS dependency_lines)
+  string(STRIP "${dependency_line}" stripped_line)
+  if(NOT in_protobuf_declaration)
+    if(stripped_line STREQUAL "FetchContent_Declare(")
+      set(pending_fetch_content TRUE)
+    elseif(pending_fetch_content)
+      set(pending_fetch_content FALSE)
+      if(stripped_line STREQUAL "Protobuf")
+        if(found_protobuf_declaration)
+          message(FATAL_ERROR "Found more than one Protobuf FetchContent declaration.")
+        endif()
+        set(found_protobuf_declaration TRUE)
+        set(in_protobuf_declaration TRUE)
+      endif()
+    endif()
+  else()
+    if(stripped_line MATCHES "^GIT_TAG[ \t]+\"?([^\" \t]+)\"?[ \t]*$")
+      list(APPEND protobuf_git_tags "${CMAKE_MATCH_1}")
+    elseif(stripped_line STREQUAL ")")
+      set(in_protobuf_declaration FALSE)
+    endif()
+  endif()
+endforeach()
+list(LENGTH protobuf_git_tags protobuf_git_tag_count)
+if(NOT found_protobuf_declaration OR in_protobuf_declaration
+   OR NOT protobuf_git_tag_count EQUAL 1)
+  message(FATAL_ERROR "Could not identify exactly one complete upstream Protobuf dependency pin.")
+endif()
+list(GET protobuf_git_tags 0 protobuf_git_tag)
+file(WRITE "${evidence_dir}/protobuf-dependency.txt"
+  "declaration=FetchContent_Declare(Protobuf)\nGIT_TAG=${protobuf_git_tag}\n")
+file(APPEND "${report_file}" "protobuf_dependency_actual=${protobuf_git_tag}\n")
+if(NOT protobuf_git_tag STREQUAL "v33.1")
+  message(FATAL_ERROR "OR-Tools v9.15 declares Protobuf ${protobuf_git_tag}, expected v33.1.")
+endif()
+
+set(ortools_configure_command
+  "${CMAKE_COMMAND}"
+  -S "${source_dir}"
+  -B "${ortools_build_dir}"
+  -G "${PROBE_GENERATOR}"
+)
+if(DEFINED PROBE_GENERATOR_PLATFORM AND NOT PROBE_GENERATOR_PLATFORM STREQUAL "")
+  list(APPEND ortools_configure_command -A "${PROBE_GENERATOR_PLATFORM}")
+endif()
+list(APPEND ortools_configure_command
+  "-DCMAKE_BUILD_TYPE=Release"
+  "-DCMAKE_INSTALL_PREFIX=${ortools_install_dir}"
+  "-DBUILD_SHARED_LIBS=ON"
+  "-DBUILD_CXX=ON"
+  "-DBUILD_DEPS=ON"
+  "-DINSTALL_BUILD_DEPS=ON"
+  "-DBUILD_PYTHON=OFF"
+  "-DBUILD_JAVA=OFF"
+  "-DBUILD_DOTNET=OFF"
+  "-DBUILD_TESTING=OFF"
+  "-DBUILD_SAMPLES=OFF"
+  "-DBUILD_CXX_SAMPLES=OFF"
+  "-DBUILD_EXAMPLES=OFF"
+  "-DBUILD_CXX_EXAMPLES=OFF"
+  "-DBUILD_DOC=OFF"
+  "-DBUILD_FLATZINC=OFF"
+  "-DBUILD_MATH_OPT=OFF"
+  "-DUSE_COINOR=OFF"
+  "-DUSE_SCIP=OFF"
+  "-DUSE_GLPK=OFF"
+  "-DUSE_HIGHS=OFF"
+  "-DUSE_GUROBI=OFF"
+  "-DUSE_CPLEX=OFF"
+  "-DUSE_XPRESS=OFF"
+  "-DUSE_PDLP=OFF"
+  "-DUSE_BOP=ON"
+  "-DUSE_GLOP=ON"
+)
+run_stage(ortools-configure "${PROBE_ROOT}" ${ortools_configure_command})
+
+set(ortools_cache "${ortools_build_dir}/CMakeCache.txt")
+foreach(cache_expectation
+    "CMAKE_BUILD_TYPE|Release"
+    "BUILD_SHARED_LIBS|ON"
+    "BUILD_CXX|ON"
+    "BUILD_DEPS|ON"
+    "INSTALL_BUILD_DEPS|ON"
+    "BUILD_PYTHON|OFF"
+    "BUILD_JAVA|OFF"
+    "BUILD_DOTNET|OFF"
+    "BUILD_TESTING|OFF"
+    "BUILD_SAMPLES|OFF"
+    "BUILD_CXX_SAMPLES|OFF"
+    "BUILD_EXAMPLES|OFF"
+    "BUILD_CXX_EXAMPLES|OFF"
+    "BUILD_DOC|OFF"
+    "BUILD_FLATZINC|OFF"
+    "BUILD_MATH_OPT|OFF"
+    "USE_COINOR|OFF"
+    "USE_SCIP|OFF"
+    "USE_GLPK|OFF"
+    "USE_HIGHS|OFF"
+    "USE_GUROBI|OFF"
+    "USE_CPLEX|OFF"
+    "USE_XPRESS|OFF"
+    "USE_PDLP|OFF"
+    "USE_BOP|ON"
+    "USE_GLOP|ON")
+  string(REPLACE "|" ";" cache_expectation_parts "${cache_expectation}")
+  list(GET cache_expectation_parts 0 cache_entry_name)
+  list(GET cache_expectation_parts 1 cache_entry_value)
+  require_cache_entry(ortools "${ortools_cache}" "${cache_entry_name}" "${cache_entry_value}")
+endforeach()
+record_cache_entry(ortools "${ortools_cache}" CMAKE_INSTALL_PREFIX)
+
+run_stage(ortools-build "${PROBE_ROOT}"
+  "${CMAKE_COMMAND}" --build "${ortools_build_dir}" --config Release --parallel 2)
+run_stage(ortools-install "${PROBE_ROOT}"
+  "${CMAKE_COMMAND}" --install "${ortools_build_dir}" --config Release)
+
+set(worker_configure_command
+  "${CMAKE_COMMAND}"
+  -S "${REPOSITORY_ROOT}/workers/ortools"
+  -B "${worker_build_dir}"
+  -G "${PROBE_GENERATOR}"
+)
+if(DEFINED PROBE_GENERATOR_PLATFORM AND NOT PROBE_GENERATOR_PLATFORM STREQUAL "")
+  list(APPEND worker_configure_command -A "${PROBE_GENERATOR_PLATFORM}")
+endif()
+list(APPEND worker_configure_command
+  "-DCMAKE_BUILD_TYPE=Release"
+  "-DCMAKE_PREFIX_PATH=${ortools_install_dir}"
+  "-DEUTHETO_ORTOOLS_DEVELOPMENT_BUILD=ON"
+  "-DEUTHETO_ORTOOLS_BUILD_TESTS=ON"
+)
+run_stage(worker-configure "${PROBE_ROOT}" ${worker_configure_command})
+
+set(worker_cache "${worker_build_dir}/CMakeCache.txt")
+require_cache_entry(worker "${worker_cache}" CMAKE_BUILD_TYPE Release)
+require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_DEVELOPMENT_BUILD ON)
+require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_BUILD_TESTS ON)
+require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_PHASE3_CONTRACT "")
+record_cache_entry(worker "${worker_cache}" CMAKE_PREFIX_PATH)
+record_cache_entry(worker "${worker_cache}" ortools_DIR)
+record_cache_entry(worker "${worker_cache}" Protobuf_DIR)
+
+run_stage(worker-build "${PROBE_ROOT}"
+  "${CMAKE_COMMAND}" --build "${worker_build_dir}" --config Release --parallel 2)
+
+if(WIN32)
+  set(worker_executable "${worker_build_dir}/Release/ortools-worker.exe")
+else()
+  set(worker_executable "${worker_build_dir}/ortools-worker")
+endif()
+if(NOT EXISTS "${worker_executable}")
+  message(FATAL_ERROR "Expected worker executable does not exist: ${worker_executable}")
+endif()
+file(APPEND "${report_file}" "worker_executable_inspected=${worker_executable}\n")
+
+if(WIN32)
+  file(GLOB dumpbin_candidates
+    "C:/Program Files/Microsoft Visual Studio/2022/*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe")
+  list(SORT dumpbin_candidates COMPARE NATURAL ORDER DESCENDING)
+  list(LENGTH dumpbin_candidates dumpbin_candidate_count)
+  if(dumpbin_candidate_count EQUAL 0)
+    message(FATAL_ERROR "Could not locate the x64 Visual Studio 2022 dumpbin.exe.")
+  endif()
+  list(GET dumpbin_candidates 0 dumpbin_executable)
+  run_stage(binary-architecture "${PROBE_ROOT}"
+    "${dumpbin_executable}" /headers "${worker_executable}")
+  run_stage(binary-linkage "${PROBE_ROOT}"
+    "${dumpbin_executable}" /dependents "${worker_executable}")
+elseif(APPLE)
+  find_program(file_executable file REQUIRED)
+  find_program(otool_executable otool REQUIRED)
+  run_stage(binary-architecture "${PROBE_ROOT}"
+    "${file_executable}" "${worker_executable}")
+  run_stage(binary-linkage "${PROBE_ROOT}"
+    "${otool_executable}" -L "${worker_executable}")
+else()
+  find_program(file_executable file REQUIRED)
+  find_program(ldd_executable ldd REQUIRED)
+  run_stage(binary-architecture "${PROBE_ROOT}"
+    "${file_executable}" "${worker_executable}")
+  run_stage(binary-linkage "${PROBE_ROOT}"
+    "${ldd_executable}" "${worker_executable}")
+endif()
+
+if(WIN32)
+  set(ENV{PATH} "${ortools_install_dir}/bin;$ENV{PATH}")
+endif()
+execute_process(
+  COMMAND "${CMAKE_CTEST_COMMAND}"
+    --test-dir "${worker_build_dir}"
+    --build-config Release
+    --output-on-failure
+    --no-tests=error
+  RESULT_VARIABLE ctest_result
+  OUTPUT_FILE "${evidence_dir}/ctest.log"
+  ERROR_FILE "${evidence_dir}/ctest.log"
+  COMMAND_ECHO STDOUT
+  ENCODING UTF-8
+)
+file(APPEND "${report_file}" "ctest_exit_code=${ctest_result}\n")
+if("${ctest_result}" STREQUAL "0")
+  file(WRITE "${test_outcome_file}" "ctest=passed\n")
+else()
+  file(WRITE "${test_outcome_file}" "ctest=failed\nexit_code=${ctest_result}\n")
+  message(FATAL_ERROR "Focused native worker ctest failed with exit code ${ctest_result}.")
+endif()
