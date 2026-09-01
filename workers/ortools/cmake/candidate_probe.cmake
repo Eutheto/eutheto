@@ -237,6 +237,20 @@ if(NOT protobuf_git_tag STREQUAL "v33.1")
   message(FATAL_ERROR "OR-Tools v9.15 declares Protobuf ${protobuf_git_tag}, expected v33.1.")
 endif()
 
+set(expected_ortools_version "9.15.6755")
+set(ENV{OR_TOOLS_PATCH} "6755")
+file(WRITE "${evidence_dir}/version-normalization.txt"
+  "classification=candidate-non-distributable\n"
+  "purpose=normalize-version-for-verified-tag-archive-without-git-metadata\n"
+  "source_approval=false\n"
+  "environment_override=OR_TOOLS_PATCH\n"
+  "environment_value=$ENV{OR_TOOLS_PATCH}\n"
+  "expected_ortools_version=${expected_ortools_version}\n")
+file(APPEND "${report_file}"
+  "version_normalization=OR_TOOLS_PATCH\n"
+  "version_normalization_value=$ENV{OR_TOOLS_PATCH}\n"
+  "version_normalization_source_approval=false\n")
+
 set(ortools_configure_command
   "${CMAKE_COMMAND}"
   -S "${source_dir}"
@@ -276,6 +290,32 @@ list(APPEND ortools_configure_command
   "-DUSE_GLOP=ON"
 )
 run_stage(ortools-configure "${PROBE_ROOT}" ${ortools_configure_command})
+
+set(ortools_version_config "${ortools_build_dir}/ortoolsConfigVersion.cmake")
+if(NOT EXISTS "${ortools_version_config}")
+  message(FATAL_ERROR
+    "OR-Tools configure did not generate the expected ortoolsConfigVersion.cmake.")
+endif()
+file(STRINGS "${ortools_version_config}" package_version_lines
+  REGEX "^set\\(PACKAGE_VERSION \"[^\"]+\"\\)$")
+list(LENGTH package_version_lines package_version_line_count)
+if(NOT package_version_line_count EQUAL 1)
+  message(FATAL_ERROR
+    "Expected exactly one PACKAGE_VERSION declaration in ortoolsConfigVersion.cmake.")
+endif()
+list(GET package_version_lines 0 package_version_line)
+string(REGEX REPLACE "^set\\(PACKAGE_VERSION \"([^\"]+)\"\\)$" "\\1"
+  actual_ortools_version "${package_version_line}")
+file(APPEND "${evidence_dir}/version-normalization.txt"
+  "generated_config=${ortools_version_config}\n"
+  "actual_ortools_version=${actual_ortools_version}\n")
+file(APPEND "${report_file}"
+  "ortools_version_config_actual=${actual_ortools_version}\n")
+if(NOT actual_ortools_version STREQUAL expected_ortools_version)
+  message(FATAL_ERROR
+    "Generated OR-Tools package version is ${actual_ortools_version}, "
+    "expected exactly ${expected_ortools_version}.")
+endif()
 
 set(ortools_cache "${ortools_build_dir}/CMakeCache.txt")
 foreach(cache_expectation
