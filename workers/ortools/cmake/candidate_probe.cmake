@@ -428,9 +428,7 @@ if(DEFINED PROBE_GENERATOR_PLATFORM AND NOT PROBE_GENERATOR_PLATFORM STREQUAL ""
   list(APPEND worker_configure_command -A "${PROBE_GENERATOR_PLATFORM}")
 endif()
 if(WIN32 AND PROBE_GENERATOR STREQUAL "Ninja")
-  list(APPEND worker_configure_command
-    "-DCMAKE_C_COMPILER=cl.exe"
-    "-DCMAKE_CXX_COMPILER=cl.exe")
+  list(APPEND worker_configure_command "-DCMAKE_CXX_COMPILER=cl.exe")
 endif()
 list(APPEND worker_configure_command
   "-DCMAKE_BUILD_TYPE=Release"
@@ -448,7 +446,6 @@ require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_PHASE3_CONTRACT "")
 record_cache_entry(worker "${worker_cache}" CMAKE_PREFIX_PATH)
 record_cache_entry(worker "${worker_cache}" ortools_DIR)
 record_cache_entry(worker "${worker_cache}" Protobuf_DIR)
-record_cache_entry(worker "${worker_cache}" CMAKE_C_COMPILER)
 record_cache_entry(worker "${worker_cache}" CMAKE_CXX_COMPILER)
 
 run_stage(worker-build "${PROBE_ROOT}"
