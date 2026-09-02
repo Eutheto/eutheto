@@ -3,6 +3,7 @@
 mod candidate;
 mod compatibility;
 mod descriptor;
+mod progress;
 mod status;
 mod translation;
 
@@ -16,6 +17,10 @@ pub use compatibility::ortools_compatibility;
 pub use descriptor::{
     ORTOOLS_ADAPTER_VERSION, ORTOOLS_BACKEND_ID, ORTOOLS_VERSION, OrToolsDescriptorError,
     ortools_descriptor,
+};
+pub use progress::{
+    OrToolsProgressError, backend_started_progress, bound_progress, candidate_progress,
+    candidate_submission,
 };
 pub use status::{
     AdapterDefectKind, CandidateProofClaim, CandidateStopCause, NormalizedWorkerTerminal,
