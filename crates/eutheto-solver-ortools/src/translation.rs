@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use eutheto_domain_ir::OptimizationDirection;
 use eutheto_planning_ir::{
-    BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId, LexicographicStrategy,
-    LinearComparison, Literal, PlanningIrLimitsV1, PlanningProblem, ValidationError, Variable,
-    lexicographic_strategy, validate,
+    BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId, IntervalVariableId,
+    LexicographicStrategy, LinearComparison, Literal, PlanningConstraintId, PlanningIrLimitsV1,
+    PlanningProblem, ValidationError, Variable, lexicographic_strategy, validate,
 };
 use prost::Message;
 use thiserror::Error;
@@ -55,6 +55,8 @@ pub struct TranslatedCpSatModel {
     cp_model_proto: Vec<u8>,
     boolean_indices: BTreeMap<BoolVariableId, i32>,
     integer_indices: BTreeMap<IntVariableId, i32>,
+    interval_constraint_indices: BTreeMap<IntervalVariableId, i32>,
+    constraint_indices: BTreeMap<PlanningConstraintId, Vec<i32>>,
 }
 
 impl TranslatedCpSatModel {
@@ -75,6 +77,21 @@ impl TranslatedCpSatModel {
     pub fn integer_index(&self, id: &IntVariableId) -> Option<i32> {
         self.integer_indices.get(id).copied()
     }
+
+    /// Returns the native interval-constraint index retained for a planning interval.
+    ///
+    /// The current supported subset rejects interval variables, so successful translations return
+    /// `None` until interval translation is enabled.
+    #[must_use]
+    pub fn interval_constraint_index(&self, id: &IntervalVariableId) -> Option<i32> {
+        self.interval_constraint_indices.get(id).copied()
+    }
+
+    /// Returns every native constraint index generated for one planning constraint.
+    #[must_use]
+    pub fn constraint_indices(&self, id: &PlanningConstraintId) -> Option<&[i32]> {
+        self.constraint_indices.get(id).map(Vec::as_slice)
+    }
 }
 
 /// Safe failures before a planning model can enter a worker request.
@@ -86,6 +103,9 @@ pub enum TranslationError {
     /// CP-SAT variable references are signed 32-bit indices.
     #[error("the CP-SAT scalar variable index exceeds the signed 32-bit protocol range")]
     VariableIndexOverflow,
+    /// CP-SAT constraint references are signed 32-bit indices.
+    #[error("the CP-SAT constraint index exceeds the signed 32-bit protocol range")]
+    ConstraintIndexOverflow,
     /// Validated planning IR referenced a Boolean absent from the retained index map.
     #[error("validated planning IR referenced an unindexed Boolean variable")]
     MissingBooleanIndex,
@@ -247,13 +267,16 @@ pub fn translate_supported_model(
         boolean_indices,
         integer_indices,
     } = translate_variable_domains_validated(problem, needs_constant_one)?;
-    translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
+    let constraint_indices =
+        translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
     translate_objective(problem, &objective_weights, &mut model, &integer_indices, 0)?;
 
     Ok(TranslatedCpSatModel {
         cp_model_proto: model.encode_to_vec(),
         boolean_indices,
         integer_indices,
+        interval_constraint_indices: BTreeMap::new(),
+        constraint_indices,
     })
 }
 
@@ -263,95 +286,20 @@ fn translate_constraints(
     boolean_indices: &BTreeMap<BoolVariableId, i32>,
     integer_indices: &BTreeMap<IntVariableId, i32>,
     constant_one_index: i32,
-) -> Result<(), TranslationError> {
+) -> Result<BTreeMap<PlanningConstraintId, Vec<i32>>, TranslationError> {
     model.constraints.reserve(problem.constraints.len());
+    let mut constraint_indices = BTreeMap::new();
     for record in &problem.constraints {
         let enforcement = translate_literals(&record.enforcement, boolean_indices)?;
         let first_generated = model.constraints.len();
-        match &record.body {
-            Constraint::BoolOr { literals } => {
-                model.constraints.push(boolean_constraint(
-                    constraint_proto::Constraint::BoolOr,
-                    translate_literals(literals, boolean_indices)?,
-                ));
-            }
-            Constraint::BoolAnd { literals } => {
-                model.constraints.push(boolean_constraint(
-                    constraint_proto::Constraint::BoolAnd,
-                    translate_literals(literals, boolean_indices)?,
-                ));
-            }
-            Constraint::Implication {
-                antecedent,
-                consequent,
-            } => {
-                let antecedent = translate_literal(antecedent, boolean_indices)?;
-                let consequent = translate_literal(consequent, boolean_indices)?;
-                model.constraints.push(boolean_constraint(
-                    constraint_proto::Constraint::BoolOr,
-                    vec![!antecedent, consequent],
-                ));
-            }
-            Constraint::Equivalence { left, right } => {
-                let left = translate_literal(left, boolean_indices)?;
-                let right = translate_literal(right, boolean_indices)?;
-                model.constraints.push(boolean_constraint(
-                    constraint_proto::Constraint::BoolOr,
-                    vec![!left, right],
-                ));
-                model.constraints.push(boolean_constraint(
-                    constraint_proto::Constraint::BoolOr,
-                    vec![left, !right],
-                ));
-            }
-            Constraint::AtMostOne { literals } => {
-                if enforcement.is_empty() {
-                    model.constraints.push(boolean_constraint(
-                        constraint_proto::Constraint::AtMostOne,
-                        translate_literals(literals, boolean_indices)?,
-                    ));
-                } else {
-                    model.constraints.push(cardinality_constraint(
-                        literals,
-                        0,
-                        1,
-                        boolean_indices,
-                    )?);
-                }
-            }
-            Constraint::ExactlyOne { literals } => {
-                if enforcement.is_empty() {
-                    model.constraints.push(boolean_constraint(
-                        constraint_proto::Constraint::ExactlyOne,
-                        translate_literals(literals, boolean_indices)?,
-                    ));
-                } else {
-                    model.constraints.push(cardinality_constraint(
-                        literals,
-                        1,
-                        1,
-                        boolean_indices,
-                    )?);
-                }
-            }
-            Constraint::CardinalityRange { literals, min, max } => {
-                model.constraints.push(cardinality_constraint(
-                    literals,
-                    *min,
-                    *max,
-                    boolean_indices,
-                )?);
-            }
-            Constraint::LinearComparison(comparison) => {
-                model.constraints.push(linear_comparison_constraint(
-                    comparison,
-                    integer_indices,
-                    &model.variables,
-                    constant_one_index,
-                )?);
-            }
-            _ => return Err(TranslationError::UnsupportedConstraint),
-        }
+        translate_constraint_body(
+            &record.body,
+            !enforcement.is_empty(),
+            model,
+            boolean_indices,
+            integer_indices,
+            constant_one_index,
+        )?;
         let generated = &mut model.constraints[first_generated..];
         if let Some((last, prior)) = generated.split_last_mut() {
             for constraint in prior {
@@ -359,6 +307,101 @@ fn translate_constraints(
             }
             last.enforcement_literal = enforcement;
         }
+        let native_indices = (first_generated..model.constraints.len())
+            .map(|index| {
+                i32::try_from(index).map_err(|_| TranslationError::ConstraintIndexOverflow)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        constraint_indices.insert(record.id.clone(), native_indices);
+    }
+    Ok(constraint_indices)
+}
+
+fn translate_constraint_body(
+    body: &Constraint,
+    is_enforced: bool,
+    model: &mut CpModelProto,
+    boolean_indices: &BTreeMap<BoolVariableId, i32>,
+    integer_indices: &BTreeMap<IntVariableId, i32>,
+    constant_one_index: i32,
+) -> Result<(), TranslationError> {
+    match body {
+        Constraint::BoolOr { literals } => {
+            model.constraints.push(boolean_constraint(
+                constraint_proto::Constraint::BoolOr,
+                translate_literals(literals, boolean_indices)?,
+            ));
+        }
+        Constraint::BoolAnd { literals } => {
+            model.constraints.push(boolean_constraint(
+                constraint_proto::Constraint::BoolAnd,
+                translate_literals(literals, boolean_indices)?,
+            ));
+        }
+        Constraint::Implication {
+            antecedent,
+            consequent,
+        } => {
+            let antecedent = translate_literal(antecedent, boolean_indices)?;
+            let consequent = translate_literal(consequent, boolean_indices)?;
+            model.constraints.push(boolean_constraint(
+                constraint_proto::Constraint::BoolOr,
+                vec![!antecedent, consequent],
+            ));
+        }
+        Constraint::Equivalence { left, right } => {
+            let left = translate_literal(left, boolean_indices)?;
+            let right = translate_literal(right, boolean_indices)?;
+            model.constraints.push(boolean_constraint(
+                constraint_proto::Constraint::BoolOr,
+                vec![!left, right],
+            ));
+            model.constraints.push(boolean_constraint(
+                constraint_proto::Constraint::BoolOr,
+                vec![left, !right],
+            ));
+        }
+        Constraint::AtMostOne { literals } => {
+            if is_enforced {
+                model
+                    .constraints
+                    .push(cardinality_constraint(literals, 0, 1, boolean_indices)?);
+            } else {
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::AtMostOne,
+                    translate_literals(literals, boolean_indices)?,
+                ));
+            }
+        }
+        Constraint::ExactlyOne { literals } => {
+            if is_enforced {
+                model
+                    .constraints
+                    .push(cardinality_constraint(literals, 1, 1, boolean_indices)?);
+            } else {
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::ExactlyOne,
+                    translate_literals(literals, boolean_indices)?,
+                ));
+            }
+        }
+        Constraint::CardinalityRange { literals, min, max } => {
+            model.constraints.push(cardinality_constraint(
+                literals,
+                *min,
+                *max,
+                boolean_indices,
+            )?);
+        }
+        Constraint::LinearComparison(comparison) => {
+            model.constraints.push(linear_comparison_constraint(
+                comparison,
+                integer_indices,
+                &model.variables,
+                constant_one_index,
+            )?);
+        }
+        _ => return Err(TranslationError::UnsupportedConstraint),
     }
     Ok(())
 }
@@ -1605,6 +1648,32 @@ mod tests {
             constraint.constraint,
             Some(constraint_proto::Constraint::Linear(_))
         )));
+        assert_eq!(
+            translated
+                .constraint_indices(&PlanningConstraintId::new("constraint.a_enforced_clause",)?),
+            Some(&[0][..])
+        );
+        assert_eq!(
+            translated.constraint_indices(&PlanningConstraintId::new(
+                "constraint.b_enforced_equivalence",
+            )?),
+            Some(&[1, 2][..])
+        );
+        assert_eq!(
+            translated
+                .constraint_indices(&PlanningConstraintId::new("constraint.c_enforced_at_most",)?),
+            Some(&[3][..])
+        );
+        assert_eq!(
+            translated
+                .constraint_indices(&PlanningConstraintId::new("constraint.d_enforced_exactly",)?),
+            Some(&[4][..])
+        );
+        assert_eq!(
+            translated
+                .interval_constraint_index(&IntervalVariableId::new("translation.interval",)?),
+            None
+        );
         Ok(())
     }
 }
