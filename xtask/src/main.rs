@@ -143,12 +143,19 @@ fn repository_root() -> Result<PathBuf> {
 }
 
 fn unavailable_solver(command: &SolverCommand) -> Result<()> {
-    let operation = match command {
-        SolverCommand::BuildNative => "build-native",
-        SolverCommand::InstallFromNix => "install-from-nix",
-        SolverCommand::Smoke => "smoke",
+    let (operation, prerequisite) = match command {
+        SolverCommand::BuildNative => (
+            "build-native",
+            "the equivalent native Windows builder is implemented",
+        ),
+        SolverCommand::InstallFromNix => (
+            "install-from-nix",
+            "the installed solver manifest and license payload contracts exist",
+        ),
+        SolverCommand::Smoke => (
+            "smoke",
+            "manifest-validated worker installation is implemented",
+        ),
     };
-    bail!(
-        "solver {operation} is unavailable until the Phase-03 OR-Tools source, hash, protobuf, and license gates are approved"
-    )
+    bail!("solver {operation} is unavailable until {prerequisite}")
 }

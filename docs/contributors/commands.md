@@ -76,14 +76,14 @@ The CLI name and desktop identifier used by Phase 00 are development surfaces, n
 
 ### Solver worker
 
-| Recipe | Behavior in Phase 00 |
+| Recipe | Behavior in Phase 03 |
 | --- | --- |
-| `just worker-build-nix` | Evaluates the Nix worker derivation contract and fails at its unresolved OR-Tools source/hash gate. |
-| `just worker-build-native` | Delegates to `xtask` and fails at the same Phase-03 source, protobuf, hash, and license gate. |
-| `just worker-install-from-nix` | Delegates installation to `xtask`; it cannot install an unapproved or dummy worker. |
-| `just worker-smoke` | Delegates executable smoke testing to `xtask`; it cannot report success before a real worker exists. |
+| `just worker-build-nix` | Builds the approved OR-Tools 9.15.6755 source contract in the Nix sandbox, runs the native worker tests, and verifies that the installed worker starts with its packaged runtime libraries. This does not produce the deferred solver manifest, SBOM/license payload, sidecar, or backend registration. |
+| `just worker-build-native` | Delegates to `xtask` and remains blocked until the equivalent native Windows builder is implemented. |
+| `just worker-install-from-nix` | Delegates to `xtask`; installation remains blocked until the installed manifest and license payload contract exists. |
+| `just worker-smoke` | Delegates executable smoke testing to `xtask`; it remains blocked until manifest-validated worker installation exists. |
 
-These failures are intentional. Phase 03 must approve one exact OR-Tools source, hash, matched protobuf contract, build flags, and license inventory before any worker recipe may succeed.
+Only the Nix build recipe is available at this stage. Native Windows parity, identical manifest semantics, the exact license/SBOM payload, sidecar assembly, and solver-backend availability remain later Phase 03 gates.
 
 ### Supply chain and release
 

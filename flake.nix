@@ -64,16 +64,6 @@
         }
       );
 
-      legacyPackages = forAllSystems (
-        system:
-        let
-          pkgs = pkgsFor system;
-        in
-        {
-          ortools-worker-contract = import ./nix/ortools-worker.nix { inherit pkgs; };
-        }
-      );
-
       checks = forAllSystems (
         system:
         let

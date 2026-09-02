@@ -116,7 +116,7 @@ No project binary cache is claimed in Phase 00. Nix first uses the substituters 
 
 ## Common commands
 
-These recipes exist in Phase 00:
+The repository command set includes:
 
 ```console
 just fmt-check
@@ -131,12 +131,13 @@ just generate-check
 just licenses
 just sbom
 just nix-check
+just worker-build-nix
 just check
 ```
 
 `just check` calls the non-mutating `generate-check` recipe, which validates the existing checked-in generated outputs, including license and SBOM files, without regenerating them. Use `just generate` only after changing an authoritative generator input; generated files are never hand-edited. Run `just licenses` or `just sbom` when you explicitly intend to regenerate the corresponding supply-chain outputs. The optional `just test-rust-nextest` and `just coverage` recipes require the full shell; the default `just test-rust` recipe does not.
 
-The following recipe families are present but fail clearly while their named prerequisite is deferred: native/Nix worker build, install, and smoke require the approved Phase-03 OR-Tools/protobuf contract; packaged E2E and release preflight require Phase-11 packaging/release inputs. Do not treat those expected failures as platform support or release evidence.
+`just worker-build-nix` is available on x86_64 Linux and x86_64/aarch64 macOS and builds the approved worker source contract in the Nix sandbox. Native Windows build, manifest-validated installation, worker smoke, packaged E2E, and release preflight still fail clearly until their named Phase-03 or Phase-11 prerequisites are implemented. A successful Nix worker build proves only the buildable worker artifact and its installed runtime-loader smoke; it does not make the solver backend available.
 
 ## Core-only route
 

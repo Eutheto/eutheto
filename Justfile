@@ -135,19 +135,19 @@ test: test-rust test-doc test-ui
 coverage:
     cargo llvm-cov nextest --workspace --locked
 
-# Evaluate the gated Nix OR-Tools worker derivation contract.
+# Build the pinned Nix OR-Tools worker artifact.
 worker-build-nix:
-    nix build --impure --expr 'let flake = builtins.getFlake (toString ./.); in flake.legacyPackages.${builtins.currentSystem}.ortools-worker-contract'
+    nix build .#ortools-worker
 
-# Build the native OR-Tools worker once its Phase-03 pin is approved.
+# Build the native OR-Tools worker once its equivalent Windows builder exists.
 worker-build-native:
     cargo xtask solver build-native
 
-# Install the Nix-built OR-Tools worker once its Phase-03 pin is approved.
+# Install the Nix-built worker once its manifest and license payload exist.
 worker-install-from-nix:
     cargo xtask solver install-from-nix
 
-# Smoke-test the OR-Tools worker once its Phase-03 pin is approved.
+# Smoke-test the OR-Tools worker once manifest-validated installation exists.
 worker-smoke:
     cargo xtask solver smoke
 
