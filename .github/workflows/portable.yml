@@ -287,48 +287,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Ubuntu x86_64 (shared)
-            os: ubuntu-24.04
-            target: linux-x86_64
-            generator: Unix Makefiles
-            generator-platform: ""
-            linkage: shared
           - name: Ubuntu x86_64 (static)
             os: ubuntu-24.04
             target: linux-x86_64
             generator: Unix Makefiles
             generator-platform: ""
             linkage: static
-          - name: Windows x86_64 (shared)
-            os: windows-2025
-            target: windows-x86_64
-            generator: Ninja
-            generator-platform: ""
-            linkage: shared
           - name: Windows x86_64 (static)
             os: windows-2025
             target: windows-x86_64
             generator: Ninja
             generator-platform: ""
             linkage: static
-          - name: macOS arm64 (shared)
-            os: macos-15
-            target: macos-arm64
-            generator: Unix Makefiles
-            generator-platform: ""
-            linkage: shared
           - name: macOS arm64 (static)
             os: macos-15
             target: macos-arm64
             generator: Unix Makefiles
             generator-platform: ""
             linkage: static
-          - name: macOS x86_64 (shared)
-            os: macos-15-intel
-            target: macos-x86_64
-            generator: Unix Makefiles
-            generator-platform: ""
-            linkage: shared
           - name: macOS x86_64 (static)
             os: macos-15-intel
             target: macos-x86_64

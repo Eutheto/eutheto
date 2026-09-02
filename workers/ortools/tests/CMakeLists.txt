@@ -6,7 +6,6 @@ add_executable(ortools-worker-callback-tests callback_tests.cc)
 target_link_libraries(ortools-worker-callback-tests PRIVATE eutheto-ortools-worker-lib)
 list(APPEND native_worker_test_targets ortools-worker-callback-tests)
 
-
 if(EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS)
   add_executable(
     ortools-worker-candidate-benchmarks
@@ -37,6 +36,11 @@ foreach(native_worker_test_target IN LISTS native_worker_test_targets)
     )
   endif()
 endforeach()
+if(MSVC)
+  # Direct Model::Add callback registration instantiates pinned Abseil code
+  # that MSVC 14.51 reports as C4702 despite its external-header classification.
+  target_compile_options(ortools-worker-callback-tests PRIVATE /wd4702)
+endif()
 
 add_test(NAME ortools-worker-native COMMAND ortools-worker-native-tests)
 add_test(NAME ortools-worker-callback COMMAND ortools-worker-callback-tests)
