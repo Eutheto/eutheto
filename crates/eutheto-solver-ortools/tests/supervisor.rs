@@ -22,11 +22,15 @@ use sha2::{Digest, Sha256};
 
 const MANIFEST: [u8; 32] = [0x5a; 32];
 
-async fn request(mode: &str, progress: bool) -> Result<SessionRequest, Box<dyn Error>> {
+async fn verified_helper() -> Result<VerifiedExecutable, Box<dyn Error>> {
     let path = Path::new(env!("CARGO_BIN_EXE_worker-helper"));
     let bytes = tokio::fs::read(path).await?;
     let executable_sha256: [u8; 32] = Sha256::digest(bytes).into();
-    let executable = VerifiedExecutable::verify(path, executable_sha256, MANIFEST).await?;
+    Ok(VerifiedExecutable::verify(path, executable_sha256, MANIFEST).await?)
+}
+
+async fn request(mode: &str, progress: bool) -> Result<SessionRequest, Box<dyn Error>> {
+    let executable = verified_helper().await?;
     let mut capabilities = vec![Capability::CpSat];
     if progress {
         capabilities.push(Capability::Progress);

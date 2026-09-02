@@ -4,9 +4,9 @@ use eutheto_domain_ir::OptimizationDirection;
 use eutheto_planning_ir::{
     Assumption, BoolVariableId, Capability, ComparisonOp, Constraint, IntDomain, IntVariableId,
     IntervalVariableId, LexicographicStrategy, LinearComparison, Literal, ObjectiveLevelId,
-    ObjectivePlan, PlanningConstraintId, PlanningIrLimitsV1, PlanningProblem, ProjectionExpression,
-    ProjectionId, ProvenanceId, ProvenanceRecord, SolutionProjection, ValidationError, Variable,
-    feature_usage, lexicographic_strategy, validate,
+    ObjectivePlan, PlanningConstraintId, PlanningIrLimitsV1, PlanningProblem, ProjectionId,
+    ProvenanceId, ProvenanceRecord, SolutionProjection, ValidationError, Variable, feature_usage,
+    lexicographic_strategy, validate,
 };
 use eutheto_protocol::wire::ProjectionRequest as WorkerProjectionRequest;
 use prost::Message;
@@ -400,7 +400,7 @@ pub fn translate_supported_model(
         integer_indices,
     } = translate_variable_domains_validated(problem, needs_constant_one)?;
     let (worker_projection_requests, candidate_projection_variables) =
-        translate_candidate_projections(problem, &boolean_indices, &integer_indices)?;
+        translate_candidate_assignments(&boolean_indices, &integer_indices)?;
     let constraint_indices =
         translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
     translate_objective(problem, &objective_weights, &mut model, &integer_indices, 0)?;
@@ -420,8 +420,7 @@ pub fn translate_supported_model(
     })
 }
 
-fn translate_candidate_projections(
-    problem: &PlanningProblem,
+fn translate_candidate_assignments(
     boolean_indices: &BTreeMap<BoolVariableId, i32>,
     integer_indices: &BTreeMap<IntVariableId, i32>,
 ) -> Result<
@@ -432,40 +431,16 @@ fn translate_candidate_projections(
     TranslationError,
 > {
     let mut requested = BTreeMap::<i32, CandidateProjectionVariable>::new();
-    for projection in &problem.projections {
-        match &projection.expression {
-            ProjectionExpression::Boolean(id) => {
-                let index = boolean_indices
-                    .get(id)
-                    .copied()
-                    .ok_or(TranslationError::MissingBooleanIndex)?;
-                requested.insert(index, CandidateProjectionVariable::Boolean(id.clone()));
-            }
-            ProjectionExpression::Integer(id) => {
-                insert_integer_projection(&mut requested, id, integer_indices)?;
-            }
-            ProjectionExpression::Linear(expression) => {
-                for term in &expression.terms {
-                    insert_integer_projection(&mut requested, &term.variable, integer_indices)?;
-                }
-            }
-            ProjectionExpression::Interval(_) => {
-                return Err(TranslationError::UnsupportedIntervalVariable);
-            }
-            ProjectionExpression::Constant(_) => {}
-        }
-    }
-    for level in &problem.objectives.levels {
-        for term in &level.terms {
-            for expression_term in &term.expression.terms {
-                insert_integer_projection(
-                    &mut requested,
-                    &expression_term.variable,
-                    integer_indices,
-                )?;
-            }
-        }
-    }
+    requested.extend(
+        boolean_indices
+            .iter()
+            .map(|(id, index)| (*index, CandidateProjectionVariable::Boolean(id.clone()))),
+    );
+    requested.extend(
+        integer_indices
+            .iter()
+            .map(|(id, index)| (*index, CandidateProjectionVariable::Integer(id.clone()))),
+    );
 
     let mut worker_requests = Vec::with_capacity(requested.len());
     let mut candidate_variables = BTreeMap::new();
@@ -479,19 +454,6 @@ fn translate_candidate_projections(
         candidate_variables.insert(projection_id, variable);
     }
     Ok((worker_requests, candidate_variables))
-}
-
-fn insert_integer_projection(
-    requested: &mut BTreeMap<i32, CandidateProjectionVariable>,
-    id: &IntVariableId,
-    integer_indices: &BTreeMap<IntVariableId, i32>,
-) -> Result<(), TranslationError> {
-    let index = integer_indices
-        .get(id)
-        .copied()
-        .ok_or(TranslationError::MissingIntegerIndex)?;
-    requested.insert(index, CandidateProjectionVariable::Integer(id.clone()));
-    Ok(())
 }
 
 fn retain_translation_maps(
@@ -953,8 +915,8 @@ mod tests {
         IntVariable, IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm,
         ObjectiveLevel, ObjectiveLevelId, ObjectivePlan, ObjectiveTerm, ObjectiveTermId,
         ObjectiveTermKind, PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION,
-        PlanningConstraintId, PlanningMetadata, ProvenanceId, ProvenanceRecord,
-        ProvenanceSourceKind,
+        PlanningConstraintId, PlanningMetadata, ProjectionExpression, ProvenanceId,
+        ProvenanceRecord, ProvenanceSourceKind,
     };
     use eutheto_types::{PackId, ScenarioId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -1643,7 +1605,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_projection_requests_include_only_projection_and_objective_inputs()
+    fn candidate_requests_cover_every_scalar_assignment_in_native_index_order()
     -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
         let bool_a = BoolVariableId::new("translation.a_bool")?;
@@ -1708,7 +1670,10 @@ mod tests {
             .iter()
             .map(|request| (request.projection_id, request.cp_sat_variable_index))
             .collect::<Vec<_>>();
-        assert_eq!(worker_requests, vec![(0, 0), (1, 1), (2, 2), (3, 3)]);
+        assert_eq!(
+            worker_requests,
+            vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)]
+        );
         assert_eq!(
             translated.candidate_projection_variable(0),
             Some(&CandidateProjectionVariable::Boolean(bool_a))
@@ -1725,12 +1690,9 @@ mod tests {
             translated.candidate_projection_variable(3),
             Some(&CandidateProjectionVariable::Integer(end))
         );
-        assert!(translated.boolean_index(&bool_z).is_some());
-        assert!(
-            translated
-                .worker_projection_requests()
-                .iter()
-                .all(|request| request.cp_sat_variable_index != 4)
+        assert_eq!(
+            translated.candidate_projection_variable(4),
+            Some(&CandidateProjectionVariable::Boolean(bool_z))
         );
         assert_eq!(translated.projection_requests().count(), 4);
         assert!(

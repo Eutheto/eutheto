@@ -63,6 +63,47 @@ pub fn ortools_compatibility(
                 .to_owned(),
         });
     }
+    if options.random_seed > i32::MAX as u64 {
+        report.unsupported_features.push(UnsupportedFeature {
+            feature_id: support_feature("solve.deterministic-mode")?,
+            usage_count: 1,
+            path: "solveOptions.randomSeed".to_owned(),
+            reason: "OR-Tools accepts only signed 32-bit random seeds.".to_owned(),
+            remediation: "Choose a random seed no greater than 2147483647.".to_owned(),
+        });
+    }
+    if matches!(
+        options.worker_threads,
+        eutheto_types::WorkerThreadPolicy::Exact(count)
+            if u32::from(count) > eutheto_protocol::MAX_ORTOOLS_WORKER_THREADS
+    ) {
+        report.unsupported_features.push(UnsupportedFeature {
+            feature_id: support_feature("solve.resource-limits")?,
+            usage_count: 1,
+            path: "solveOptions.workerThreads".to_owned(),
+            reason: "The requested worker count exceeds the pinned worker protocol limit."
+                .to_owned(),
+            remediation: "Choose at most 10000 worker threads.".to_owned(),
+        });
+    }
+    if matches!(
+        options.reproducibility,
+        eutheto_types::ReproducibilityMode::Deterministic
+    ) && (options.random_seed != 1
+        || !matches!(
+            options.worker_threads,
+            eutheto_types::WorkerThreadPolicy::Exact(1)
+        ))
+    {
+        report.unsupported_features.push(UnsupportedFeature {
+            feature_id: support_feature("solve.deterministic-mode")?,
+            usage_count: 1,
+            path: "solveOptions.reproducibility".to_owned(),
+            reason: "The pinned deterministic worker profile requires random seed 1 and exactly one worker thread."
+                .to_owned(),
+            remediation: "Set randomSeed to 1 and workerThreads to exact count 1.".to_owned(),
+        });
+    }
     if !report.unsupported_features.is_empty() {
         report.unsupported_features.sort_by(|left, right| {
             left.feature_id
@@ -322,6 +363,40 @@ mod tests {
             unsupported.unsupported_features[0].feature_id.as_str(),
             "solve.resource-limits"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn report_rejects_worker_parameters_outside_pinned_contract() -> TestResult {
+        let matrix = matrix()?;
+
+        let mut seed = options()?;
+        seed.random_seed = i32::MAX as u64 + 1;
+        let report = ortools_compatibility(&matrix, &summary(), &seed)?;
+        assert_eq!(report.level, CompatibilityLevel::Unsupported);
+        assert!(report.unsupported_features.iter().any(|feature| {
+            feature.feature_id.as_str() == "solve.deterministic-mode"
+                && feature.path == "solveOptions.randomSeed"
+        }));
+
+        let mut threads = options()?;
+        threads.reproducibility = ReproducibilityMode::Performance;
+        threads.worker_threads = WorkerThreadPolicy::Exact(10_001);
+        let report = ortools_compatibility(&matrix, &summary(), &threads)?;
+        assert_eq!(report.level, CompatibilityLevel::Unsupported);
+        assert!(report.unsupported_features.iter().any(|feature| {
+            feature.feature_id.as_str() == "solve.resource-limits"
+                && feature.path == "solveOptions.workerThreads"
+        }));
+
+        let mut deterministic = options()?;
+        deterministic.random_seed = 7;
+        let report = ortools_compatibility(&matrix, &summary(), &deterministic)?;
+        assert_eq!(report.level, CompatibilityLevel::Unsupported);
+        assert!(report.unsupported_features.iter().any(|feature| {
+            feature.feature_id.as_str() == "solve.deterministic-mode"
+                && feature.path == "solveOptions.reproducibility"
+        }));
         Ok(())
     }
 

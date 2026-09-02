@@ -2,6 +2,7 @@ use crate::TranslatedCpSatModel;
 use eutheto_domain_ir::OptimizationDirection;
 use eutheto_solver_api::{
     BackendCandidate, BackendObjectiveEvidence, BackendTerminationEvidence, BoundSummary,
+    CandidateSubmission,
 };
 use eutheto_types::DurationMillis;
 use thiserror::Error;
@@ -80,7 +81,34 @@ impl AdapterEvidenceRecorder {
         &mut self,
         candidate: &BackendCandidate,
     ) -> Result<(), AdapterEvidenceError> {
-        let objective_values = match (&candidate.objective, self.objective_contracts.is_empty()) {
+        self.record_candidate_evidence(
+            candidate.objective.as_ref(),
+            candidate.observed_after_milliseconds,
+        )
+    }
+
+    /// Validates and records candidate evidence before the assignment crosses the bounded output
+    /// mutation boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same evidence errors as [`Self::record_candidate`].
+    pub fn record_submission(
+        &mut self,
+        candidate: &CandidateSubmission,
+    ) -> Result<(), AdapterEvidenceError> {
+        self.record_candidate_evidence(
+            candidate.objective.as_ref(),
+            candidate.observed_after_milliseconds,
+        )
+    }
+
+    fn record_candidate_evidence(
+        &mut self,
+        objective: Option<&BackendObjectiveEvidence>,
+        observed_after_milliseconds: DurationMillis,
+    ) -> Result<(), AdapterEvidenceError> {
+        let objective_values = match (objective, self.objective_contracts.is_empty()) {
             (None, true) => None,
             (None, false) => return Err(AdapterEvidenceError::MissingObjectiveEvidence),
             (Some(_), true) => return Err(AdapterEvidenceError::UnexpectedObjectiveEvidence),
@@ -97,11 +125,11 @@ impl AdapterEvidenceRecorder {
                 Some(objective.objective_values.clone())
             }
         };
-        self.validate_time(candidate.observed_after_milliseconds)?;
+        self.validate_time(observed_after_milliseconds)?;
 
-        self.last_observed_milliseconds = Some(candidate.observed_after_milliseconds);
+        self.last_observed_milliseconds = Some(observed_after_milliseconds);
         if self.first_incumbent_milliseconds.is_none() {
-            self.first_incumbent_milliseconds = Some(candidate.observed_after_milliseconds);
+            self.first_incumbent_milliseconds = Some(observed_after_milliseconds);
         }
         self.latest_objective = objective_values.map(|objective_values| BackendObjectiveEvidence {
             objective_values,
@@ -110,14 +138,17 @@ impl AdapterEvidenceRecorder {
         Ok(())
     }
 
-    /// Records one exact bound progress record without retaining worker-native floats.
+    /// Records one strictly improved exact bound without retaining worker-native floats.
+    ///
+    /// Returns `false` for an exact duplicate so callers do not spend progress capacity on the
+    /// terminal frame repeating the last callback bound.
     ///
     /// # Errors
     ///
     /// Returns an error unless the adapter has one objective level and the bound is in range,
-    /// directionally consistent with the latest candidate, monotonically improves prior bounds,
-    /// and has non-decreasing parent timing.
-    pub fn record_bound(&mut self, bound: &BoundSummary) -> Result<(), AdapterEvidenceError> {
+    /// directionally consistent with the latest candidate, strictly improves or equals prior
+    /// bounds, and has non-decreasing parent timing.
+    pub fn record_bound(&mut self, bound: &BoundSummary) -> Result<bool, AdapterEvidenceError> {
         let [contract] = self.objective_contracts.as_slice() else {
             return Err(AdapterEvidenceError::BoundUnavailableForObjectivePlan);
         };
@@ -131,9 +162,13 @@ impl AdapterEvidenceRecorder {
             .latest_bound_values
             .as_ref()
             .and_then(|values| values.first())
-            && !bound_improves(contract.direction, *previous, *bound_value)
         {
-            return Err(AdapterEvidenceError::BoundRegressed);
+            if previous == bound_value {
+                return Ok(false);
+            }
+            if !bound_strictly_improves(contract.direction, *previous, *bound_value) {
+                return Err(AdapterEvidenceError::BoundRegressed);
+            }
         }
         if let Some(objective) = &self.latest_objective {
             self.validate_bound_against_objective(
@@ -150,7 +185,7 @@ impl AdapterEvidenceRecorder {
                 .best_bound_values
                 .clone_from(&self.latest_bound_values);
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Finalizes shared backend termination evidence using parent-measured elapsed time.
@@ -215,10 +250,14 @@ impl AdapterEvidenceRecorder {
     }
 }
 
-const fn bound_improves(direction: OptimizationDirection, previous: i64, next: i64) -> bool {
+const fn bound_strictly_improves(
+    direction: OptimizationDirection,
+    previous: i64,
+    next: i64,
+) -> bool {
     match direction {
-        OptimizationDirection::Minimize => next >= previous,
-        OptimizationDirection::Maximize => next <= previous,
+        OptimizationDirection::Minimize => next > previous,
+        OptimizationDirection::Maximize => next < previous,
     }
 }
 
@@ -297,10 +336,14 @@ mod tests {
             bound_values: vec![0],
         })?;
         recorder.record_candidate(&candidate(1, 20, 8)?)?;
-        recorder.record_bound(&BoundSummary {
+        assert!(recorder.record_bound(&BoundSummary {
             observed_after_milliseconds: milliseconds(30)?,
             bound_values: vec![3],
-        })?;
+        })?);
+        assert!(!recorder.record_bound(&BoundSummary {
+            observed_after_milliseconds: milliseconds(35)?,
+            bound_values: vec![3],
+        })?);
         recorder.record_candidate(&candidate(2, 40, 6)?)?;
 
         assert_eq!(

@@ -10,10 +10,13 @@ use std::time::Duration;
 use eutheto_protocol::frame::{decode_parent_frame, encode_frame, read_frame};
 use eutheto_protocol::wire::handshake_response::Outcome;
 use eutheto_protocol::wire::{
-    HandshakeError, HandshakeErrorCode, HandshakeResponse, HandshakeSuccess, Progress,
-    ProgressKind, Started, WorkerError, WorkerErrorCode, WorkerFrame, parent_frame, worker_frame,
+    Finished, HandshakeError, HandshakeErrorCode, HandshakeResponse, HandshakeSuccess, Progress,
+    ProgressKind, ProjectedCandidate, ProjectedValue, Started, TerminationReason, WorkerError,
+    WorkerErrorCode, WorkerFrame, WorkerSolveStatus, parent_frame, worker_frame,
 };
-use eutheto_protocol::{FrameClass, checked_in_policy};
+use eutheto_protocol::{
+    FrameClass, applied_parameters_sha256, checked_in_policy, normalize_applied_parameters,
+};
 
 fn main() {
     if env::args_os().len() != 1 {
@@ -94,6 +97,16 @@ fn worker() -> Result<(), Box<dyn Error>> {
         _ => {}
     }
 
+    let production_contract = handshake.required_capabilities
+        == [
+            eutheto_protocol::wire::Capability::CpSat as i32,
+            eutheto_protocol::wire::Capability::DeterministicTime as i32,
+            eutheto_protocol::wire::Capability::IntermediateSolutions as i32,
+            eutheto_protocol::wire::Capability::ObjectiveBounds as i32,
+            eutheto_protocol::wire::Capability::Progress as i32,
+            eutheto_protocol::wire::Capability::SolutionProjection as i32,
+            eutheto_protocol::wire::Capability::SolutionStats as i32,
+        ];
     write_worker(
         &mut output,
         &WorkerFrame {
@@ -101,7 +114,11 @@ fn worker() -> Result<(), Box<dyn Error>> {
                 outcome: Some(Outcome::Success(HandshakeSuccess {
                     protocol_major: handshake.protocol_major,
                     protocol_minor: handshake.protocol_minor,
-                    worker_identity: "eutheto-test-worker".to_owned(),
+                    worker_identity: if production_contract {
+                        "eutheto-ortools-worker".to_owned()
+                    } else {
+                        "eutheto-test-worker".to_owned()
+                    },
                     worker_version: "0.1.0".to_owned(),
                     backend_id: handshake.expected_backend_id,
                     ortools_version: "9.15.6755".to_owned(),
@@ -185,6 +202,34 @@ fn worker() -> Result<(), Box<dyn Error>> {
                 },
             )?;
         }
+        return Ok(());
+    }
+
+    if production_contract {
+        let applied_parameters_sha256 =
+            applied_parameters_sha256(&normalize_applied_parameters(&solve)?);
+        let terminal = WorkerFrame {
+            body: Some(worker_frame::Body::Finished(Finished {
+                request_id: solve.request_id,
+                raw_cp_sat_status: 4,
+                status: WorkerSolveStatus::Optimal as i32,
+                termination_reason: TerminationReason::Optimal as i32,
+                final_candidate: Some(ProjectedCandidate {
+                    values: solve
+                        .projections
+                        .iter()
+                        .map(|projection| ProjectedValue {
+                            projection_id: projection.projection_id,
+                            value: 0,
+                        })
+                        .collect(),
+                }),
+                model_fingerprint: solve.model_fingerprint,
+                applied_parameters_sha256: applied_parameters_sha256.to_vec().into(),
+                ..Finished::default()
+            })),
+        };
+        write_worker(&mut output, &terminal)?;
         return Ok(());
     }
 

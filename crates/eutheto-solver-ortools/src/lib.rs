@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod artifact;
+mod backend;
 mod candidate;
 mod compatibility;
 mod descriptor;
@@ -13,6 +15,8 @@ mod cp_sat {
     include!("generated/operations_research.sat.rs");
 }
 
+pub use artifact::{BundledWorkerArtifactError, VerifiedWorkerArtifact};
+pub use backend::{OrToolsBackend, OrToolsBackendBuildError, registry_with_ortools};
 pub use candidate::{CandidateDecodeError, DecodedCandidate, decode_projected_candidate};
 pub use compatibility::ortools_compatibility;
 pub use descriptor::{
@@ -67,6 +71,7 @@ use tokio::task::JoinHandle;
 pub const TERMINATION_GRACE: Duration = Duration::from_millis(250);
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
+const MAX_STAGED_FILE_BYTES: u64 = 128 * 1024 * 1024;
 
 /// An executable whose exact bytes and manifest correlation were supplied by a
 /// trusted manifest-validation boundary.
@@ -74,7 +79,18 @@ const HASH_BUFFER_BYTES: usize = 64 * 1024;
 pub struct VerifiedExecutable {
     path: PathBuf,
     executable_sha256: [u8; 32],
+    executable_len: u64,
     manifest_sha256: [u8; 32],
+    staged_relative_path: PathBuf,
+    runtime_files: Vec<VerifiedRuntimeFile>,
+}
+
+#[derive(Clone)]
+struct VerifiedRuntimeFile {
+    path: PathBuf,
+    sha256: [u8; 32],
+    len: u64,
+    staged_relative_path: PathBuf,
 }
 
 impl VerifiedExecutable {
@@ -90,11 +106,18 @@ impl VerifiedExecutable {
         manifest_sha256: [u8; 32],
     ) -> Result<Self, ExecutableIdentityError> {
         let path = path.into();
-        verify_path_and_digest(&path, &executable_sha256).await?;
+        let executable_len = verify_path_and_digest(&path, &executable_sha256).await?;
+        #[cfg(unix)]
+        let staged_relative_path = PathBuf::from("worker");
+        #[cfg(windows)]
+        let staged_relative_path = PathBuf::from("worker.exe");
         Ok(Self {
             path,
             executable_sha256,
+            executable_len,
             manifest_sha256,
+            staged_relative_path,
+            runtime_files: Vec::new(),
         })
     }
 
@@ -122,8 +145,14 @@ pub enum ExecutableIdentityError {
     NotRegularFile,
     #[error("worker executable identity could not be read: {0:?}")]
     Io(io::ErrorKind),
+    #[error("worker artifact contains an invalid relative path")]
+    InvalidRelativePath,
     #[error("worker executable digest does not match its approved identity")]
     DigestMismatch,
+    #[error("worker artifact file exceeds the staging byte limit")]
+    FileTooLarge,
+    #[error("worker artifact file size changed after verification")]
+    SizeMismatch,
 }
 
 /// Expected immutable identity and capability surface for one worker binary.
@@ -222,6 +251,8 @@ pub enum SupervisorError {
     SessionByteLimit,
     #[error("worker progress/incumbent rate exceeded the checked-in limit")]
     EventRateLimit,
+    #[error("adapter rejected validated worker output")]
+    AdapterOutput,
     #[error("solve was explicitly cancelled")]
     Cancelled,
     #[error("the original parent solve deadline elapsed")]
@@ -241,6 +272,7 @@ impl SupervisorError {
             | Self::EventCountLimit
             | Self::SessionByteLimit
             | Self::EventRateLimit
+            | Self::AdapterOutput
             | Self::Protocol(ProtocolFault::Frame(FrameFault::Oversized { .. })) => {
                 SafeStopReason::OutputLimit
             }
@@ -271,6 +303,26 @@ pub async fn supervise(
     request: SessionRequest,
     budget: SolveBudgetView,
 ) -> Result<SessionCompletion, SessionFailure> {
+    supervise_with_observer(request, budget, |_| Ok(())).await
+}
+
+/// Supervises one worker session and synchronously delivers each protocol-validated observation.
+///
+/// Returning an error from the observer terminates and reaps the worker before returning a safe
+/// adapter-output failure.
+///
+/// # Errors
+///
+/// Returns the same failures as [`supervise`], plus observer rejection.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn supervise_with_observer<F>(
+    request: SessionRequest,
+    budget: SolveBudgetView,
+    mut observer: F,
+) -> Result<SessionCompletion, SessionFailure>
+where
+    F: FnMut(WorkerObservation) -> Result<(), SupervisorError> + Send,
+{
     let remaining_at_entry = budget.remaining_duration();
     let policy = match checked_in_policy() {
         Ok(policy) => policy,
@@ -314,7 +366,11 @@ pub async fn supervise(
     if let Err(error) = budget_checkpoint(&budget) {
         return Err(prelaunch_failure(error));
     }
-    let mut command = worker_command(&staged_executable, directory.path());
+    let mut command = worker_command(
+        &staged_executable,
+        directory.path(),
+        !request.executable.runtime_files.is_empty(),
+    );
     let child = match command.spawn() {
         Ok(value) => value,
         Err(error) => {
@@ -371,6 +427,7 @@ pub async fn supervise(
             handshake,
             solve: &request.solve,
         },
+        &mut observer,
     )
     .await;
     match execution {
@@ -424,13 +481,17 @@ struct ProtocolSession<'a> {
     solve: &'a SolveRequest,
 }
 
-async fn execute_session(
+async fn execute_session<F>(
     child: &mut Box<dyn ChildWrapper>,
     pipes: WorkerPipes,
     budget: &SolveBudgetView,
     policy: &ProtocolPolicy,
     session: ProtocolSession<'_>,
-) -> Result<CompletedSession, SupervisorError> {
+    observer: &mut F,
+) -> Result<CompletedSession, SupervisorError>
+where
+    F: FnMut(WorkerObservation) -> Result<(), SupervisorError> + Send,
+{
     let ProtocolSession {
         remaining_at_entry,
         expectations,
@@ -511,7 +572,8 @@ async fn execute_session(
             if intermediate {
                 accounting.record_intermediate_rate(Instant::now(), policy)?;
             }
-            protocol.on_worker_frame(frame)?;
+            let observation = protocol.on_worker_frame(frame)?;
+            observer(observation)?;
         } else {
             protocol.on_eof()?;
             break;
@@ -710,14 +772,14 @@ fn handshake_frame(request: &SessionRequest, policy: &ProtocolPolicy) -> ParentF
     }
 }
 
-fn worker_command(path: &Path, cwd: &Path) -> CommandWrap {
+fn worker_command(path: &Path, cwd: &Path, has_runtime_files: bool) -> CommandWrap {
     let mut command = CommandWrap::with_new(path.as_os_str(), |command| {
         command
             .env_clear()
-            .current_dir(cwd)
             .env("LANG", "C")
             .env("LC_ALL", "C")
             .env("TZ", "UTC")
+            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -725,6 +787,12 @@ fn worker_command(path: &Path, cwd: &Path) -> CommandWrap {
         command.env("TMPDIR", cwd);
         #[cfg(windows)]
         command.env("TEMP", cwd).env("TMP", cwd);
+        if has_runtime_files {
+            #[cfg(target_os = "linux")]
+            command.env("LD_LIBRARY_PATH", cwd.join("lib"));
+            #[cfg(target_os = "macos")]
+            command.env("DYLD_LIBRARY_PATH", cwd.join("lib"));
+        }
     });
     command.wrap(KillOnDrop);
     #[cfg(unix)]
@@ -751,8 +819,36 @@ async fn stage_verified_executable(
     executable: &VerifiedExecutable,
     directory: &Path,
 ) -> Result<PathBuf, ExecutableIdentityError> {
-    let path = &executable.path;
-    let metadata = tokio::fs::symlink_metadata(path)
+    for runtime in &executable.runtime_files {
+        stage_verified_file(
+            &runtime.path,
+            &runtime.sha256,
+            runtime.len,
+            &directory.join(&runtime.staged_relative_path),
+            false,
+        )
+        .await?;
+    }
+    let staged_path = directory.join(&executable.staged_relative_path);
+    stage_verified_file(
+        &executable.path,
+        &executable.executable_sha256,
+        executable.executable_len,
+        &staged_path,
+        true,
+    )
+    .await?;
+    Ok(staged_path)
+}
+
+async fn stage_verified_file(
+    source_path: &Path,
+    expected_sha256: &[u8; 32],
+    expected_len: u64,
+    staged_path: &Path,
+    executable: bool,
+) -> Result<(), ExecutableIdentityError> {
+    let metadata = tokio::fs::symlink_metadata(source_path)
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
     if metadata.file_type().is_symlink() {
@@ -761,28 +857,38 @@ async fn stage_verified_executable(
     if !metadata.is_file() {
         return Err(ExecutableIdentityError::NotRegularFile);
     }
-    let mut source = tokio::fs::File::open(path)
+    if metadata.len() != expected_len {
+        return Err(ExecutableIdentityError::SizeMismatch);
+    }
+    let source = tokio::fs::File::open(source_path)
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
-    let opened_metadata = source
+    let open_metadata = source
         .metadata()
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
-    if !opened_metadata.is_file() {
+    if !open_metadata.is_file() {
         return Err(ExecutableIdentityError::NotRegularFile);
     }
-    #[cfg(unix)]
-    let staged_path = directory.join("worker");
-    #[cfg(windows)]
-    let staged_path = directory.join("worker.exe");
+    if open_metadata.len() != expected_len {
+        return Err(ExecutableIdentityError::SizeMismatch);
+    }
+    let parent = staged_path
+        .parent()
+        .ok_or(ExecutableIdentityError::InvalidRelativePath)?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
     let mut staged = tokio::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&staged_path)
+        .open(staged_path)
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    let mut source = source.take(expected_len.saturating_add(1));
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; HASH_BUFFER_BYTES];
+    let mut copied = 0_u64;
     loop {
         let read = source
             .read(&mut buffer)
@@ -791,36 +897,48 @@ async fn stage_verified_executable(
         if read == 0 {
             break;
         }
+        copied = copied
+            .checked_add(u64::try_from(read).map_err(|_| ExecutableIdentityError::SizeMismatch)?)
+            .ok_or(ExecutableIdentityError::SizeMismatch)?;
+        if copied > expected_len {
+            return Err(ExecutableIdentityError::SizeMismatch);
+        }
         digest.update(&buffer[..read]);
         staged
             .write_all(&buffer[..read])
             .await
             .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
     }
+    if copied != expected_len {
+        return Err(ExecutableIdentityError::SizeMismatch);
+    }
     staged
         .flush()
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
     let actual: [u8; 32] = digest.finalize().into();
-    if actual != executable.executable_sha256 {
+    if actual != *expected_sha256 {
         return Err(ExecutableIdentityError::DigestMismatch);
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let mode = if executable { 0o700 } else { 0o600 };
         staged
-            .set_permissions(std::fs::Permissions::from_mode(0o700))
+            .set_permissions(std::fs::Permissions::from_mode(mode))
             .await
             .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
     }
+    #[cfg(not(unix))]
+    let _ = executable;
     drop(staged);
-    Ok(staged_path)
+    Ok(())
 }
 
 async fn verify_path_and_digest(
     path: &Path,
     expected: &[u8; 32],
-) -> Result<(), ExecutableIdentityError> {
+) -> Result<u64, ExecutableIdentityError> {
     if !path.is_absolute() {
         return Err(ExecutableIdentityError::NotAbsolute);
     }
@@ -833,11 +951,17 @@ async fn verify_path_and_digest(
     if !metadata.is_file() {
         return Err(ExecutableIdentityError::NotRegularFile);
     }
+    let len = metadata.len();
+    if len > MAX_STAGED_FILE_BYTES {
+        return Err(ExecutableIdentityError::FileTooLarge);
+    }
     let mut file = tokio::fs::File::open(path)
         .await
-        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?
+        .take(len.saturating_add(1));
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; HASH_BUFFER_BYTES];
+    let mut read_total = 0_u64;
     loop {
         let read = file
             .read(&mut buffer)
@@ -846,13 +970,22 @@ async fn verify_path_and_digest(
         if read == 0 {
             break;
         }
+        read_total = read_total
+            .checked_add(u64::try_from(read).map_err(|_| ExecutableIdentityError::SizeMismatch)?)
+            .ok_or(ExecutableIdentityError::SizeMismatch)?;
+        if read_total > len {
+            return Err(ExecutableIdentityError::SizeMismatch);
+        }
         digest.update(&buffer[..read]);
+    }
+    if read_total != len {
+        return Err(ExecutableIdentityError::SizeMismatch);
     }
     let actual: [u8; 32] = digest.finalize().into();
     if actual != *expected {
         return Err(ExecutableIdentityError::DigestMismatch);
     }
-    Ok(())
+    Ok(len)
 }
 
 async fn drain_stderr(
@@ -1322,13 +1455,16 @@ mod tests {
         let executable = VerifiedExecutable {
             path: source.clone(),
             executable_sha256: Sha256::digest(approved).into(),
+            executable_len: u64::try_from(approved.len())?,
             manifest_sha256: [0x5a; 32],
+            staged_relative_path: std::path::PathBuf::from("worker"),
+            runtime_files: Vec::new(),
         };
         let private_directory = private_worker_tempdir()?;
         let staged = stage_verified_executable(&executable, private_directory.path()).await?;
         tokio::fs::write(&source, b"hostile replacement").await?;
         assert_eq!(tokio::fs::read(&staged).await?, approved);
-        let command = worker_command(&staged, private_directory.path());
+        let command = worker_command(&staged, private_directory.path(), false);
         assert_eq!(command.command().as_std().get_program(), staged.as_os_str());
         #[cfg(unix)]
         {

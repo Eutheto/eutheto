@@ -100,6 +100,16 @@ impl SolveDispatchBudget {
         self.backend_limit
     }
 
+    /// Parent-measured elapsed time since backend dispatch.
+    #[must_use]
+    pub fn elapsed_milliseconds(&self) -> DurationMillis {
+        let remaining = self.parent_view.snapshot().remaining_milliseconds;
+        match DurationMillis::new(self.elapsed_milliseconds_value(remaining)) {
+            Ok(elapsed) => elapsed,
+            Err(_) => DurationMillis::MAX,
+        }
+    }
+
     /// Distinguishes cancellation, the parent deadline, and a shorter backend cap.
     #[must_use]
     pub fn stop_reason(&self) -> Option<BackendStopReason> {
@@ -108,7 +118,7 @@ impl SolveDispatchBudget {
             Some(BackendStopReason::Cancelled)
         } else if snapshot.expired || snapshot.remaining_milliseconds == DurationMillis::ZERO {
             Some(BackendStopReason::DeadlineExceeded)
-        } else if self.elapsed_milliseconds(snapshot.remaining_milliseconds)
+        } else if self.elapsed_milliseconds_value(snapshot.remaining_milliseconds)
             >= self.backend_limit.value()
         {
             Some(BackendStopReason::BackendLimitExceeded)
@@ -121,11 +131,11 @@ impl SolveDispatchBudget {
     #[must_use]
     pub fn remaining_backend_duration(&self) -> Duration {
         let remaining = self.parent_view.snapshot().remaining_milliseconds;
-        let elapsed = self.elapsed_milliseconds(remaining);
+        let elapsed = self.elapsed_milliseconds_value(remaining);
         Duration::from_millis(self.backend_limit.value().saturating_sub(elapsed))
     }
 
-    fn elapsed_milliseconds(&self, remaining: DurationMillis) -> u64 {
+    fn elapsed_milliseconds_value(&self, remaining: DurationMillis) -> u64 {
         self.remaining_at_dispatch
             .value()
             .saturating_sub(remaining.value())
