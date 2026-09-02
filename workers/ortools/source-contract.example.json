@@ -8,6 +8,8 @@
     "cache_entries": "UNRESOLVED"
   },
   "ortools": {
+    "patch_path": "UNRESOLVED",
+    "patch_sha256": "UNRESOLVED",
     "sha256": "UNRESOLVED",
     "source_url": "UNRESOLVED",
     "version": "UNRESOLVED"

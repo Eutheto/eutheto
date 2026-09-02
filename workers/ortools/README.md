@@ -9,10 +9,14 @@ by [ADR-004](../../docs/adr/004-ortools-worker.md). The worker is version
 
 ## Source contract gate
 
-Production configuration requires an absolute approved contract through
-`EUTHETO_ORTOOLS_PHASE3_CONTRACT`. The contract records the exact OR-Tools and
-protobuf sources and hashes, protoc/runtime versions, protocol schema digest,
-worker identity/version, and reviewed CMake cache entries. The checked-in
+Production configuration requires the generated approved
+[`source-contract.json`](source-contract.json) through an explicit absolute
+`EUTHETO_ORTOOLS_PHASE3_CONTRACT` path. CMake requires that file to be
+byte-identical to the generated repository approval. `cargo xtask generate`
+owns it and rehashes the repository patch and protocol schema; the record binds
+the exact OR-Tools and protobuf sources and hashes, patch path/hash,
+protoc/runtime versions, protocol schema digest, worker identity/version, and
+26 reviewed cross-target CMake cache entries. The checked-in
 `source-contract.example.json` remains deliberately unapproved and cannot
 authorize a production build or install.
 

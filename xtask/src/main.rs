@@ -5,6 +5,7 @@ mod phase02_generate;
 mod protocol;
 mod protocol_generate;
 mod release;
+mod source_contract;
 mod supply_chain;
 
 use std::path::{Path, PathBuf};

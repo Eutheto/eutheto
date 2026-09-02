@@ -16,7 +16,7 @@ option(
 set(
   EUTHETO_ORTOOLS_PHASE3_CONTRACT
   ""
-  CACHE FILEPATH
+  CACHE STRING
   "Approved Phase-03 OR-Tools/protobuf source contract"
 )
 
@@ -54,17 +54,34 @@ endif()
 
 set(source_contract_approved FALSE)
 if(NOT EUTHETO_ORTOOLS_PHASE3_CONTRACT STREQUAL "")
-  if(NOT IS_ABSOLUTE "${EUTHETO_ORTOOLS_PHASE3_CONTRACT}")
+  file(TO_CMAKE_PATH
+    "${EUTHETO_ORTOOLS_PHASE3_CONTRACT}"
+    phase3_contract_path
+  )
+  cmake_path(IS_ABSOLUTE phase3_contract_path contract_path_is_absolute)
+  if(NOT contract_path_is_absolute)
     message(FATAL_ERROR
       "EUTHETO_ORTOOLS_PHASE3_CONTRACT must be an absolute path to reviewed Phase-03 build input."
     )
   endif()
-  if(NOT EXISTS "${EUTHETO_ORTOOLS_PHASE3_CONTRACT}")
+  if(NOT EXISTS "${phase3_contract_path}")
     message(FATAL_ERROR
-      "EUTHETO_ORTOOLS_PHASE3_CONTRACT does not exist: ${EUTHETO_ORTOOLS_PHASE3_CONTRACT}"
+      "EUTHETO_ORTOOLS_PHASE3_CONTRACT does not exist: ${phase3_contract_path}"
     )
   endif()
-  file(READ "${EUTHETO_ORTOOLS_PHASE3_CONTRACT}" phase3_contract_json)
+  set(canonical_contract_path
+    "${CMAKE_CURRENT_SOURCE_DIR}/source-contract.json")
+  if(NOT EXISTS "${canonical_contract_path}")
+    message(FATAL_ERROR
+      "The generated approved source contract is missing: ${canonical_contract_path}")
+  endif()
+  file(READ "${phase3_contract_path}" phase3_contract_json)
+  file(READ "${canonical_contract_path}" canonical_contract_json)
+  if(NOT phase3_contract_json STREQUAL canonical_contract_json)
+    message(FATAL_ERROR
+      "EUTHETO_ORTOOLS_PHASE3_CONTRACT must be byte-identical to the generated approved source-contract.json."
+    )
+  endif()
 
   function(contract_get output_name)
     string(JSON field_value ERROR_VARIABLE field_error GET "${phase3_contract_json}" ${ARGN})
@@ -91,6 +108,8 @@ if(NOT EUTHETO_ORTOOLS_PHASE3_CONTRACT STREQUAL "")
   contract_get(approval_record approval record)
   contract_get(approval_status approval status)
   contract_get(ortools_version ortools version)
+  contract_get(ortools_patch_path ortools patch_path)
+  contract_get(ortools_patch_sha256 ortools patch_sha256)
   contract_get(ortools_source_url ortools source_url)
   contract_get(ortools_sha256 ortools sha256)
   contract_get(protobuf_source_version protobuf source_version)
@@ -139,6 +158,12 @@ if(NOT EUTHETO_ORTOOLS_PHASE3_CONTRACT STREQUAL "")
     )
   endif()
 
+  if(NOT ortools_patch_path STREQUAL
+     "workers/ortools/patches/9.15-candidate-fixes.patch")
+    message(FATAL_ERROR
+      "The approved contract must select the reviewed OR-Tools 9.15 candidate patch.")
+  endif()
+  require_sha256("ortools.patch_sha256" "${ortools_patch_sha256}")
   require_sha256("ortools.sha256" "${ortools_sha256}")
   require_sha256("protobuf.sha256" "${protobuf_sha256}")
   require_sha256("protocol.schema_sha256" "${protocol_schema_sha256}")
@@ -150,6 +175,14 @@ if(NOT EUTHETO_ORTOOLS_PHASE3_CONTRACT STREQUAL "")
     message(FATAL_ERROR
       "Approved protocol.schema_sha256 does not match protocol/solver-worker.proto."
     )
+  endif()
+  file(SHA256
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/9.15-candidate-fixes.patch"
+    actual_ortools_patch_sha256
+  )
+  if(NOT actual_ortools_patch_sha256 STREQUAL ortools_patch_sha256)
+    message(FATAL_ERROR
+      "Approved ortools.patch_sha256 does not match the repository-owned patch.")
   endif()
 
 

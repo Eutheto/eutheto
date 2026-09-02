@@ -52,21 +52,48 @@ else()
   message(FATAL_ERROR "PROBE_LINKAGE must be shared or static.")
 endif()
 
+set(source_contract_path
+  "${REPOSITORY_ROOT}/workers/ortools/source-contract.json")
+if(NOT EXISTS "${source_contract_path}")
+  message(FATAL_ERROR
+    "The generated approved OR-Tools source contract is required for candidate probes.")
+endif()
+file(READ "${source_contract_path}" source_contract_json)
+function(source_contract_get output_name)
+  string(JSON field_value ERROR_VARIABLE field_error
+    GET "${source_contract_json}" ${ARGN})
+  if(NOT field_error STREQUAL "NOTFOUND")
+    string(JOIN "." field_path ${ARGN})
+    message(FATAL_ERROR
+      "Invalid generated source-contract field '${field_path}': ${field_error}")
+  endif()
+  set(${output_name} "${field_value}" PARENT_SCOPE)
+endfunction()
+source_contract_get(source_contract_approval_status approval status)
+source_contract_get(source_contract_approval_record approval record)
+source_contract_get(expected_ortools_version ortools version)
+source_contract_get(source_url ortools source_url)
+source_contract_get(expected_source_sha256 ortools sha256)
+source_contract_get(source_patch_relative ortools patch_path)
+source_contract_get(expected_source_patch_sha256 ortools patch_sha256)
+source_contract_get(protobuf_source_url protobuf source_url)
+source_contract_get(expected_protobuf_source_sha256 protobuf sha256)
+source_contract_get(protobuf_source_version protobuf source_version)
+if(NOT source_contract_approval_status STREQUAL "approved"
+   OR source_contract_approval_record STREQUAL ""
+   OR source_contract_approval_record STREQUAL "UNRESOLVED")
+  message(FATAL_ERROR
+    "Candidate probes require the generated approved source contract.")
+endif()
+if(NOT expected_ortools_version STREQUAL "9.15.6755"
+   OR NOT protobuf_source_version STREQUAL "33.1")
+  message(FATAL_ERROR
+    "The generated source contract must select OR-Tools 9.15.6755 and protobuf 33.1.")
+endif()
 set(source_tag "v9.15")
 set(source_commit "551ad10d94835c99e5e1e684500d3db398c0e345")
 set(bzip2_commit "66c46b8c9436613fd81bc5d03f63a61933a4dcc3")
-set(source_url "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz")
-set(expected_source_sha256
-  "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026")
-set(source_patch_relative
-  "workers/ortools/patches/9.15-candidate-fixes.patch")
 set(source_patch "${REPOSITORY_ROOT}/${source_patch_relative}")
-set(expected_source_patch_sha256
-  "3ab9c8c45d76aab2416195bc97266718986a395a37fcd6c8d6e6fa5322ecf6a6")
-set(protobuf_source_url
-  "https://github.com/protocolbuffers/protobuf/releases/download/v33.1/protobuf-33.1.tar.gz")
-set(expected_protobuf_source_sha256
-  "fda132cb0c86400381c0af1fe98bd0f775cb566cb247cdcc105e344e00acc30e")
 string(LENGTH "${expected_source_sha256}" expected_source_sha256_length)
 if(NOT expected_source_sha256_length EQUAL 64
    OR NOT expected_source_sha256 MATCHES "^[0-9a-f]+$")
@@ -117,6 +144,7 @@ file(WRITE "${report_file}"
   "source_archive_sha256_expected=${expected_source_sha256}\n"
   "source_patch=${source_patch_relative}\n"
   "source_patch_sha256_expected=${expected_source_patch_sha256}\n"
+  "source_contract_approval=${source_contract_approval_record}\n"
   "protobuf_dependency_expected=v33.1\n"
   "protobuf_source_archive_url=${protobuf_source_url}\n"
   "protobuf_source_archive_sha256_expected=${expected_protobuf_source_sha256}\n"
@@ -371,7 +399,7 @@ if(NOT protobuf_git_tag STREQUAL "v33.1")
   message(FATAL_ERROR "OR-Tools v9.15 declares Protobuf ${protobuf_git_tag}, expected v33.1.")
 endif()
 
-set(expected_ortools_version "9.15.6755")
+
 set(ENV{OR_TOOLS_PATCH} "6755")
 file(WRITE "${evidence_dir}/version-normalization.txt"
   "classification=candidate-non-distributable\n"
