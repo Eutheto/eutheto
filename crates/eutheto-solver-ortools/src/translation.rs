@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 
 use eutheto_domain_ir::OptimizationDirection;
 use eutheto_planning_ir::{
-    BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId, IntervalVariableId,
-    LexicographicStrategy, LinearComparison, Literal, PlanningConstraintId, PlanningIrLimitsV1,
-    PlanningProblem, ValidationError, Variable, lexicographic_strategy, validate,
+    Assumption, BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId,
+    IntervalVariableId, LexicographicStrategy, LinearComparison, Literal, ObjectiveLevelId,
+    ObjectivePlan, PlanningConstraintId, PlanningIrLimitsV1, PlanningProblem, ProjectionId,
+    ProvenanceId, ProvenanceRecord, SolutionProjection, ValidationError, Variable,
+    lexicographic_strategy, validate,
 };
 use prost::Message;
 use thiserror::Error;
@@ -53,10 +55,24 @@ impl VariableTranslation {
 #[derive(Clone, Debug)]
 pub struct TranslatedCpSatModel {
     cp_model_proto: Vec<u8>,
+    maps: TranslationMaps,
+}
+
+#[derive(Clone, Debug)]
+struct TranslationMaps {
     boolean_indices: BTreeMap<BoolVariableId, i32>,
     integer_indices: BTreeMap<IntVariableId, i32>,
     interval_constraint_indices: BTreeMap<IntervalVariableId, i32>,
     constraint_indices: BTreeMap<PlanningConstraintId, Vec<i32>>,
+    objective_plan: ObjectivePlan,
+    objective_weights: BTreeMap<ObjectiveLevelId, i64>,
+    assumptions_by_literal: BTreeMap<i32, Assumption>,
+    projection_requests: BTreeMap<ProjectionId, SolutionProjection>,
+    provenance_records: BTreeMap<ProvenanceId, ProvenanceRecord>,
+    boolean_provenance: BTreeMap<BoolVariableId, ProvenanceId>,
+    integer_provenance: BTreeMap<IntVariableId, ProvenanceId>,
+    interval_provenance: BTreeMap<IntervalVariableId, ProvenanceId>,
+    constraint_provenance: BTreeMap<PlanningConstraintId, ProvenanceId>,
 }
 
 impl TranslatedCpSatModel {
@@ -69,13 +85,13 @@ impl TranslatedCpSatModel {
     /// Returns the CP-SAT index retained for a Boolean planning variable.
     #[must_use]
     pub fn boolean_index(&self, id: &BoolVariableId) -> Option<i32> {
-        self.boolean_indices.get(id).copied()
+        self.maps.boolean_indices.get(id).copied()
     }
 
     /// Returns the CP-SAT index retained for an integer planning variable.
     #[must_use]
     pub fn integer_index(&self, id: &IntVariableId) -> Option<i32> {
-        self.integer_indices.get(id).copied()
+        self.maps.integer_indices.get(id).copied()
     }
 
     /// Returns the native interval-constraint index retained for a planning interval.
@@ -84,13 +100,69 @@ impl TranslatedCpSatModel {
     /// `None` until interval translation is enabled.
     #[must_use]
     pub fn interval_constraint_index(&self, id: &IntervalVariableId) -> Option<i32> {
-        self.interval_constraint_indices.get(id).copied()
+        self.maps.interval_constraint_indices.get(id).copied()
     }
 
     /// Returns every native constraint index generated for one planning constraint.
     #[must_use]
     pub fn constraint_indices(&self, id: &PlanningConstraintId) -> Option<&[i32]> {
-        self.constraint_indices.get(id).map(Vec::as_slice)
+        self.maps.constraint_indices.get(id).map(Vec::as_slice)
+    }
+
+    /// Returns the validated ordered objective plan retained outside the native protobuf.
+    #[must_use]
+    pub fn objective_plan(&self) -> &ObjectivePlan {
+        &self.maps.objective_plan
+    }
+
+    /// Returns the exact scalarization weight for one objective level.
+    #[must_use]
+    pub fn objective_weight(&self, id: &ObjectiveLevelId) -> Option<i64> {
+        self.maps.objective_weights.get(id).copied()
+    }
+
+    /// Returns the planning assumption represented by one submitted native literal.
+    ///
+    /// Assumptions remain disabled for the pinned OR-Tools 9.15 worker, so successful
+    /// translations currently return `None` for every literal.
+    #[must_use]
+    pub fn assumption(&self, native_literal: i32) -> Option<&Assumption> {
+        self.maps.assumptions_by_literal.get(&native_literal)
+    }
+
+    /// Returns the canonical projection requests retained outside the native protobuf.
+    pub fn projection_requests(&self) -> impl Iterator<Item = &SolutionProjection> {
+        self.maps.projection_requests.values()
+    }
+
+    /// Returns one complete upstream provenance record.
+    #[must_use]
+    pub fn provenance_record(&self, id: &ProvenanceId) -> Option<&ProvenanceRecord> {
+        self.maps.provenance_records.get(id)
+    }
+
+    /// Returns the provenance attached to one Boolean planning variable.
+    #[must_use]
+    pub fn boolean_provenance(&self, id: &BoolVariableId) -> Option<&ProvenanceId> {
+        self.maps.boolean_provenance.get(id)
+    }
+
+    /// Returns the provenance attached to one integer planning variable.
+    #[must_use]
+    pub fn integer_provenance(&self, id: &IntVariableId) -> Option<&ProvenanceId> {
+        self.maps.integer_provenance.get(id)
+    }
+
+    /// Returns the provenance attached to one planning interval.
+    #[must_use]
+    pub fn interval_provenance(&self, id: &IntervalVariableId) -> Option<&ProvenanceId> {
+        self.maps.interval_provenance.get(id)
+    }
+
+    /// Returns the provenance attached to one planning constraint.
+    #[must_use]
+    pub fn constraint_provenance(&self, id: &PlanningConstraintId) -> Option<&ProvenanceId> {
+        self.maps.constraint_provenance.get(id)
     }
 }
 
@@ -271,13 +343,73 @@ pub fn translate_supported_model(
         translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
     translate_objective(problem, &objective_weights, &mut model, &integer_indices, 0)?;
 
+    let maps = retain_translation_maps(
+        problem,
+        objective_weights,
+        boolean_indices,
+        integer_indices,
+        constraint_indices,
+    );
     Ok(TranslatedCpSatModel {
         cp_model_proto: model.encode_to_vec(),
+        maps,
+    })
+}
+
+fn retain_translation_maps(
+    problem: &PlanningProblem,
+    weights: Vec<i64>,
+    boolean_indices: BTreeMap<BoolVariableId, i32>,
+    integer_indices: BTreeMap<IntVariableId, i32>,
+    constraint_indices: BTreeMap<PlanningConstraintId, Vec<i32>>,
+) -> TranslationMaps {
+    let objective_weights = problem
+        .objectives
+        .levels
+        .iter()
+        .zip(weights)
+        .map(|(level, weight)| (level.id.clone(), weight))
+        .collect();
+    let mut boolean_provenance = BTreeMap::new();
+    let mut integer_provenance = BTreeMap::new();
+    let mut interval_provenance = BTreeMap::new();
+    for variable in &problem.variables {
+        match variable {
+            Variable::Boolean(variable) => {
+                boolean_provenance.insert(variable.id.clone(), variable.provenance.clone());
+            }
+            Variable::Integer(variable) => {
+                integer_provenance.insert(variable.id.clone(), variable.provenance.clone());
+            }
+            Variable::Interval(variable) => {
+                interval_provenance.insert(variable.id.clone(), variable.provenance.clone());
+            }
+        }
+    }
+    TranslationMaps {
         boolean_indices,
         integer_indices,
         interval_constraint_indices: BTreeMap::new(),
         constraint_indices,
-    })
+        objective_plan: problem.objectives.clone(),
+        objective_weights,
+        assumptions_by_literal: BTreeMap::new(),
+        projection_requests: BTreeMap::new(),
+        provenance_records: problem
+            .provenance
+            .iter()
+            .cloned()
+            .map(|record| (record.id.clone(), record))
+            .collect(),
+        boolean_provenance,
+        integer_provenance,
+        interval_provenance,
+        constraint_provenance: problem
+            .constraints
+            .iter()
+            .map(|record| (record.id.clone(), record.provenance.clone()))
+            .collect(),
+    }
 }
 
 fn translate_constraints(
@@ -1254,6 +1386,21 @@ mod tests {
         assert_eq!(objective.coeffs, [3, 2, 1]);
         assert_eq!(objective.offset.to_bits(), 0.0_f64.to_bits());
         assert_eq!(objective.scaling_factor.to_bits(), 1.0_f64.to_bits());
+        let provenance = ProvenanceId::new("translation.variable")?;
+        assert_eq!(translated.objective_plan(), &problem.objectives);
+        assert_eq!(
+            translated.objective_weight(&ObjectiveLevelId::new("translation.level")?),
+            Some(1)
+        );
+        assert_eq!(translated.integer_provenance(&start), Some(&provenance));
+        assert_eq!(
+            translated
+                .provenance_record(&provenance)
+                .map(|record| record.source_id.as_str()),
+            Some("translation.fixture")
+        );
+        assert!(translated.assumption(0).is_none());
+        assert_eq!(translated.projection_requests().count(), 0);
         Ok(())
     }
 
@@ -1313,6 +1460,14 @@ mod tests {
         assert_eq!(translated.integer_index(&start), Some(1));
         assert_eq!(objective.vars, [1, 2]);
         assert_eq!(objective.coeffs, [2, -1]);
+        assert_eq!(
+            translated.objective_weight(&ObjectiveLevelId::new("translation.level.high")?),
+            Some(2)
+        );
+        assert_eq!(
+            translated.objective_weight(&ObjectiveLevelId::new("translation.level.low")?),
+            Some(1)
+        );
         Ok(())
     }
 
@@ -1668,6 +1823,17 @@ mod tests {
             translated
                 .constraint_indices(&PlanningConstraintId::new("constraint.d_enforced_exactly",)?),
             Some(&[4][..])
+        );
+        let provenance = ProvenanceId::new("translation.variable")?;
+        assert_eq!(
+            translated.boolean_provenance(&BoolVariableId::new("translation.a_bool")?),
+            Some(&provenance)
+        );
+        assert_eq!(
+            translated.constraint_provenance(&PlanningConstraintId::new(
+                "constraint.b_enforced_equivalence",
+            )?),
+            Some(&provenance)
         );
         assert_eq!(
             translated
