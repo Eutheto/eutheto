@@ -255,7 +255,6 @@ fn supports_capability(capability: Capability) -> bool {
             | Capability::ObjectiveReward
             | Capability::BooleanProjection
             | Capability::IntegerProjection
-            | Capability::IntervalProjection
             | Capability::AbsentProjection
     )
 }
@@ -2040,6 +2039,56 @@ mod tests {
             Err(TranslationError::UnsupportedCapabilities(capabilities))
                 if capabilities == vec![Capability::AllDifferent]
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn matrix_primitive_claims_match_translation_preflight_gate() -> Result<(), Box<dyn Error>> {
+        let descriptor = crate::ortools_descriptor()?;
+        let cases = [
+            (Capability::AbsDifference, "ir.absolute-difference"),
+            (Capability::AllDifferent, "ir.all-different"),
+            (Capability::AllowedTable, "ir.allowed-table"),
+            (Capability::Assumptions, "ir.assumptions"),
+            (Capability::AtMostOne, "ir.at-most-one"),
+            (Capability::BoolAnd, "ir.bool-and"),
+            (Capability::BoolOr, "ir.bool-or"),
+            (Capability::CardinalityRange, "ir.cardinality-range"),
+            (Capability::Cumulative, "ir.cumulative"),
+            (Capability::Element, "ir.element"),
+            (Capability::Equality, "ir.equality"),
+            (Capability::Equivalence, "ir.equivalence"),
+            (Capability::ExactlyOne, "ir.exactly-one"),
+            (Capability::ForbiddenTable, "ir.forbidden-table"),
+            (Capability::Implication, "ir.implication"),
+            (Capability::LinearComparison, "ir.integer-linear"),
+            (Capability::Max, "ir.maximum"),
+            (Capability::Min, "ir.minimum"),
+            (Capability::NoOverlap, "ir.no-overlap"),
+            (Capability::ObjectivePenalty, "ir.objective-penalty"),
+            (Capability::ObjectiveReward, "ir.objective-reward"),
+            (Capability::OptionalIntervals, "ir.optional-interval"),
+            (
+                Capability::ReifiedLinearComparison,
+                "ir.reified-linear-comparison",
+            ),
+            (Capability::AbsentProjection, "projection.absent"),
+            (Capability::BooleanProjection, "projection.boolean"),
+            (Capability::IntegerProjection, "projection.integer"),
+            (Capability::IntervalProjection, "projection.interval"),
+        ];
+
+        for (capability, feature_id) in cases {
+            assert_eq!(
+                supports_capability(capability),
+                descriptor
+                    .capabilities
+                    .supported
+                    .iter()
+                    .any(|claimed| claimed.as_str() == feature_id),
+                "translation preflight and matrix disagree for {feature_id}"
+            );
+        }
         Ok(())
     }
 

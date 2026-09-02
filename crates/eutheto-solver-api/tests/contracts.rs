@@ -813,19 +813,27 @@ fn matrix_completeness_rejects_a_missing_cell() -> TestResult {
 }
 
 #[test]
-fn generated_matrix_is_complete_empty_and_has_only_unclaimed_candidates() -> TestResult {
+fn generated_matrix_has_complete_ortools_column_and_only_pumpkin_deferred() -> TestResult {
     let matrix = CapabilityMatrix::generated()?;
     assert_eq!(matrix.features().len(), SUPPORT_FEATURES.len());
-    assert_eq!(matrix.production_backend_ids().len(), 0);
-    assert_eq!(matrix.deferred_candidates().len(), 2);
-    assert!(
+    assert_eq!(
         matrix
-            .deferred_candidates()
-            .iter()
-            .all(
-                |candidate| candidate.backend_id.as_str() == "solver.ortools-cp-sat"
-                    || candidate.backend_id.as_str() == "solver.pumpkin"
-            )
+            .production_backend_ids()
+            .map(BackendId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["solver.ortools-cp-sat"]
+    );
+    assert_eq!(
+        matrix
+            .backend_columns()
+            .next()
+            .map(|column| column.cells.len()),
+        Some(SUPPORT_FEATURES.len())
+    );
+    assert_eq!(matrix.deferred_candidates().len(), 1);
+    assert_eq!(
+        matrix.deferred_candidates()[0].backend_id.as_str(),
+        "solver.pumpkin"
     );
     Ok(())
 }

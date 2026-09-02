@@ -1,9 +1,8 @@
 use eutheto_solver_api::{
-    BackendStability, DescriptorError, LicenseMetadata, SolverCapabilities, SolverDescriptor,
-    SolverDistribution, SupportFeatureId, SupportMatrixError,
+    BackendStability, CapabilityMatrix, DescriptorError, LicenseMetadata, SolverDescriptor,
+    SolverDistribution, SupportMatrixError,
 };
 use eutheto_types::{BackendId, NamespacedIdError};
-use std::collections::BTreeSet;
 use thiserror::Error;
 
 /// Stable public identifier for the OR-Tools CP-SAT backend.
@@ -13,45 +12,20 @@ pub const ORTOOLS_VERSION: &str = "9.15.6755";
 /// Version of the Rust-to-worker adapter contract.
 pub const ORTOOLS_ADAPTER_VERSION: &str = "0.1.0";
 
-const SUPPORTED_FEATURE_IDS: &[&str] = &[
-    "ir.at-most-one",
-    "ir.bool-and",
-    "ir.bool-or",
-    "ir.cardinality-range",
-    "ir.equivalence",
-    "ir.exactly-one",
-    "ir.implication",
-    "ir.integer-linear",
-    "ir.objective-penalty",
-    "ir.objective-reward",
-    "ir.scalarized-objectives",
-    "projection.absent",
-    "projection.boolean",
-    "projection.integer",
-    "solve.cancellation",
-    "solve.deterministic-mode",
-    "solve.proof-and-bounds",
-    "solve.resource-limits",
-];
-
 /// Builds the immutable public descriptor for the bundled OR-Tools worker.
 ///
-/// The capability sets are the adapter's exact current implementation claims.
-/// [`eutheto_solver_api::CapabilityMatrix::validate_descriptor`] must still
-/// confirm that these copied claims equal the generated production matrix
-/// before the backend can be registered.
+/// Capability declarations are derived directly from the generated production
+/// support matrix so the descriptor cannot become a second source of truth.
 ///
 /// # Errors
 ///
 /// Returns an error if a reviewed identifier or descriptor field no longer
 /// satisfies the shared solver API contract.
 pub fn ortools_descriptor() -> Result<SolverDescriptor, OrToolsDescriptorError> {
-    let capabilities = SolverCapabilities {
-        supported: support_features(SUPPORTED_FEATURE_IDS)?,
-        degraded: BTreeSet::new(),
-    };
+    let id = BackendId::new(ORTOOLS_BACKEND_ID)?;
+    let capabilities = CapabilityMatrix::generated()?.backend_capabilities(&id)?;
     let descriptor = SolverDescriptor {
-        id: BackendId::new(ORTOOLS_BACKEND_ID)?,
+        id,
         display_name: "OR-Tools CP-SAT".to_owned(),
         version: ORTOOLS_VERSION.to_owned(),
         adapter_version: ORTOOLS_ADAPTER_VERSION.to_owned(),
@@ -70,21 +44,12 @@ pub fn ortools_descriptor() -> Result<SolverDescriptor, OrToolsDescriptorError> 
     Ok(descriptor)
 }
 
-fn support_features(
-    feature_ids: &[&str],
-) -> Result<BTreeSet<SupportFeatureId>, SupportMatrixError> {
-    feature_ids
-        .iter()
-        .map(|feature_id| SupportFeatureId::new(*feature_id))
-        .collect()
-}
-
 /// A reviewed OR-Tools descriptor constant no longer satisfies its shared contract.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum OrToolsDescriptorError {
     #[error("the reviewed OR-Tools descriptor contains an invalid backend identifier")]
     InvalidBackendIdentifier(#[from] NamespacedIdError),
-    #[error("the reviewed OR-Tools descriptor contains an invalid capability identifier: {0}")]
+    #[error("the generated OR-Tools support-matrix column is invalid: {0}")]
     InvalidCapability(#[from] SupportMatrixError),
     #[error("the reviewed OR-Tools descriptor is invalid: {0}")]
     InvalidDescriptor(#[from] DescriptorError),
@@ -93,6 +58,7 @@ pub enum OrToolsDescriptorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eutheto_solver_api::SupportFeatureId;
 
     #[test]
     fn descriptor_exposes_exact_bundled_worker_identity_and_capabilities()
@@ -111,16 +77,17 @@ mod tests {
             descriptor.license.source_url.as_deref(),
             Some("https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz")
         );
+        assert_eq!(descriptor.capabilities.supported.len(), 16);
         assert_eq!(
             descriptor
                 .capabilities
-                .supported
+                .degraded
                 .iter()
                 .map(SupportFeatureId::as_str)
                 .collect::<Vec<_>>(),
-            SUPPORTED_FEATURE_IDS
+            vec!["solve.proof-and-bounds", "solve.resource-limits"]
         );
-        assert!(descriptor.capabilities.degraded.is_empty());
+        CapabilityMatrix::generated()?.validate_descriptor(&descriptor)?;
         descriptor.validate()?;
         Ok(())
     }

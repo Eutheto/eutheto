@@ -107,7 +107,7 @@ fn pack_commands_expose_registry_descriptor_and_catalog_metadata() -> Result<(),
 }
 
 #[test]
-fn solver_catalog_is_empty_while_matrix_and_unclaimed_gates_remain_visible()
+fn solver_catalog_is_empty_while_ortools_matrix_and_pumpkin_gate_are_visible()
 -> Result<(), Box<dyn Error>> {
     let directory = private_tempdir()?;
     let (output, value) = run_json(directory.path(), &["solvers", "list"])?;
@@ -116,15 +116,25 @@ fn solver_catalog_is_empty_while_matrix_and_unclaimed_gates_remain_visible()
     assert_eq!(value["result"]["solvers"], json!([]));
     assert_eq!(
         value["result"]["supportMatrix"]["productionBackendCount"],
-        0
+        1
     );
     assert_eq!(
         value["result"]["supportMatrix"]["productionBackendIds"],
-        json!([])
+        json!(["solver.ortools-cp-sat"])
     );
+    let columns = value["result"]["supportMatrix"]["backendColumns"]
+        .as_array()
+        .ok_or("solver matrix omitted backend columns")?;
+    assert_eq!(columns.len(), 1);
+    assert_eq!(columns[0]["backendId"], "solver.ortools-cp-sat");
+    assert_eq!(columns[0]["backendVersion"], "9.15.6755");
+    assert_eq!(columns[0]["adapterVersion"], "0.1.0");
     assert_eq!(
-        value["result"]["supportMatrix"]["backendColumns"],
-        json!([])
+        columns[0]["cells"]
+            .as_array()
+            .ok_or("OR-Tools matrix column omitted support cells")?
+            .len(),
+        35
     );
     let features = value["result"]["supportMatrix"]["features"]
         .as_array()
@@ -142,10 +152,9 @@ fn solver_catalog_is_empty_while_matrix_and_unclaimed_gates_remain_visible()
             .iter()
             .map(|gate| gate["backendId"].as_str())
             .collect::<Vec<_>>(),
-        vec![Some("solver.ortools-cp-sat"), Some("solver.pumpkin")]
+        vec![Some("solver.pumpkin")]
     );
-    assert_eq!(gates[0]["owningPhase"], 3);
-    assert_eq!(gates[1]["owningPhase"], 8);
+    assert_eq!(gates[0]["owningPhase"], 8);
 
     for subcommand in ["describe", "check"] {
         let (missing_output, missing) = run_json(

@@ -3772,8 +3772,24 @@ mod tests {
             "solver_get_support_matrix",
             &json!({ "requestId": RequestId::new(&ids)? }),
         )?;
-        assert_eq!(matrix.result["productionBackendIds"], json!([]));
-        assert_eq!(matrix.result["backendColumns"], json!([]));
+        assert_eq!(
+            matrix.result["productionBackendIds"],
+            json!(["solver.ortools-cp-sat"])
+        );
+        let backend_columns = matrix.result["backendColumns"]
+            .as_array()
+            .ok_or("support matrix omitted backend columns")?;
+        assert_eq!(backend_columns.len(), 1);
+        assert_eq!(backend_columns[0]["backendId"], "solver.ortools-cp-sat");
+        assert_eq!(backend_columns[0]["backendVersion"], "9.15.6755");
+        assert_eq!(backend_columns[0]["adapterVersion"], "0.1.0");
+        assert_eq!(
+            backend_columns[0]["cells"]
+                .as_array()
+                .ok_or("OR-Tools matrix column omitted cells")?
+                .len(),
+            35
+        );
         assert!(
             matrix.result["features"]
                 .as_array()
@@ -3788,11 +3804,6 @@ mod tests {
         assert_eq!(
             gates.result,
             json!([
-                {
-                    "backendId": "solver.ortools-cp-sat",
-                    "candidateVersion": "9.15",
-                    "owningPhase": 3
-                },
                 {
                     "backendId": "solver.pumpkin",
                     "candidateVersion": "0.5.0",

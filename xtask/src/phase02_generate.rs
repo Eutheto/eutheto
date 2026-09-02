@@ -87,7 +87,55 @@ struct RegisteredBackend {
     id: String,
     version: String,
     adapter_version: String,
-    support: Map<String, Value>,
+    support: std::collections::BTreeMap<String, SourceSupportCell>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "support",
+    deny_unknown_fields
+)]
+enum SourceSupportCell {
+    Supported {
+        fixture_id: String,
+    },
+    Degraded {
+        restriction_id: String,
+        reason: String,
+        remediation: String,
+        fixture_id: String,
+    },
+    Unsupported {
+        reason: String,
+        remediation: String,
+        fixture_id: String,
+    },
+}
+
+impl SourceSupportCell {
+    fn is_complete(&self) -> bool {
+        match self {
+            Self::Supported { fixture_id } => !fixture_id.is_empty(),
+            Self::Degraded {
+                restriction_id,
+                reason,
+                remediation,
+                fixture_id,
+            } => {
+                !restriction_id.is_empty()
+                    && !reason.is_empty()
+                    && !remediation.is_empty()
+                    && !fixture_id.is_empty()
+            }
+            Self::Unsupported {
+                reason,
+                remediation,
+                fixture_id,
+            } => !reason.is_empty() && !remediation.is_empty() && !fixture_id.is_empty(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,7 +172,7 @@ pub fn generated_files() -> Result<Vec<(&'static str, String)>> {
         (GENERATED_UI_MANIFEST, render_ui_manifest(&pack)?),
         (GENERATED_PACK_DOCS, render_pack_docs(&pack)),
         (GENERATED_RUST_MATRIX, render_rust_matrix(&matrix)),
-        (GENERATED_MATRIX_DOCS, render_matrix_docs(&matrix)),
+        (GENERATED_MATRIX_DOCS, render_matrix_docs(&matrix)?),
     ])
 }
 
@@ -246,7 +294,7 @@ fn validate_matrix(matrix: &SupportMatrix) -> Result<()> {
             bail!("support-matrix features must be uniquely sorted by id")
         }
         if feature.gate != "unconditional" {
-            bail!("Phase-02 matrix may contain only enabled unconditional features")
+            bail!("support matrix may contain only enabled unconditional features")
         }
         prior_feature = Some(&feature.id);
     }
@@ -255,7 +303,11 @@ fn validate_matrix(matrix: &SupportMatrix) -> Result<()> {
         .iter()
         .map(|feature| feature.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let mut prior_backend: Option<&str> = None;
     for backend in &matrix.registered_backends {
+        if prior_backend.is_some_and(|prior| prior >= backend.id.as_str()) {
+            bail!("registered backends must be uniquely sorted by id")
+        }
         if backend.id.is_empty() || backend.version.is_empty() || backend.adapter_version.is_empty()
         {
             bail!("registered backend descriptors must be complete")
@@ -272,11 +324,26 @@ fn validate_matrix(matrix: &SupportMatrix) -> Result<()> {
                 backend.id
             )
         }
+        if backend.support.values().any(|cell| !cell.is_complete()) {
+            bail!("backend {} has an incomplete support cell", backend.id)
+        }
+        prior_backend = Some(&backend.id);
     }
+    let registered_backend_ids = matrix
+        .registered_backends
+        .iter()
+        .map(|backend| backend.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     for candidate in &matrix.deferred_candidate_gates {
         if candidate.claim_status != "unclaimed" {
             bail!(
                 "deferred candidate {} must remain unclaimed",
+                candidate.backend_id
+            )
+        }
+        if registered_backend_ids.contains(candidate.backend_id.as_str()) {
+            bail!(
+                "registered backend {} cannot remain a deferred candidate",
                 candidate.backend_id
             )
         }
@@ -410,6 +477,12 @@ fn render_rust_matrix(matrix: &SupportMatrix) -> String {
     output.push_str("];\n");
     if matrix.registered_backends.is_empty() {
         output.push_str("pub const PRODUCTION_BACKENDS: &[(&str, &str, &str)] = &[];\n");
+    } else if let [backend] = matrix.registered_backends.as_slice() {
+        let _ = writeln!(
+            output,
+            "pub const PRODUCTION_BACKENDS: &[(&str, &str, &str)] =\n    &[({:?}, {:?}, {:?})];",
+            backend.id, backend.version, backend.adapter_version
+        );
     } else {
         output.push_str("pub const PRODUCTION_BACKENDS: &[(&str, &str, &str)] = &[\n");
         for backend in &matrix.registered_backends {
@@ -421,29 +494,96 @@ fn render_rust_matrix(matrix: &SupportMatrix) -> String {
         }
         output.push_str("];\n");
     }
-    output.push_str("pub const DEFERRED_BACKEND_CANDIDATES: &[(&str, &str, u32)] = &[\n");
-    for candidate in &matrix.deferred_candidate_gates {
-        let _ = writeln!(
-            output,
-            "    ({:?}, {:?}, {}),",
-            candidate.backend_id, candidate.candidate_version, candidate.owning_phase
-        );
+    output.push_str(
+        "pub(crate) const PRODUCTION_SUPPORT_CELLS: &[(&str, &str, &str, &str, &str, &str, &str)] = &[\n",
+    );
+    for backend in &matrix.registered_backends {
+        for (feature_id, cell) in &backend.support {
+            let (level, restriction_id, reason, remediation, fixture_id) =
+                generated_cell_fields(cell);
+            let _ = writeln!(
+                output,
+                "    (\n        {:?},\n        {:?},\n        {:?},\n        {:?},\n        {:?},\n        {:?},\n        {:?},\n    ),",
+                backend.id, feature_id, level, restriction_id, reason, remediation, fixture_id
+            );
+        }
     }
     output.push_str("];\n");
+    if matrix.deferred_candidate_gates.is_empty() {
+        output.push_str("pub const DEFERRED_BACKEND_CANDIDATES: &[(&str, &str, u32)] = &[];\n");
+    } else if let [candidate] = matrix.deferred_candidate_gates.as_slice() {
+        let _ = writeln!(
+            output,
+            "pub const DEFERRED_BACKEND_CANDIDATES: &[(&str, &str, u32)] = &[({:?}, {:?}, {})];",
+            candidate.backend_id, candidate.candidate_version, candidate.owning_phase
+        );
+    } else {
+        output.push_str("pub const DEFERRED_BACKEND_CANDIDATES: &[(&str, &str, u32)] = &[\n");
+        for candidate in &matrix.deferred_candidate_gates {
+            let _ = writeln!(
+                output,
+                "    ({:?}, {:?}, {}),",
+                candidate.backend_id, candidate.candidate_version, candidate.owning_phase
+            );
+        }
+        output.push_str("];\n");
+    }
     output
 }
 
-fn render_matrix_docs(matrix: &SupportMatrix) -> String {
+fn generated_cell_fields(cell: &SourceSupportCell) -> (&str, &str, &str, &str, &str) {
+    match cell {
+        SourceSupportCell::Supported { fixture_id } => {
+            ("supported", "", "", "", fixture_id.as_str())
+        }
+        SourceSupportCell::Degraded {
+            restriction_id,
+            reason,
+            remediation,
+            fixture_id,
+        } => ("degraded", restriction_id, reason, remediation, fixture_id),
+        SourceSupportCell::Unsupported {
+            reason,
+            remediation,
+            fixture_id,
+        } => ("unsupported", "", reason, remediation, fixture_id),
+    }
+}
+
+fn render_matrix_docs(matrix: &SupportMatrix) -> Result<String> {
     let source_hash = blake3::hash(MATRIX_SOURCE.as_bytes()).to_hex();
     let mut output = format!(
-        "<!-- SPDX-License-Identifier: Apache-2.0 -->\n<!-- @generated by `cargo xtask generate` from `schemas/solver-support-matrix.json`; do not edit. -->\n<!-- source-blake3: {source_hash} -->\n\n# Solver support matrix\n\nPhase 02 registers no production solver backend. Fake exact and deliberately unsupported backends exist only in test fixtures and are not production matrix columns.\n\n| Feature | Category | Gate |\n|---|---|---|\n"
+        "<!-- SPDX-License-Identifier: Apache-2.0 -->\n<!-- @generated by `cargo xtask generate` from `schemas/solver-support-matrix.json`; do not edit. -->\n<!-- source-blake3: {source_hash} -->\n\n# Solver support matrix\n\nThis generated view lists every production backend/version/adapter and its exact tested claim for each planning feature. Fake backends remain test-only and are not production columns.\n\n"
     );
-    for feature in &matrix.features {
-        let _ = writeln!(
+    output.push_str("| Feature | Category | Gate");
+    for backend in &matrix.registered_backends {
+        let _ = write!(
             output,
-            "| `{}` | `{}` | `{}` |",
+            " | `{}` `{}` / adapter `{}`",
+            backend.id, backend.version, backend.adapter_version
+        );
+    }
+    output.push_str(" |\n|---|---|---");
+    for _ in &matrix.registered_backends {
+        output.push_str("|---");
+    }
+    output.push_str("|\n");
+    for feature in &matrix.features {
+        let _ = write!(
+            output,
+            "| `{}` | `{}` | `{}`",
             feature.id, feature.category, feature.gate
         );
+        for backend in &matrix.registered_backends {
+            let cell = backend.support.get(&feature.id).with_context(|| {
+                format!(
+                    "validated backend {} is missing feature {}",
+                    backend.id, feature.id
+                )
+            })?;
+            let _ = write!(output, " | {}", render_doc_cell(cell));
+        }
+        output.push_str(" |\n");
     }
     output.push_str("\n## Deferred candidates\n\n| Backend | Candidate version | Claim | Owning phase |\n|---|---|---|---|\n");
     for candidate in &matrix.deferred_candidate_gates {
@@ -456,7 +596,29 @@ fn render_matrix_docs(matrix: &SupportMatrix) -> String {
             candidate.owning_phase
         );
     }
-    output
+    Ok(output)
+}
+
+fn render_doc_cell(cell: &SourceSupportCell) -> String {
+    let rendered = match cell {
+        SourceSupportCell::Supported { fixture_id } => {
+            format!("supported; fixture `{fixture_id}`")
+        }
+        SourceSupportCell::Degraded {
+            restriction_id,
+            reason,
+            remediation,
+            fixture_id,
+        } => format!(
+            "restricted `{restriction_id}`: {reason} Remediation: {remediation} Fixture: `{fixture_id}`"
+        ),
+        SourceSupportCell::Unsupported {
+            reason,
+            remediation,
+            fixture_id,
+        } => format!("unsupported: {reason} Remediation: {remediation} Fixture: `{fixture_id}`"),
+    };
+    rendered.replace('|', "\\|")
 }
 
 #[cfg(test)]
@@ -466,13 +628,19 @@ mod tests {
     use super::{generated_files, parse_matrix, parse_pack, validate_matrix, validate_pack};
 
     #[test]
-    fn phase02_sources_are_strict_and_complete() -> Result<()> {
+    fn sources_are_strict_and_complete() -> Result<()> {
         let pack = parse_pack()?;
         let matrix = parse_matrix()?;
         validate_pack(&pack)?;
         validate_matrix(&matrix)?;
         assert_eq!(generated_files()?.len(), 10);
-        assert!(matrix.registered_backends.is_empty());
+        assert_eq!(matrix.registered_backends.len(), 1);
+        assert_eq!(matrix.registered_backends[0].id, "solver.ortools-cp-sat");
+        assert_eq!(matrix.deferred_candidate_gates.len(), 1);
+        assert_eq!(
+            matrix.deferred_candidate_gates[0].backend_id,
+            "solver.pumpkin"
+        );
         assert!(
             matrix
                 .features

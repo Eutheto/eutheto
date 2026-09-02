@@ -1081,6 +1081,7 @@ dependencies = [
  "eutheto-domain-ir",
  "eutheto-planning-ir",
  "eutheto-protocol",
+ "eutheto-solver-api",
  "eutheto-types",
  "process-wrap",
  "prost",
