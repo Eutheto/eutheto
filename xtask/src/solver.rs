@@ -10,6 +10,40 @@ const NATIVE_BUILD_ROOT: &str = ".cache/ortools-native/windows-x86_64";
 const NATIVE_CURRENT: &str = ".cache/ortools-native/windows-x86_64/current";
 const NATIVE_WORKER: &str = ".cache/ortools-native/windows-x86_64/current/bin/ortools-worker.exe";
 
+pub(crate) fn assemble_manifest(
+    source_contract: &Path,
+    protocol_schema: &Path,
+    protocol_policy: &Path,
+    build_evidence: &Path,
+    payload_evidence: &Path,
+    artifact_root: &Path,
+) -> Result<()> {
+    crate::solver_manifest::assemble(crate::solver_manifest::AssembleOptions {
+        source_contract,
+        protocol_schema,
+        protocol_policy,
+        build_evidence,
+        payload_evidence,
+        artifact_root,
+    })?;
+    Ok(())
+}
+
+pub(crate) fn validate_manifest(
+    source_contract: &Path,
+    protocol_schema: &Path,
+    protocol_policy: &Path,
+    artifact_root: &Path,
+) -> Result<()> {
+    crate::solver_manifest::validate(crate::solver_manifest::ValidateOptions {
+        source_contract,
+        protocol_schema,
+        protocol_policy,
+        artifact_root,
+    })?;
+    Ok(())
+}
+
 pub(crate) fn build_native(repo_root: &Path) -> Result<()> {
     require_native_target(env::consts::OS, env::consts::ARCH)?;
 
@@ -102,6 +136,7 @@ fn require_native_target(os: &str, arch: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::fs;
 

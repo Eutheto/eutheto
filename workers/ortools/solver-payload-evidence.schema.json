@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "relative_path": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "pattern": "^(?!/|~|[A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^\\\\:]+$",
+      "type": "string"
+    }
+  },
+  "$id": "https://eutheto.dev/schemas/solver-payload-evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "licenses": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/relative_path"
+          },
+          "spdx": {
+            "enum": [
+              "Apache-2.0",
+              "BSD-3-Clause",
+              "MIT",
+              "Zlib",
+              "bzip2-1.0.6"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "spdx"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "sbom_path": {
+      "$ref": "#/$defs/relative_path"
+    },
+    "schema_version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "licenses",
+    "sbom_path",
+    "schema_version"
+  ],
+  "title": "Eutheto OR-Tools solver payload evidence v1",
+  "type": "object"
+}

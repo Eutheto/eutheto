@@ -6,6 +6,7 @@ mod protocol;
 mod protocol_generate;
 mod release;
 mod solver;
+mod solver_manifest;
 mod source_contract;
 mod supply_chain;
 
@@ -90,6 +91,32 @@ enum SolverCommand {
     BuildNative,
     InstallFromNix,
     Smoke,
+    /// Assemble canonical installed solver evidence from explicit inputs.
+    AssembleManifest {
+        #[arg(long)]
+        source_contract: PathBuf,
+        #[arg(long)]
+        protocol_schema: PathBuf,
+        #[arg(long)]
+        protocol_policy: PathBuf,
+        #[arg(long)]
+        build_evidence: PathBuf,
+        #[arg(long)]
+        payload_evidence: PathBuf,
+        #[arg(long)]
+        artifact_root: PathBuf,
+    },
+    /// Validate canonical manifest bytes, authority, and every referenced artifact.
+    ValidateManifest {
+        #[arg(long)]
+        source_contract: PathBuf,
+        #[arg(long)]
+        protocol_schema: PathBuf,
+        #[arg(long)]
+        protocol_policy: PathBuf,
+        #[arg(long)]
+        artifact_root: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -104,45 +131,86 @@ enum ReleaseCommand {
 }
 
 fn main() -> Result<()> {
-    let root = repository_root()?;
-    match Cli::parse().command {
-        Command::Generate => generate::generate(&root),
-        Command::GenerateCheck => {
-            generate::check(&root)?;
-            supply_chain::check_licenses(&root)?;
-            supply_chain::check_sbom(&root)?;
-            Ok(())
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Solver {
+            command:
+                SolverCommand::AssembleManifest {
+                    source_contract,
+                    protocol_schema,
+                    protocol_policy,
+                    build_evidence,
+                    payload_evidence,
+                    artifact_root,
+                },
+        } => solver::assemble_manifest(
+            &source_contract,
+            &protocol_schema,
+            &protocol_policy,
+            &build_evidence,
+            &payload_evidence,
+            &artifact_root,
+        ),
+        Command::Solver {
+            command:
+                SolverCommand::ValidateManifest {
+                    source_contract,
+                    protocol_schema,
+                    protocol_policy,
+                    artifact_root,
+                },
+        } => solver::validate_manifest(
+            &source_contract,
+            &protocol_schema,
+            &protocol_policy,
+            &artifact_root,
+        ),
+        command => {
+            let root = repository_root()?;
+            match command {
+                Command::Generate => generate::generate(&root),
+                Command::GenerateCheck => {
+                    generate::check(&root)?;
+                    supply_chain::check_licenses(&root)?;
+                    supply_chain::check_sbom(&root)?;
+                    Ok(())
+                }
+                Command::Protocol {
+                    command: ProtocolCommand::Verify,
+                } => protocol::verify(&root),
+                Command::Fixtures {
+                    command: FixturesCommand::Validate,
+                } => fixtures::validate(&root),
+                Command::Architecture {
+                    command: ArchitectureCommand::Verify,
+                } => architecture::verify(&root),
+                Command::Solver { command } => match command {
+                    SolverCommand::BuildNative => solver::build_native(&root),
+                    SolverCommand::InstallFromNix => unavailable_solver(
+                        "install-from-nix",
+                        "the installed solver manifest and license payload contracts exist",
+                    ),
+                    SolverCommand::Smoke => unavailable_solver(
+                        "smoke",
+                        "manifest-validated worker installation is implemented",
+                    ),
+                    SolverCommand::AssembleManifest { .. }
+                    | SolverCommand::ValidateManifest { .. } => {
+                        unreachable!("manifest commands are handled before repository lookup")
+                    }
+                },
+                Command::Licenses {
+                    command: GenerateCommand::Generate,
+                } => supply_chain::generate_licenses(&root).map_err(anyhow::Error::from),
+                Command::Sbom {
+                    command: GenerateCommand::Generate,
+                } => supply_chain::generate_sbom(&root).map_err(anyhow::Error::from),
+                Command::Release { command } => match command {
+                    ReleaseCommand::VerifyClean => release::verify_clean(&root),
+                    ReleaseCommand::AssembleManifest => release::assemble_manifest(),
+                },
+            }
         }
-        Command::Protocol {
-            command: ProtocolCommand::Verify,
-        } => protocol::verify(&root),
-        Command::Fixtures {
-            command: FixturesCommand::Validate,
-        } => fixtures::validate(&root),
-        Command::Architecture {
-            command: ArchitectureCommand::Verify,
-        } => architecture::verify(&root),
-        Command::Solver { command } => match command {
-            SolverCommand::BuildNative => solver::build_native(&root),
-            SolverCommand::InstallFromNix => unavailable_solver(
-                "install-from-nix",
-                "the installed solver manifest and license payload contracts exist",
-            ),
-            SolverCommand::Smoke => unavailable_solver(
-                "smoke",
-                "manifest-validated worker installation is implemented",
-            ),
-        },
-        Command::Licenses {
-            command: GenerateCommand::Generate,
-        } => supply_chain::generate_licenses(&root).map_err(anyhow::Error::from),
-        Command::Sbom {
-            command: GenerateCommand::Generate,
-        } => supply_chain::generate_sbom(&root).map_err(anyhow::Error::from),
-        Command::Release { command } => match command {
-            ReleaseCommand::VerifyClean => release::verify_clean(&root),
-            ReleaseCommand::AssembleManifest => release::assemble_manifest(),
-        },
     }
 }
 

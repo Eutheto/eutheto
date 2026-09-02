@@ -25,24 +25,29 @@ An approved contract is produced from reviewed locked inputs, validated against 
 
 ### Installed solver manifest
 
-Phase 03 generates one installed manifest from the approved source contract plus measured build outputs. It is carried beside the worker and license material; the worker handshake returns the SHA-256 of its exact canonical bytes. The supervisor compares that digest with the manifest selected from the application bundle before accepting health or any later capability. Neither process resolves the worker or its manifest from ambient `PATH`.
+Phase 03 defines one installed manifest from the approved source contract plus measured build and payload evidence. The strict v1 schemas are [`workers/ortools/solver-manifest.schema.json`](../../workers/ortools/solver-manifest.schema.json), [`workers/ortools/solver-build-evidence.schema.json`](../../workers/ortools/solver-build-evidence.schema.json), and [`workers/ortools/solver-payload-evidence.schema.json`](../../workers/ortools/solver-payload-evidence.schema.json). These schemas and the Rust assembler/validator are reusable tooling; no checked-in installed manifest or official artifact exists yet.
 
-The generated installed record must contain these semantic groups; Phase 03 supplies the concrete schema together with the real builder rather than publishing a fabricated Phase-00 instance:
+After a target builder has produced its final executable/runtime filenames and the later license/SBOM work has installed its final payload, it invokes `cargo xtask solver assemble-manifest` with explicit `--source-contract`, `--protocol-schema`, `--protocol-policy`, `--build-evidence`, `--payload-evidence`, and `--artifact-root` paths. The only output is `<artifact-root>/solver-manifest.json`; it is created without replacement and uses mode `0644` on Unix. `cargo xtask solver validate-manifest` requires the same `--source-contract`, `--protocol-schema`, and `--protocol-policy` authority paths plus `--artifact-root`; it always validates the nonsymlink installed path `<artifact-root>/solver-manifest.json`, their agreement, canonical manifest bytes, and every referenced artifact digest. Both commands parse their explicit paths before any repository-root lookup, so an installed build-platform `xtask` is independent of a source checkout. Both print the manifest SHA-256 externally; the manifest never contains its own digest.
+
+The manifest contains these semantic groups:
 
 | Group | Required evidence |
 |---|---|
-| manifest | manifest schema version and generation contract version |
-| worker | identity, project worker version, executable filename, executable SHA-256 |
-| backend source | backend kind, exact upstream version, source URL, source SHA-256 |
-| protobuf contract | source version/URL/SHA-256, exact generator and linked runtime versions |
-| protocol | wire version and authoritative schema SHA-256 |
-| build | target triple, linkage mode, compiler identity/version, and sorted effective CMake cache entries |
-| capabilities | sorted unique capability identifiers actually exercised by worker tests |
-| runtime | sorted runtime library filenames and SHA-256 values when dynamically linked |
-| licenses | sorted relative license paths, SHA-256 values, and reviewed SPDX expressions |
-| approval | immutable reference to the source-contract approval evidence |
+| manifest | schema version 1 and generation-contract version 1 |
+| approval | Phase-03 source-contract approval record and SHA-256 of the exact canonical source-contract bytes |
+| backend source | `ortools` kind, exact upstream version, HTTPS source URL, and source archive SHA-256 |
+| build | supported target triple, exactly derived architecture, compiler identity/version, `static-ortools` linkage, and separate lexically keyed normalized OR-Tools and worker CMake maps |
+| capabilities | the exact sorted tested set: `cp-sat`, `deterministic-time`, `intermediate-solutions`, `objective-bounds`, `progress`, `solution-projection`, `solution-stats` |
+| protobuf | source version/URL/SHA-256, exact `protoc` and linked C++ runtime versions, and approved `cp_model.proto`/`sat_parameters.proto` checksums |
+| protocol | policy major/minor, source-contract wire version, and SHA-256 of the authoritative protocol schema bytes |
+| worker | source-contract identity/version, `ortools-cp-sat` backend ID, adapter `0.1.0`, `bundled-worker` distribution, `beta` stability, and executable relative path/SHA-256 |
+| runtime libraries | sorted relative path/SHA-256 records; empty for a completely static runtime inventory |
+| licenses | sorted relative path/SHA-256 records whose SPDX identifier is one of the dependency licenses already reviewed in the Phase-03 gate: `Apache-2.0`, `BSD-3-Clause`, `MIT`, `Zlib`, or `bzip2-1.0.6` |
+| SBOM | relative path and SHA-256 of the artifact-specific SBOM |
 
-The installed manifest does not contain its own digest; that would be self-referential. Its SHA-256 is computed over the complete canonical file and is carried by the handshake and release evidence. Paths are bundle-relative forward-slash paths only: absolute paths, empty segments, `.`/`..`, drive prefixes, home-directory expansion, and symlink escapes are forbidden. Secrets, usernames, build-host paths, wall-clock timestamps, network credentials, and signing material are forbidden.
+Build evidence repeats the tested backend ID, adapter version, and capability set; a mismatch is rejected rather than conflated with later descriptor registration. Both measured CMake scopes must repeat all 26 approved typed source-contract entries exactly and may add only the reviewed target-specific keys used by the Nix and native Windows builders. Fixed booleans, `Ninja`, policy mode, and the `EIGEN_MPL2_ONLY` compiler flag retain their reviewed typed/value forms. Compiler identity is normalized to `clang`, `gcc`, or `msvc`, with a bounded ASCII version rather than a raw compiler banner. Host paths never enter evidence. A single path-valued normalized cache string must start with exactly one of `@artifact-root@`, `@build-root@`, `@source-root@`, `@target-root@`, or `@toolchain-root@`; the platform loader spellings `@loader_path` and `@rpath` are also preserved explicitly. Token paths use `/` and contain no empty, `.`, `..`, colon, second token, list separator, assignment, home-expansion, or whitespace component. Absolute paths, drive paths, backslashes, raw home/build-host paths, unreviewed keys, and unknown `@` tokens are rejected.
+
+The installed manifest is carried beside the worker and payload. The later worker handshake returns the SHA-256 of its exact canonical bytes, and the supervisor compares that digest with the manifest selected from the application bundle before accepting health or any later capability. Neither process resolves the worker or its manifest from ambient `PATH`. Paths are bundle-relative forward-slash paths only: absolute paths, empty segments, `.`/`..`, drive prefixes, home-directory expansion, and duplicate canonical aliases are forbidden. A symlinked artifact path is accepted only when every symlink target is relative and its canonical target remains under the artifact root; absolute or escaping symlinks are rejected. Canonical containment under the artifact root, regular-file status, and each recorded digest are checked. Assembly and validation require a quiescent staging/install tree owned by the invoking build or application process; pathname validation is not an authorization boundary for a concurrently hostile writer. Secrets, usernames, build-host paths, wall-clock timestamps, network credentials, and signing material are forbidden.
 
 ## Canonical encoding and bounds
 
