@@ -54,6 +54,7 @@ endif()
 
 set(source_tag "v9.15")
 set(source_commit "551ad10d94835c99e5e1e684500d3db398c0e345")
+set(bzip2_commit "66c46b8c9436613fd81bc5d03f63a61933a4dcc3")
 set(source_url "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz")
 set(expected_source_sha256
   "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026")
@@ -61,7 +62,7 @@ set(source_patch_relative
   "workers/ortools/patches/9.15-candidate-fixes.patch")
 set(source_patch "${REPOSITORY_ROOT}/${source_patch_relative}")
 set(expected_source_patch_sha256
-  "d8944f207f540372c2b411c1735361c4d0b6925d23280c874a3e3713ecd98d07")
+  "3ab9c8c45d76aab2416195bc97266718986a395a37fcd6c8d6e6fa5322ecf6a6")
 string(LENGTH "${expected_source_sha256}" expected_source_sha256_length)
 if(NOT expected_source_sha256_length EQUAL 64
    OR NOT expected_source_sha256 MATCHES "^[0-9a-f]+$")
@@ -99,6 +100,7 @@ file(WRITE "${report_file}"
   "source_patch=${source_patch_relative}\n"
   "source_patch_sha256_expected=${expected_source_patch_sha256}\n"
   "protobuf_dependency_expected=v33.1\n"
+  "bzip2_dependency_expected=${bzip2_commit}\n"
   "linkage_probe=${PROBE_LINKAGE}\n"
   "linkage_policy=measured-candidate-evidence-not-final-target-policy\n")
 file(WRITE "${cache_evidence_file}"
@@ -375,6 +377,30 @@ list(APPEND ortools_configure_command
   "-DUSE_GLOP=ON"
 )
 run_stage(ortools-configure "${PROBE_ROOT}" ${ortools_configure_command})
+set(bzip2_source_dir "${ortools_build_dir}/_deps/bzip2-src")
+execute_process(
+  COMMAND "${git_executable}" rev-parse HEAD
+  WORKING_DIRECTORY "${bzip2_source_dir}"
+  RESULT_VARIABLE bzip2_revision_result
+  OUTPUT_VARIABLE bzip2_revision_actual
+  ERROR_VARIABLE bzip2_revision_error
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  TIMEOUT 30
+  ENCODING UTF-8
+)
+file(WRITE "${evidence_dir}/dependency-revisions.txt"
+  "bzip2_expected=${bzip2_commit}\n"
+  "bzip2_actual=${bzip2_revision_actual}\n"
+  "bzip2_revision_exit_code=${bzip2_revision_result}\n"
+  "bzip2_revision_stderr=${bzip2_revision_error}\n")
+file(APPEND "${report_file}"
+  "bzip2_revision_exit_code=${bzip2_revision_result}\n"
+  "bzip2_dependency_actual=${bzip2_revision_actual}\n")
+if(NOT "${bzip2_revision_result}" STREQUAL "0"
+   OR NOT bzip2_revision_actual STREQUAL bzip2_commit)
+  message(FATAL_ERROR
+    "Fetched bzip2 revision ${bzip2_revision_actual}; expected ${bzip2_commit}.")
+endif()
 
 set(ortools_version_config "${ortools_build_dir}/ortoolsConfigVersion.cmake")
 if(NOT EXISTS "${ortools_version_config}")

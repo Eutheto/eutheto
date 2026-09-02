@@ -60,3 +60,16 @@ diff --git a/patches/bzip2.patch b/patches/bzip2.patch
 +-LIBRARY			bz2-1
 ++LIBRARY			bz2
 + EXPORTS
+diff --git a/cmake/dependencies/CMakeLists.txt b/cmake/dependencies/CMakeLists.txt
+--- a/cmake/dependencies/CMakeLists.txt
++++ b/cmake/dependencies/CMakeLists.txt
+@@ -89,7 +89,7 @@ if(BUILD_BZip2)
+   FetchContent_Declare(
+     BZip2
+     GIT_REPOSITORY "https://gitlab.com/bzip2/bzip2.git"
+-    GIT_TAG "master"
++    GIT_TAG "66c46b8c9436613fd81bc5d03f63a61933a4dcc3"
+     # GIT_TAG "bzip2-1.0.8" # CMake support not available
+-    GIT_SHALLOW TRUE
++    GIT_SHALLOW FALSE
+     UPDATE_COMMAND git reset --hard
