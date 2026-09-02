@@ -174,10 +174,10 @@ fn translate_variable_domains_validated(
 /// Translates every currently supported planning primitive into a complete CP-SAT model.
 ///
 /// At this stage the accepted model surface is Boolean and integer scalar variables plus
-/// unenforced `BoolOr` clauses. Unsupported primitives are rejected rather than omitted.
-/// Positive literals use their scalar variable index; negative literals use CP-SAT's exact
-/// `-index - 1` encoding. Empty clauses remain empty and therefore false.
-///
+/// unenforced Boolean clauses, conjunctions, implications, and equivalences. Unsupported
+/// primitives are rejected rather than omitted. Positive literals use their scalar variable
+/// index; negative literals use CP-SAT's exact `-index - 1` encoding. Empty clauses remain empty
+/// and therefore false; empty conjunctions remain empty and therefore true.
 /// # Errors
 ///
 /// Returns a validation error for invalid planning IR and an explicit unsupported-feature error
@@ -215,16 +215,44 @@ pub fn translate_supported_model(
         if !record.enforcement.is_empty() {
             return Err(TranslationError::UnsupportedEnforcement);
         }
-        let Constraint::BoolOr { literals } = &record.body else {
-            return Err(TranslationError::UnsupportedConstraint);
-        };
-        model.constraints.push(ConstraintProto {
-            name: String::new(),
-            enforcement_literal: Vec::new(),
-            constraint: Some(constraint_proto::Constraint::BoolOr(BoolArgumentProto {
-                literals: translate_literals(literals, &boolean_indices)?,
-            })),
-        });
+        match &record.body {
+            Constraint::BoolOr { literals } => {
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::BoolOr,
+                    translate_literals(literals, &boolean_indices)?,
+                ));
+            }
+            Constraint::BoolAnd { literals } => {
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::BoolAnd,
+                    translate_literals(literals, &boolean_indices)?,
+                ));
+            }
+            Constraint::Implication {
+                antecedent,
+                consequent,
+            } => {
+                let antecedent = translate_literal(antecedent, &boolean_indices)?;
+                let consequent = translate_literal(consequent, &boolean_indices)?;
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::BoolOr,
+                    vec![!antecedent, consequent],
+                ));
+            }
+            Constraint::Equivalence { left, right } => {
+                let left = translate_literal(left, &boolean_indices)?;
+                let right = translate_literal(right, &boolean_indices)?;
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::BoolOr,
+                    vec![!left, right],
+                ));
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::BoolOr,
+                    vec![left, !right],
+                ));
+            }
+            _ => return Err(TranslationError::UnsupportedConstraint),
+        }
     }
 
     Ok(TranslatedCpSatModel {
@@ -234,23 +262,35 @@ pub fn translate_supported_model(
     })
 }
 
+fn boolean_constraint(
+    constructor: fn(BoolArgumentProto) -> constraint_proto::Constraint,
+    literals: Vec<i32>,
+) -> ConstraintProto {
+    ConstraintProto {
+        name: String::new(),
+        enforcement_literal: Vec::new(),
+        constraint: Some(constructor(BoolArgumentProto { literals })),
+    }
+}
+
+fn translate_literal(
+    literal: &Literal,
+    boolean_indices: &BTreeMap<BoolVariableId, i32>,
+) -> Result<i32, TranslationError> {
+    let index = boolean_indices
+        .get(&literal.variable)
+        .copied()
+        .ok_or(TranslationError::MissingBooleanIndex)?;
+    Ok(if literal.positive { index } else { !index })
+}
+
 fn translate_literals(
     literals: &[Literal],
     boolean_indices: &BTreeMap<BoolVariableId, i32>,
 ) -> Result<Vec<i32>, TranslationError> {
     literals
         .iter()
-        .map(|literal| {
-            let index = boolean_indices
-                .get(&literal.variable)
-                .copied()
-                .ok_or(TranslationError::MissingBooleanIndex)?;
-            if literal.positive {
-                Ok(index)
-            } else {
-                Ok(-index - 1)
-            }
-        })
+        .map(|literal| translate_literal(literal, boolean_indices))
         .collect()
 }
 
@@ -494,14 +534,85 @@ mod tests {
     }
 
     #[test]
+    fn boolean_relations_have_exact_clause_encodings() -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let bool_a = BoolVariableId::new("translation.a_bool")?;
+        let bool_z = BoolVariableId::new("translation.z_bool")?;
+        problem.constraints = vec![
+            constraint_record(
+                "constraint.a_empty_and",
+                Constraint::bool_and(Vec::new()),
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.b_mixed_and",
+                Constraint::bool_and(vec![
+                    Literal::positive(bool_a.clone()),
+                    Literal::negative(bool_z.clone()),
+                ]),
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.c_implication",
+                Constraint::Implication {
+                    antecedent: Literal::positive(bool_a.clone()),
+                    consequent: Literal::negative(bool_z.clone()),
+                },
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.d_equivalence",
+                Constraint::Equivalence {
+                    left: Literal::negative(bool_a),
+                    right: Literal::positive(bool_z),
+                },
+                Vec::new(),
+            )?,
+        ];
+        problem.declared_capabilities.extend([
+            Capability::BoolAnd,
+            Capability::Implication,
+            Capability::Equivalence,
+        ]);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        let constraints: Vec<_> = model
+            .constraints
+            .iter()
+            .map(|constraint| match constraint.constraint.as_ref() {
+                Some(constraint_proto::Constraint::BoolOr(argument)) => {
+                    ("or", argument.literals.as_slice())
+                }
+                Some(constraint_proto::Constraint::BoolAnd(argument)) => {
+                    ("and", argument.literals.as_slice())
+                }
+                _ => ("other", &[][..]),
+            })
+            .collect();
+
+        assert_eq!(
+            constraints,
+            [
+                ("and", &[][..]),
+                ("and", &[0, -5][..]),
+                ("or", &[-1, -5][..]),
+                ("or", &[0, 4][..]),
+                ("or", &[-1, -5][..]),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn unsupported_constraint_semantics_are_rejected_not_omitted() -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
         problem.constraints.push(constraint_record(
             "constraint.unsupported",
-            Constraint::bool_and(Vec::new()),
+            Constraint::at_most_one(Vec::new()),
             Vec::new(),
         )?);
-        problem.declared_capabilities.insert(Capability::BoolAnd);
+        problem.declared_capabilities.insert(Capability::AtMostOne);
 
         assert!(matches!(
             translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
