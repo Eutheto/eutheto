@@ -150,6 +150,10 @@ function(append_inspection log_name subject working_directory)
     list(REMOVE_DUPLICATES runtime_dependencies)
     cmake_path(GET subject PARENT_PATH subject_parent)
     foreach(runtime_dependency IN LISTS runtime_dependencies)
+      string(TOLOWER "${runtime_dependency}" normalized_runtime_dependency)
+      if(normalized_runtime_dependency MATCHES "^(api|ext)-ms-win-.*\\.dll$")
+        continue()
+      endif()
       if(NOT EXISTS "${working_directory}/${subject_parent}/${runtime_dependency}"
          AND NOT EXISTS "${ortools_install_dir}/bin/${runtime_dependency}"
          AND NOT EXISTS "$ENV{SystemRoot}/System32/${runtime_dependency}")
