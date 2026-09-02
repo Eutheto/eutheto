@@ -73,6 +73,29 @@ jobs:
           (Get-Command cl.exe).Source
           (Get-Command dumpbin.exe).Source
 
+      - name: Install the fixed protoc tool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "protoc-33.1-win64.zip"
+          $root = Join-Path $env:RUNNER_TEMP "protoc-33.1-win64"
+          Invoke-WebRequest `
+            -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v33.1/protoc-33.1-win64.zip" `
+            -OutFile $archive
+          $actualHash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedHash = "d7a207fb6eec0e4b1b6613be3b7d11905375b6fd1147a071116eb8e9f24ac53b"
+          if ($actualHash -ne $expectedHash) {
+            throw "protoc 33.1 archive SHA-256 mismatch: $actualHash"
+          }
+          Expand-Archive -Path $archive -DestinationPath $root
+          $protoc = Join-Path $root "bin/protoc.exe"
+          $protocInclude = Join-Path $root "include"
+          if ((& $protoc --version) -ne "libprotoc 33.1") {
+            throw "The fixed protoc executable did not report libprotoc 33.1."
+          }
+          "PROTOC=$protoc" | Add-Content -Path $env:GITHUB_ENV
+          "PROTOC_INCLUDE=$protocInclude" | Add-Content -Path $env:GITHUB_ENV
+
       - name: Build and verify the approved native worker
         shell: pwsh
         run: |
