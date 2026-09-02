@@ -4,10 +4,11 @@ use eutheto_domain_ir::OptimizationDirection;
 use eutheto_planning_ir::{
     Assumption, BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId,
     IntervalVariableId, LexicographicStrategy, LinearComparison, Literal, ObjectiveLevelId,
-    ObjectivePlan, PlanningConstraintId, PlanningIrLimitsV1, PlanningProblem, ProjectionId,
-    ProvenanceId, ProvenanceRecord, SolutionProjection, ValidationError, Variable,
+    ObjectivePlan, PlanningConstraintId, PlanningIrLimitsV1, PlanningProblem, ProjectionExpression,
+    ProjectionId, ProvenanceId, ProvenanceRecord, SolutionProjection, ValidationError, Variable,
     lexicographic_strategy, validate,
 };
+use eutheto_protocol::wire::ProjectionRequest as WorkerProjectionRequest;
 use prost::Message;
 use thiserror::Error;
 
@@ -48,6 +49,15 @@ impl VariableTranslation {
         self.integer_indices.get(id).copied()
     }
 }
+
+/// One typed planning variable requested from the worker for candidate reconstruction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CandidateProjectionVariable {
+    /// Boolean value encoded by CP-SAT as zero or one.
+    Boolean(BoolVariableId),
+    /// Integer value returned without conversion.
+    Integer(IntVariableId),
+}
 /// A complete serialized CP-SAT model for the planning features accepted by this translator.
 ///
 /// The retained maps are the only link from planning identities to native indices. The native
@@ -68,6 +78,8 @@ struct TranslationMaps {
     objective_weights: BTreeMap<ObjectiveLevelId, i64>,
     assumptions_by_literal: BTreeMap<i32, Assumption>,
     projection_requests: BTreeMap<ProjectionId, SolutionProjection>,
+    worker_projection_requests: Vec<WorkerProjectionRequest>,
+    candidate_projection_variables: BTreeMap<u64, CandidateProjectionVariable>,
     provenance_records: BTreeMap<ProvenanceId, ProvenanceRecord>,
     boolean_provenance: BTreeMap<BoolVariableId, ProvenanceId>,
     integer_provenance: BTreeMap<IntVariableId, ProvenanceId>,
@@ -133,6 +145,21 @@ impl TranslatedCpSatModel {
     /// Returns the canonical projection requests retained outside the native protobuf.
     pub fn projection_requests(&self) -> impl Iterator<Item = &SolutionProjection> {
         self.maps.projection_requests.values()
+    }
+
+    /// Returns the exact native variable requests to place in the worker solve request.
+    #[must_use]
+    pub fn worker_projection_requests(&self) -> &[WorkerProjectionRequest] {
+        &self.maps.worker_projection_requests
+    }
+
+    /// Returns the typed planning variable assigned to one worker-local projection ID.
+    #[must_use]
+    pub fn candidate_projection_variable(
+        &self,
+        projection_id: u64,
+    ) -> Option<&CandidateProjectionVariable> {
+        self.maps.candidate_projection_variables.get(&projection_id)
     }
 
     /// Returns one complete upstream provenance record.
@@ -202,9 +229,9 @@ pub enum TranslationError {
     /// Assumptions are translated in a later stage.
     #[error("assumptions are not supported by the current CP-SAT translator")]
     UnsupportedAssumption,
-    /// Projections are translated in a later stage.
-    #[error("projections are not supported by the current CP-SAT translator")]
-    UnsupportedProjection,
+    /// A worker-local candidate projection identifier could not fit the protocol field.
+    #[error("the candidate projection index exceeds the unsigned 64-bit protocol range")]
+    ProjectionIndexOverflow,
 }
 
 /// Translates validated Boolean and integer domains into CP-SAT scalar declarations.
@@ -320,9 +347,6 @@ pub fn translate_supported_model(
     if !problem.assumptions.is_empty() {
         return Err(TranslationError::UnsupportedAssumption);
     }
-    if !problem.projections.is_empty() {
-        return Err(TranslationError::UnsupportedProjection);
-    }
 
     let needs_constant_one = problem.constraints.iter().any(|record| {
         matches!(
@@ -339,6 +363,8 @@ pub fn translate_supported_model(
         boolean_indices,
         integer_indices,
     } = translate_variable_domains_validated(problem, needs_constant_one)?;
+    let (worker_projection_requests, candidate_projection_variables) =
+        translate_candidate_projections(problem, &boolean_indices, &integer_indices)?;
     let constraint_indices =
         translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
     translate_objective(problem, &objective_weights, &mut model, &integer_indices, 0)?;
@@ -349,11 +375,87 @@ pub fn translate_supported_model(
         boolean_indices,
         integer_indices,
         constraint_indices,
+        worker_projection_requests,
+        candidate_projection_variables,
     );
     Ok(TranslatedCpSatModel {
         cp_model_proto: model.encode_to_vec(),
         maps,
     })
+}
+
+fn translate_candidate_projections(
+    problem: &PlanningProblem,
+    boolean_indices: &BTreeMap<BoolVariableId, i32>,
+    integer_indices: &BTreeMap<IntVariableId, i32>,
+) -> Result<
+    (
+        Vec<WorkerProjectionRequest>,
+        BTreeMap<u64, CandidateProjectionVariable>,
+    ),
+    TranslationError,
+> {
+    let mut requested = BTreeMap::<i32, CandidateProjectionVariable>::new();
+    for projection in &problem.projections {
+        match &projection.expression {
+            ProjectionExpression::Boolean(id) => {
+                let index = boolean_indices
+                    .get(id)
+                    .copied()
+                    .ok_or(TranslationError::MissingBooleanIndex)?;
+                requested.insert(index, CandidateProjectionVariable::Boolean(id.clone()));
+            }
+            ProjectionExpression::Integer(id) => {
+                insert_integer_projection(&mut requested, id, integer_indices)?;
+            }
+            ProjectionExpression::Linear(expression) => {
+                for term in &expression.terms {
+                    insert_integer_projection(&mut requested, &term.variable, integer_indices)?;
+                }
+            }
+            ProjectionExpression::Interval(_) => {
+                return Err(TranslationError::UnsupportedIntervalVariable);
+            }
+            ProjectionExpression::Constant(_) => {}
+        }
+    }
+    for level in &problem.objectives.levels {
+        for term in &level.terms {
+            for expression_term in &term.expression.terms {
+                insert_integer_projection(
+                    &mut requested,
+                    &expression_term.variable,
+                    integer_indices,
+                )?;
+            }
+        }
+    }
+
+    let mut worker_requests = Vec::with_capacity(requested.len());
+    let mut candidate_variables = BTreeMap::new();
+    for (position, (cp_sat_variable_index, variable)) in requested.into_iter().enumerate() {
+        let projection_id =
+            u64::try_from(position).map_err(|_| TranslationError::ProjectionIndexOverflow)?;
+        worker_requests.push(WorkerProjectionRequest {
+            projection_id,
+            cp_sat_variable_index,
+        });
+        candidate_variables.insert(projection_id, variable);
+    }
+    Ok((worker_requests, candidate_variables))
+}
+
+fn insert_integer_projection(
+    requested: &mut BTreeMap<i32, CandidateProjectionVariable>,
+    id: &IntVariableId,
+    integer_indices: &BTreeMap<IntVariableId, i32>,
+) -> Result<(), TranslationError> {
+    let index = integer_indices
+        .get(id)
+        .copied()
+        .ok_or(TranslationError::MissingIntegerIndex)?;
+    requested.insert(index, CandidateProjectionVariable::Integer(id.clone()));
+    Ok(())
 }
 
 fn retain_translation_maps(
@@ -362,6 +464,8 @@ fn retain_translation_maps(
     boolean_indices: BTreeMap<BoolVariableId, i32>,
     integer_indices: BTreeMap<IntVariableId, i32>,
     constraint_indices: BTreeMap<PlanningConstraintId, Vec<i32>>,
+    worker_projection_requests: Vec<WorkerProjectionRequest>,
+    candidate_projection_variables: BTreeMap<u64, CandidateProjectionVariable>,
 ) -> TranslationMaps {
     let objective_weights = problem
         .objectives
@@ -394,7 +498,14 @@ fn retain_translation_maps(
         objective_plan: problem.objectives.clone(),
         objective_weights,
         assumptions_by_literal: BTreeMap::new(),
-        projection_requests: BTreeMap::new(),
+        projection_requests: problem
+            .projections
+            .iter()
+            .cloned()
+            .map(|projection| (projection.id.clone(), projection))
+            .collect(),
+        worker_projection_requests,
+        candidate_projection_variables,
         provenance_records: problem
             .provenance
             .iter()
@@ -794,7 +905,10 @@ fn flatten_domain(domain: &IntDomain) -> Vec<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eutheto_domain_ir::ScoreCategoryId;
+    use eutheto_domain_ir::{
+        AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef,
+        ScoreCategoryId,
+    };
     use eutheto_planning_ir::{
         BoolVariable, Capability, CompilerId, ConstraintRecord, InclusiveRange, IntVariable,
         IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm, ObjectiveLevel,
@@ -911,6 +1025,23 @@ mod tests {
             expression,
             kind,
             category: ScoreCategoryId::new("translation.score")?,
+            provenance: ProvenanceId::new("translation.variable")?,
+        })
+    }
+
+    fn solution_projection(
+        suffix: &str,
+        expression: ProjectionExpression,
+    ) -> Result<SolutionProjection, Box<dyn Error>> {
+        Ok(SolutionProjection {
+            id: ProjectionId::new(format!("translation.projection.{suffix}"))?,
+            assignment_id: DomainAssignmentId::new(format!("translation.assignment.{suffix}"))?,
+            entity: DomainEntityRef {
+                kind: DomainEntityKindId::new("translation.entity")?,
+                id: DomainEntityId::new(format!("translation.entity.{suffix}"))?,
+            },
+            required: true,
+            expression,
             provenance: ProvenanceId::new("translation.variable")?,
         })
     }
@@ -1467,6 +1598,104 @@ mod tests {
         assert_eq!(
             translated.objective_weight(&ObjectiveLevelId::new("translation.level.low")?),
             Some(1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_projection_requests_include_only_projection_and_objective_inputs()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let bool_a = BoolVariableId::new("translation.a_bool")?;
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        let end = IntVariableId::new("translation.d_end")?;
+        let bool_z = BoolVariableId::new("translation.z_bool")?;
+        problem.projections = vec![
+            solution_projection("boolean", ProjectionExpression::Boolean(bool_a.clone()))?,
+            solution_projection(
+                "constant",
+                ProjectionExpression::Constant(AssignmentValue::Integer(7)),
+            )?,
+            solution_projection("integer", ProjectionExpression::Integer(start.clone()))?,
+            solution_projection(
+                "linear",
+                ProjectionExpression::Linear(LinearExpression::new(
+                    vec![
+                        LinearTerm {
+                            variable: start.clone(),
+                            coefficient: 1,
+                        },
+                        LinearTerm {
+                            variable: duration.clone(),
+                            coefficient: 1,
+                        },
+                    ],
+                    0,
+                )?),
+            )?,
+        ];
+        problem.objectives = ObjectivePlan {
+            levels: vec![ObjectiveLevel {
+                id: ObjectiveLevelId::new("translation.level")?,
+                direction: OptimizationDirection::Minimize,
+                lower_bound: 1,
+                upper_bound: 4,
+                terms: vec![objective_term(
+                    "translation.objective",
+                    LinearExpression::new(
+                        vec![LinearTerm {
+                            variable: end.clone(),
+                            coefficient: 1,
+                        }],
+                        0,
+                    )?,
+                    ObjectiveTermKind::Penalty,
+                )?],
+                provenance: ProvenanceId::new("translation.variable")?,
+            }],
+        };
+        problem.declared_capabilities.extend([
+            Capability::BooleanProjection,
+            Capability::IntegerProjection,
+            Capability::ObjectivePenalty,
+        ]);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+
+        let worker_requests = translated
+            .worker_projection_requests()
+            .iter()
+            .map(|request| (request.projection_id, request.cp_sat_variable_index))
+            .collect::<Vec<_>>();
+        assert_eq!(worker_requests, vec![(0, 0), (1, 1), (2, 2), (3, 3)]);
+        assert_eq!(
+            translated.candidate_projection_variable(0),
+            Some(&CandidateProjectionVariable::Boolean(bool_a))
+        );
+        assert_eq!(
+            translated.candidate_projection_variable(1),
+            Some(&CandidateProjectionVariable::Integer(start))
+        );
+        assert_eq!(
+            translated.candidate_projection_variable(2),
+            Some(&CandidateProjectionVariable::Integer(duration))
+        );
+        assert_eq!(
+            translated.candidate_projection_variable(3),
+            Some(&CandidateProjectionVariable::Integer(end))
+        );
+        assert!(translated.boolean_index(&bool_z).is_some());
+        assert!(
+            translated
+                .worker_projection_requests()
+                .iter()
+                .all(|request| request.cp_sat_variable_index != 4)
+        );
+        assert_eq!(translated.projection_requests().count(), 4);
+        assert!(
+            !String::from_utf8_lossy(translated.cp_model_proto())
+                .contains("translation.projection")
         );
         Ok(())
     }

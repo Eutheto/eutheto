@@ -13,8 +13,8 @@ pub use status::{
     WorkerFailureKind, WorkerLimitKind, WorkerUnavailableKind, normalize_terminal,
 };
 pub use translation::{
-    TranslatedCpSatModel, TranslationError, VariableTranslation, translate_supported_model,
-    translate_variable_domains,
+    CandidateProjectionVariable, TranslatedCpSatModel, TranslationError, VariableTranslation,
+    translate_supported_model, translate_variable_domains,
 };
 
 use std::collections::VecDeque;
