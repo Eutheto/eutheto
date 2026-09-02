@@ -63,22 +63,40 @@ set(source_patch_relative
 set(source_patch "${REPOSITORY_ROOT}/${source_patch_relative}")
 set(expected_source_patch_sha256
   "3ab9c8c45d76aab2416195bc97266718986a395a37fcd6c8d6e6fa5322ecf6a6")
+set(protobuf_source_url
+  "https://github.com/protocolbuffers/protobuf/releases/download/v33.1/protobuf-33.1.tar.gz")
+set(expected_protobuf_source_sha256
+  "fda132cb0c86400381c0af1fe98bd0f775cb566cb247cdcc105e344e00acc30e")
 string(LENGTH "${expected_source_sha256}" expected_source_sha256_length)
 if(NOT expected_source_sha256_length EQUAL 64
    OR NOT expected_source_sha256 MATCHES "^[0-9a-f]+$")
   message(FATAL_ERROR "The pinned source SHA-256 must be 64 lowercase hexadecimal characters.")
+endif()
+string(LENGTH "${expected_protobuf_source_sha256}"
+  expected_protobuf_source_sha256_length)
+if(NOT expected_protobuf_source_sha256_length EQUAL 64
+   OR NOT expected_protobuf_source_sha256 MATCHES "^[0-9a-f]+$")
+  message(FATAL_ERROR
+    "The pinned protobuf source SHA-256 must be 64 lowercase hexadecimal characters.")
 endif()
 
 file(REMOVE_RECURSE "${PROBE_ROOT}")
 set(download_dir "${PROBE_ROOT}/download")
 set(source_parent "${PROBE_ROOT}/source")
 set(source_dir "${source_parent}/or-tools-9.15")
+set(protobuf_source_parent "${PROBE_ROOT}/protobuf-source")
+set(protobuf_source_dir "${protobuf_source_parent}/protobuf-33.1")
 set(ortools_build_dir "${PROBE_ROOT}/ortools-build")
 set(ortools_install_dir "${PROBE_ROOT}/ortools-install")
 set(worker_build_dir "${PROBE_ROOT}/worker-build")
 set(evidence_dir "${PROBE_ROOT}/evidence")
-file(MAKE_DIRECTORY "${download_dir}" "${source_parent}" "${evidence_dir}")
+file(MAKE_DIRECTORY
+  "${download_dir}"
+  "${source_parent}"
+  "${protobuf_source_parent}"
+  "${evidence_dir}")
 set(source_archive "${download_dir}/or-tools-v9.15.tar.gz")
+set(protobuf_source_archive "${download_dir}/protobuf-33.1.tar.gz")
 set(report_file "${evidence_dir}/candidate-evidence.txt")
 set(cache_evidence_file "${evidence_dir}/cmake-cache-entries.txt")
 set(test_outcome_file "${evidence_dir}/test-outcome.txt")
@@ -100,6 +118,9 @@ file(WRITE "${report_file}"
   "source_patch=${source_patch_relative}\n"
   "source_patch_sha256_expected=${expected_source_patch_sha256}\n"
   "protobuf_dependency_expected=v33.1\n"
+  "protobuf_source_archive_url=${protobuf_source_url}\n"
+  "protobuf_source_archive_sha256_expected=${expected_protobuf_source_sha256}\n"
+  "protobuf_source_override=FETCHCONTENT_SOURCE_DIR_PROTOBUF\n"
   "bzip2_dependency_expected=${bzip2_commit}\n"
   "linkage_probe=${PROBE_LINKAGE}\n"
   "linkage_policy=measured-candidate-evidence-not-final-target-policy\n")
@@ -271,6 +292,42 @@ run_stage(check-source-patch "${source_dir}"
   "${git_executable}" apply --check "${source_patch}")
 run_stage(apply-source-patch "${source_dir}"
   "${git_executable}" apply "${source_patch}")
+file(DOWNLOAD
+  "${protobuf_source_url}"
+  "${protobuf_source_archive}"
+  EXPECTED_HASH "SHA256=${expected_protobuf_source_sha256}"
+  STATUS protobuf_download_status
+  LOG protobuf_download_log
+  SHOW_PROGRESS
+  TLS_VERIFY ON
+)
+list(GET protobuf_download_status 0 protobuf_download_result)
+list(GET protobuf_download_status 1 protobuf_download_message)
+file(WRITE "${evidence_dir}/protobuf-download.log"
+  "url=${protobuf_source_url}\n"
+  "status=${protobuf_download_result}\n"
+  "message=${protobuf_download_message}\n"
+  "${protobuf_download_log}")
+file(APPEND "${report_file}"
+  "protobuf_download_exit_code=${protobuf_download_result}\n")
+if(NOT protobuf_download_result EQUAL 0)
+  message(FATAL_ERROR
+    "Protobuf source download or hash verification failed: ${protobuf_download_message}")
+endif()
+file(SHA256 "${protobuf_source_archive}" actual_protobuf_source_sha256)
+file(APPEND "${report_file}"
+  "protobuf_source_archive_sha256_actual=${actual_protobuf_source_sha256}\n")
+if(NOT actual_protobuf_source_sha256 STREQUAL expected_protobuf_source_sha256)
+  message(FATAL_ERROR
+    "Protobuf source archive SHA-256 is ${actual_protobuf_source_sha256}, "
+    "expected ${expected_protobuf_source_sha256}.")
+endif()
+run_stage(extract-protobuf-source "${protobuf_source_parent}"
+  "${CMAKE_COMMAND}" -E tar xzf "${protobuf_source_archive}")
+if(NOT EXISTS "${protobuf_source_dir}/CMakeLists.txt")
+  message(FATAL_ERROR
+    "The verified protobuf archive did not extract the expected protobuf-33.1 source root.")
+endif()
 
 set(dependency_file "${source_dir}/cmake/dependencies/CMakeLists.txt")
 file(STRINGS "${dependency_file}" dependency_lines)
@@ -354,6 +411,7 @@ list(APPEND ortools_configure_command
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=${ortools_install_dir}"
   "-DCMAKE_CXX_FLAGS=${eigen_license_cxx_flag}"
+  "-DFETCHCONTENT_SOURCE_DIR_PROTOBUF=${protobuf_source_dir}"
   "-DBUILD_SHARED_LIBS=${build_shared_libraries}"
   "-DBUILD_CXX=ON"
   "-DBUILD_DEPS=ON"
@@ -466,6 +524,8 @@ foreach(cache_expectation
   list(GET cache_expectation_parts 1 cache_entry_value)
   require_cache_entry(ortools "${ortools_cache}" "${cache_entry_name}" "${cache_entry_value}")
 endforeach()
+require_cache_entry(ortools "${ortools_cache}"
+  FETCHCONTENT_SOURCE_DIR_PROTOBUF "${protobuf_source_dir}")
 record_cache_entry(ortools "${ortools_cache}" CMAKE_INSTALL_PREFIX)
 record_cache_entry(ortools "${ortools_cache}" CMAKE_C_COMPILER)
 record_cache_entry(ortools "${ortools_cache}" CMAKE_CXX_COMPILER)
