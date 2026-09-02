@@ -72,6 +72,7 @@ pub struct TranslatedCpSatModel {
 struct TranslationMaps {
     boolean_indices: BTreeMap<BoolVariableId, i32>,
     integer_indices: BTreeMap<IntVariableId, i32>,
+    integer_domains: BTreeMap<IntVariableId, IntDomain>,
     interval_constraint_indices: BTreeMap<IntervalVariableId, i32>,
     constraint_indices: BTreeMap<PlanningConstraintId, Vec<i32>>,
     objective_plan: ObjectivePlan,
@@ -104,6 +105,10 @@ impl TranslatedCpSatModel {
     #[must_use]
     pub fn integer_index(&self, id: &IntVariableId) -> Option<i32> {
         self.maps.integer_indices.get(id).copied()
+    }
+
+    pub(crate) fn integer_domain(&self, id: &IntVariableId) -> Option<&IntDomain> {
+        self.maps.integer_domains.get(id)
     }
 
     /// Returns the native interval-constraint index retained for a planning interval.
@@ -508,6 +513,7 @@ fn retain_translation_maps(
         .collect();
     let mut boolean_provenance = BTreeMap::new();
     let mut integer_provenance = BTreeMap::new();
+    let mut integer_domains = BTreeMap::new();
     let mut interval_provenance = BTreeMap::new();
     for variable in &problem.variables {
         match variable {
@@ -516,6 +522,7 @@ fn retain_translation_maps(
             }
             Variable::Integer(variable) => {
                 integer_provenance.insert(variable.id.clone(), variable.provenance.clone());
+                integer_domains.insert(variable.id.clone(), variable.domain.clone());
             }
             Variable::Interval(variable) => {
                 interval_provenance.insert(variable.id.clone(), variable.provenance.clone());
@@ -525,6 +532,7 @@ fn retain_translation_maps(
     TranslationMaps {
         boolean_indices,
         integer_indices,
+        integer_domains,
         interval_constraint_indices: BTreeMap::new(),
         constraint_indices,
         objective_plan: problem.objectives.clone(),

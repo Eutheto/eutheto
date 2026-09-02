@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod candidate;
 mod status;
 mod translation;
 
@@ -8,6 +9,7 @@ mod cp_sat {
     include!("generated/operations_research.sat.rs");
 }
 
+pub use candidate::{CandidateDecodeError, DecodedCandidate, decode_projected_candidate};
 pub use status::{
     AdapterDefectKind, CandidateProofClaim, CandidateStopCause, NormalizedWorkerTerminal,
     WorkerFailureKind, WorkerLimitKind, WorkerUnavailableKind, normalize_terminal,
