@@ -105,6 +105,7 @@ The development shell redirects writable tool caches into the checkout:
 |---|---|
 | Cargo registry/config | `.cache/cargo` |
 | Cargo build output | `.cache/cargo-target` |
+| Native Windows worker output | `.cache/ortools-native/windows-x86_64/current` |
 | Corepack | `.cache/corepack` |
 | npm | `.cache/npm` |
 | pnpm store/home | `.cache/pnpm/store` and `.cache/pnpm/home` |
@@ -132,12 +133,13 @@ just licenses
 just sbom
 just nix-check
 just worker-build-nix
+just worker-build-native
 just check
 ```
 
 `just check` calls the non-mutating `generate-check` recipe, which validates the existing checked-in generated outputs, including license and SBOM files, without regenerating them. Use `just generate` only after changing an authoritative generator input; generated files are never hand-edited. Run `just licenses` or `just sbom` when you explicitly intend to regenerate the corresponding supply-chain outputs. The optional `just test-rust-nextest` and `just coverage` recipes require the full shell; the default `just test-rust` recipe does not.
 
-`just worker-build-nix` is available on x86_64 Linux and x86_64/aarch64 macOS and builds the approved worker source contract in the Nix sandbox. Native Windows build, manifest-validated installation, worker smoke, packaged E2E, and release preflight still fail clearly until their named Phase-03 or Phase-11 prerequisites are implemented. A successful Nix worker build proves only the buildable worker artifact and its installed runtime-loader smoke; it does not make the solver backend available.
+`just worker-build-nix` builds the approved source contract on x86_64 Linux and x86_64/aarch64 macOS. `just worker-build-native` requires native Windows x86_64 plus an activated x64 Visual Studio developer environment; it performs the equivalent fixed-source MSVC/Ninja build and publishes a fresh verified project DLL closure under `.cache/ortools-native/windows-x86_64/current`, with exact Windows/MSVC system imports classified separately. Both commands prove only their buildable worker artifact, native tests, runtime-dependency inspection, and installed EOF smoke. Manifest-validated installation, exact license/SBOM and Windows runtime-delivery payloads, packaged E2E, backend availability, and release preflight still fail clearly until their named Phase-03 or Phase-11 prerequisites are implemented.
 
 ## Core-only route
 

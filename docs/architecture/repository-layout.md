@@ -56,7 +56,7 @@ The real Phase-00 members `eutheto-types`, `eutheto-core`, and `eutheto-cli` are
 | `crates/eutheto-command` | Typed application commands, queries, journal, and undo services. |
 | `crates/eutheto-solver-api` | Backend-neutral solver request, capability, candidate, cancellation, and error interfaces. |
 | `crates/eutheto-solver-router` | Capability routing and decomposition policy. |
-| `crates/eutheto-solver-ortools` | Adapter to an isolated OR-Tools worker; OR-Tools 9.15 remains an unapproved candidate until Phase 03 closes its source, hash, protobuf, build, license, callback, assumption-core, and benchmark gates. |
+| `crates/eutheto-solver-ortools` | Adapter to an isolated OR-Tools worker; the OR-Tools 9.15.6755 source/hash/protobuf contract is approved, while the installed manifest, adapter, packaging, license/SBOM, backend-registration, and release gates remain Phase-03 work. |
 | `crates/eutheto-solver-pumpkin` | Experimental future Pumpkin adapter, deferred to its dedicated phase and gates. |
 | `crates/eutheto-verify` | Projection, independent rule evaluation, and authoritative score recomputation. |
 | `crates/eutheto-explain` | Explanations derived from verified domain facts and provenance. |

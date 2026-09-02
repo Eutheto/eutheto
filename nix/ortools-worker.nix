@@ -9,6 +9,50 @@ let
   repositoryPatchPath = ../workers/ortools/patches/9.15-candidate-fixes.patch;
   protocolSchemaPath = ../protocol/solver-worker.proto;
   contract = builtins.fromJSON (builtins.readFile contractPath);
+  dependencySourcesPath = ../workers/ortools/dependency-sources.json;
+  dependencyLock = builtins.fromJSON (builtins.readFile dependencySourcesPath);
+  dependencySources = dependencyLock.dependencies;
+  expectedDependencyNames = [
+    "abseil"
+    "bzip2"
+    "eigen"
+    "re2"
+    "zlib"
+  ];
+  isHttpsUrl = value: builtins.isString value && builtins.match "https://.+" value != null;
+  isLowerSha256 =
+    value:
+    builtins.isString value
+    && builtins.stringLength value == 64
+    && builtins.match "[0-9a-f]+" value != null;
+  isSafeLeaf =
+    value:
+    builtins.isString value
+    && value != "."
+    && value != ".."
+    && builtins.match "[A-Za-z0-9][A-Za-z0-9._+-]*" value != null;
+  dependencyValuesAreSafe = builtins.all (
+    name:
+    let
+      dependency = dependencySources.${name};
+    in
+    isHttpsUrl dependency.source_url
+    && isLowerSha256 dependency.sha256
+    && isSafeLeaf dependency.archive_name
+    && isSafeLeaf dependency.archive_root
+    && isSafeLeaf dependency.patch
+  ) expectedDependencyNames;
+  dependencyFieldsAreExact = builtins.all (
+    name:
+    builtins.attrNames dependencySources.${name} == [
+      "archive_name"
+      "archive_root"
+      "patch"
+      "sha256"
+      "source_url"
+      "version"
+    ]
+  ) expectedDependencyNames;
 
   supportedSystems = [
     "x86_64-linux"
@@ -51,31 +95,14 @@ let
     url = contract.protobuf.source_url;
     sha256 = contract.protobuf.sha256;
   };
-  zlibSource = fetchArchive {
-    name = "zlib-v1.3.1.tar.gz";
-    url = "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz";
-    sha256 = "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c";
-  };
-  bzip2Source = fetchArchive {
-    name = "bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz";
-    url = "https://gitlab.com/bzip2/bzip2/-/archive/66c46b8c9436613fd81bc5d03f63a61933a4dcc3/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz";
-    sha256 = "3a4cff5f9d197e9e6c6138660afa6b1f9370df0bed135bd949243f6dfc83b3e1";
-  };
-  abseilSource = fetchArchive {
-    name = "abseil-cpp-20250814.1.tar.gz";
-    url = "https://github.com/abseil/abseil-cpp/archive/refs/tags/20250814.1.tar.gz";
-    sha256 = "1692f77d1739bacf3f94337188b78583cf09bab7e420d2dc6c5605a4f86785a1";
-  };
-  re2Source = fetchArchive {
-    name = "re2-2025-08-12.tar.gz";
-    url = "https://github.com/google/re2/archive/refs/tags/2025-08-12.tar.gz";
-    sha256 = "2f3bec634c3e51ea1faf0d441e0a8718b73ef758d7020175ed7e352df3f6ae12";
-  };
-  eigenSource = fetchArchive {
-    name = "eigen-3.4.0.tar.gz";
-    url = "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz";
-    sha256 = "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72";
-  };
+  transitiveSources = lib.mapAttrs (
+    _: dependency:
+    fetchArchive {
+      name = dependency.archive_name;
+      url = dependency.source_url;
+      sha256 = dependency.sha256;
+    }
+  ) dependencySources;
 in
 assert contract.schema_version == 1;
 assert contract.approval.phase == 3;
@@ -90,6 +117,32 @@ assert contract.protocol.wire_version == 1;
 assert builtins.hashFile "sha256" protocolSchemaPath == contract.protocol.schema_sha256;
 assert contract.worker.identity == "eutheto-ortools-worker";
 assert contract.worker.version == "0.1.0";
+assert builtins.isAttrs dependencyLock;
+assert
+  builtins.attrNames dependencyLock == [
+    "dependencies"
+    "ortools"
+    "schema_version"
+  ];
+assert dependencyLock.schema_version == 1;
+assert builtins.isAttrs dependencyLock.ortools;
+assert
+  builtins.attrNames dependencyLock.ortools == [
+    "sha256"
+    "version"
+  ];
+assert dependencyLock.ortools.version == contract.ortools.version;
+assert dependencyLock.ortools.sha256 == contract.ortools.sha256;
+assert isLowerSha256 dependencyLock.ortools.sha256;
+assert builtins.isAttrs dependencySources;
+assert builtins.attrNames dependencySources == expectedDependencyNames;
+assert dependencyFieldsAreExact;
+assert dependencySources.abseil.version == "20250814.1";
+assert dependencySources.bzip2.version == "66c46b8c9436613fd81bc5d03f63a61933a4dcc3";
+assert dependencySources.eigen.version == "3.4.0";
+assert dependencySources.re2.version == "2025-08-12";
+assert dependencySources.zlib.version == "1.3.1";
+assert dependencyValuesAreSafe;
 assert builtins.elem stdenv.hostPlatform.system supportedSystems;
 stdenv.mkDerivation {
   pname = contract.worker.identity;
@@ -117,20 +170,20 @@ stdenv.mkDerivation {
     mkdir -p "$NIX_BUILD_TOP/sources"
     tar -xzf ${ortoolsSource} -C "$NIX_BUILD_TOP/sources"
     tar -xzf ${protobufSource} -C "$NIX_BUILD_TOP/sources"
-    tar -xzf ${zlibSource} -C "$NIX_BUILD_TOP/sources"
-    tar -xzf ${bzip2Source} -C "$NIX_BUILD_TOP/sources"
-    tar -xzf ${abseilSource} -C "$NIX_BUILD_TOP/sources"
-    tar -xzf ${re2Source} -C "$NIX_BUILD_TOP/sources"
-    tar -xzf ${eigenSource} -C "$NIX_BUILD_TOP/sources"
+    tar -xzf ${transitiveSources.zlib} -C "$NIX_BUILD_TOP/sources"
+    tar -xzf ${transitiveSources.bzip2} -C "$NIX_BUILD_TOP/sources"
+    tar -xzf ${transitiveSources.abseil} -C "$NIX_BUILD_TOP/sources"
+    tar -xzf ${transitiveSources.re2} -C "$NIX_BUILD_TOP/sources"
+    tar -xzf ${transitiveSources.eigen} -C "$NIX_BUILD_TOP/sources"
 
     sourceRoot="$NIX_BUILD_TOP/sources/or-tools-9.15"
     test -d "$sourceRoot"
     test -d "$NIX_BUILD_TOP/sources/protobuf-33.1"
-    test -d "$NIX_BUILD_TOP/sources/zlib-1.3.1"
-    test -d "$NIX_BUILD_TOP/sources/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3"
-    test -d "$NIX_BUILD_TOP/sources/abseil-cpp-20250814.1"
-    test -d "$NIX_BUILD_TOP/sources/re2-2025-08-12"
-    test -d "$NIX_BUILD_TOP/sources/eigen-3.4.0"
+    test -d "$NIX_BUILD_TOP/sources/${dependencySources.zlib.archive_root}"
+    test -d "$NIX_BUILD_TOP/sources/${dependencySources.bzip2.archive_root}"
+    test -d "$NIX_BUILD_TOP/sources/${dependencySources.abseil.archive_root}"
+    test -d "$NIX_BUILD_TOP/sources/${dependencySources.re2.archive_root}"
+    test -d "$NIX_BUILD_TOP/sources/${dependencySources.eigen.archive_root}"
     cd "$sourceRoot"
 
     runHook postUnpack
@@ -143,29 +196,29 @@ stdenv.mkDerivation {
     git apply ${src}/workers/ortools/patches/9.15-candidate-fixes.patch
 
     (
-      cd "$NIX_BUILD_TOP/sources/zlib-1.3.1"
-      git apply --check --ignore-whitespace "$sourceRoot/patches/ZLIB-v1.3.1.patch"
-      git apply --ignore-whitespace "$sourceRoot/patches/ZLIB-v1.3.1.patch"
+      cd "$NIX_BUILD_TOP/sources/${dependencySources.zlib.archive_root}"
+      git apply --check --ignore-whitespace "$sourceRoot/patches/${dependencySources.zlib.patch}"
+      git apply --ignore-whitespace "$sourceRoot/patches/${dependencySources.zlib.patch}"
     )
     (
-      cd "$NIX_BUILD_TOP/sources/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3"
-      git apply --check --ignore-whitespace "$sourceRoot/patches/bzip2.patch"
-      git apply --ignore-whitespace "$sourceRoot/patches/bzip2.patch"
+      cd "$NIX_BUILD_TOP/sources/${dependencySources.bzip2.archive_root}"
+      git apply --check --ignore-whitespace "$sourceRoot/patches/${dependencySources.bzip2.patch}"
+      git apply --ignore-whitespace "$sourceRoot/patches/${dependencySources.bzip2.patch}"
     )
     (
-      cd "$NIX_BUILD_TOP/sources/abseil-cpp-20250814.1"
-      git apply --check --ignore-whitespace "$sourceRoot/patches/abseil-cpp-20250814.1.patch"
-      git apply --ignore-whitespace "$sourceRoot/patches/abseil-cpp-20250814.1.patch"
+      cd "$NIX_BUILD_TOP/sources/${dependencySources.abseil.archive_root}"
+      git apply --check --ignore-whitespace "$sourceRoot/patches/${dependencySources.abseil.patch}"
+      git apply --ignore-whitespace "$sourceRoot/patches/${dependencySources.abseil.patch}"
     )
     (
-      cd "$NIX_BUILD_TOP/sources/re2-2025-08-12"
-      git apply --check --ignore-whitespace "$sourceRoot/patches/re2-2025-08-12.patch"
-      git apply --ignore-whitespace "$sourceRoot/patches/re2-2025-08-12.patch"
+      cd "$NIX_BUILD_TOP/sources/${dependencySources.re2.archive_root}"
+      git apply --check --ignore-whitespace "$sourceRoot/patches/${dependencySources.re2.patch}"
+      git apply --ignore-whitespace "$sourceRoot/patches/${dependencySources.re2.patch}"
     )
     (
-      cd "$NIX_BUILD_TOP/sources/eigen-3.4.0"
-      git apply --check --ignore-whitespace "$sourceRoot/patches/eigen3-3.4.0.patch"
-      git apply --ignore-whitespace "$sourceRoot/patches/eigen3-3.4.0.patch"
+      cd "$NIX_BUILD_TOP/sources/${dependencySources.eigen.archive_root}"
+      git apply --check --ignore-whitespace "$sourceRoot/patches/${dependencySources.eigen.patch}"
+      git apply --ignore-whitespace "$sourceRoot/patches/${dependencySources.eigen.patch}"
     )
 
     runHook postPatch
@@ -183,12 +236,12 @@ stdenv.mkDerivation {
       "-DCMAKE_CXX_FLAGS=-DEIGEN_MPL2_ONLY" \
       "-DCMAKE_INSTALL_PREFIX=$NIX_BUILD_TOP/ortools-stage" \
       "-DFETCHCONTENT_FULLY_DISCONNECTED=ON" \
-      "-DFETCHCONTENT_SOURCE_DIR_ZLIB=$NIX_BUILD_TOP/sources/zlib-1.3.1" \
-      "-DFETCHCONTENT_SOURCE_DIR_BZIP2=$NIX_BUILD_TOP/sources/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3" \
-      "-DFETCHCONTENT_SOURCE_DIR_ABSL=$NIX_BUILD_TOP/sources/abseil-cpp-20250814.1" \
+      "-DFETCHCONTENT_SOURCE_DIR_ZLIB=$NIX_BUILD_TOP/sources/${dependencySources.zlib.archive_root}" \
+      "-DFETCHCONTENT_SOURCE_DIR_BZIP2=$NIX_BUILD_TOP/sources/${dependencySources.bzip2.archive_root}" \
+      "-DFETCHCONTENT_SOURCE_DIR_ABSL=$NIX_BUILD_TOP/sources/${dependencySources.abseil.archive_root}" \
       "-DFETCHCONTENT_SOURCE_DIR_PROTOBUF=$NIX_BUILD_TOP/sources/protobuf-33.1" \
-      "-DFETCHCONTENT_SOURCE_DIR_RE2=$NIX_BUILD_TOP/sources/re2-2025-08-12" \
-      "-DFETCHCONTENT_SOURCE_DIR_EIGEN3=$NIX_BUILD_TOP/sources/eigen-3.4.0"
+      "-DFETCHCONTENT_SOURCE_DIR_RE2=$NIX_BUILD_TOP/sources/${dependencySources.re2.archive_root}" \
+      "-DFETCHCONTENT_SOURCE_DIR_EIGEN3=$NIX_BUILD_TOP/sources/${dependencySources.eigen.archive_root}"
 
     runHook postConfigure
   '';

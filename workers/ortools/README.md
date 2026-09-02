@@ -16,9 +16,12 @@ byte-identical to the generated repository approval. `cargo xtask generate`
 owns it and rehashes the repository patch and protocol schema; the record binds
 the exact OR-Tools and protobuf sources and hashes, patch path/hash,
 protoc/runtime versions, protocol schema digest, worker identity/version, and
-26 reviewed cross-target CMake cache entries. The checked-in
-`source-contract.example.json` remains deliberately unapproved and cannot
-authorize a production build or install.
+26 reviewed cross-target CMake cache entries. The same generator owns
+[`dependency-sources.json`](dependency-sources.json), which binds the exact
+transitive archives and upstream patch mapping to the approved OR-Tools source.
+The checked-in [`source-contract.example.json`](source-contract.example.json)
+remains deliberately unapproved and cannot authorize a production build or
+install.
 
 `EUTHETO_ORTOOLS_DEVELOPMENT_BUILD=ON` is an explicit local-only escape hatch
 for compilation and native testing against the pinned dependencies. It
@@ -28,5 +31,6 @@ approval. `EUTHETO_ORTOOLS_BUILD_TESTS=ON` adds the focused native test target.
 The executable communicates only through four-byte big-endian framed generated
 protobuf messages on stdin/stdout. Native source consumes the generated policy
 projection rather than duplicating protocol limits. The Rust supervisor,
-dependency packaging, installed-manifest approval, and domain translation stay
-outside this subtree.
+installed-manifest approval, artifact license/SBOM payload, and domain
+translation stay outside this subtree; the reviewed CMake module owns only the
+ephemeral native build and runtime-closure assembly.

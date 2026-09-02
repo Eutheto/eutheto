@@ -5,6 +5,7 @@ mod phase02_generate;
 mod protocol;
 mod protocol_generate;
 mod release;
+mod solver;
 mod source_contract;
 mod supply_chain;
 
@@ -44,7 +45,7 @@ enum Command {
         #[command(subcommand)]
         command: ArchitectureCommand,
     },
-    /// Native solver-worker operations (deferred until the solver pin gate).
+    /// Native solver-worker build and deferred installation operations.
     Solver {
         #[command(subcommand)]
         command: SolverCommand,
@@ -121,7 +122,17 @@ fn main() -> Result<()> {
         Command::Architecture {
             command: ArchitectureCommand::Verify,
         } => architecture::verify(&root),
-        Command::Solver { command } => unavailable_solver(&command),
+        Command::Solver { command } => match command {
+            SolverCommand::BuildNative => solver::build_native(&root),
+            SolverCommand::InstallFromNix => unavailable_solver(
+                "install-from-nix",
+                "the installed solver manifest and license payload contracts exist",
+            ),
+            SolverCommand::Smoke => unavailable_solver(
+                "smoke",
+                "manifest-validated worker installation is implemented",
+            ),
+        },
         Command::Licenses {
             command: GenerateCommand::Generate,
         } => supply_chain::generate_licenses(&root).map_err(anyhow::Error::from),
@@ -142,20 +153,6 @@ fn repository_root() -> Result<PathBuf> {
         .context("xtask manifest directory has no repository parent")
 }
 
-fn unavailable_solver(command: &SolverCommand) -> Result<()> {
-    let (operation, prerequisite) = match command {
-        SolverCommand::BuildNative => (
-            "build-native",
-            "the equivalent native Windows builder is implemented",
-        ),
-        SolverCommand::InstallFromNix => (
-            "install-from-nix",
-            "the installed solver manifest and license payload contracts exist",
-        ),
-        SolverCommand::Smoke => (
-            "smoke",
-            "manifest-validated worker installation is implemented",
-        ),
-    };
+fn unavailable_solver(operation: &str, prerequisite: &str) -> Result<()> {
     bail!("solver {operation} is unavailable until {prerequisite}")
 }

@@ -17,7 +17,7 @@ Prepare these through your organization's normal software-management process:
 - Node.js **24.20.0** and pnpm **11.24.0**, with pnpm matching the integrity-pinned root `packageManager` entry;
 - CMake, Ninja, `protoc`, Git, and Just.
 
-The exact OR-Tools/protobuf set is intentionally unresolved until Phase 03. Phase 00 requires a runnable `protoc` and reports its detected version, but that is not evidence that it matches a solver release. Do not independently select a supposedly “latest compatible” protobuf toolchain.
+The worker build uses the approved OR-Tools 9.15.6755/protobuf 33.1 source contract and ignores any ambient OR-Tools or protobuf installation. Do not independently select a supposedly “latest compatible” protobuf toolchain.
 
 ## Run the verifier
 
@@ -49,7 +49,7 @@ A successful check on a contributor workstation is not the clean-machine gate. T
 
 ## Native command path
 
-After the verifier passes, use the repository command authority:
+After the verifier passes, use the repository command authority. Run the worker build from an **x64 Visual Studio developer PowerShell or command prompt** so `cl.exe` and `dumpbin.exe` are active:
 
 ```powershell
 just bootstrap
@@ -57,11 +57,12 @@ just typecheck
 just cli-build
 just ui-build
 just desktop-dev
+just worker-build-native
 ```
 
-`just bootstrap` performs explicit locked dependency preparation; opening PowerShell or running the verifier does not. The other recipes exercise the implemented native core, frontend, and development desktop paths without requiring Nix-only formatting tools or the optional full-shell Rust test tools. `just desktop-dev` is development exercise only, not packaged-desktop or installer evidence. Run the aggregate `just check` in the locked Nix environment and in CI; do not report it as a native Windows result unless that complete command toolchain was actually provisioned and exercised.
+`just bootstrap` performs explicit locked dependency preparation; opening PowerShell or running the verifier does not. The other application recipes exercise the implemented native core, frontend, and development desktop paths without requiring Nix-only formatting tools or the optional full-shell Rust test tools. `just desktop-dev` is development exercise only, not packaged-desktop or installer evidence. Run the aggregate `just check` in the locked Nix environment and in CI; do not report it as a native Windows result unless that complete command toolchain was actually provisioned and exercised.
 
-Worker build/smoke remains Phase-03-gated until the exact OR-Tools source and matched protobuf contract are approved. Packaged E2E and release preflight remain Phase-11-gated. Those recipes must fail clearly in Phase 00 rather than simulate success.
+`just worker-build-native` downloads the generated fixed-hash source set, builds the approved Windows x86_64 worker with MSVC/Ninja, runs its native tests, recursively derives and inspects the x64 project DLL closure, classifies only the exact Windows and MSVC 14.0 release-runtime imports admitted by the candidate evidence, and publishes a fresh result at `.cache/ortools-native/windows-x86_64/current`. A failed rerun leaves no older result at that path. The command requires network access for the fixed archives and does not use an ambient solver or protobuf. It proves this build's project DLL closure and EOF startup in the activated developer environment only; the solver manifest, artifact-specific license/SBOM and Windows runtime-delivery payloads, manifest-validated `worker-smoke`, Tauri sidecar, clean-machine installer, Windows arm64, signing, and release publication remain gated.
 
 For portable core/CLI work without native desktop evidence, follow the [core-only route](development.md#core-only-route). Keep its results labeled as core/CLI results.
 

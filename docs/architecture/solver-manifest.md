@@ -74,4 +74,4 @@ The current [`workers/ortools/VERSION`](../../workers/ortools/VERSION) value is 
 4. generate and validate the canonical installed manifest and artifact-specific SBOM/license payload, then bind the manifest digest into handshake tests; and
 5. prove clean regeneration yields byte-identical contracts, manifests, protocol products, and release evidence.
 
-Until those steps occur, solver `xtask` operations and production packaging remain unavailable, and no worker artifact may be represented as bundled or release-ready.
+The source builders are available only on their documented targets. Installed-manifest generation, `xtask` installation/smoke, production packaging, backend registration, and release readiness remain unavailable until the remaining steps close; no current worker artifact may be represented as bundled or release-ready.

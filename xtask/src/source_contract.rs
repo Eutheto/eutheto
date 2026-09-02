@@ -22,6 +22,16 @@ const PROTOBUF_ARCHIVE_SHA256: &str =
     "fda132cb0c86400381c0af1fe98bd0f775cb566cb247cdcc105e344e00acc30e";
 const PROTOCOL_SCHEMA_SHA256: &str =
     "fc93888cd78db39bb35a430e6e904092b6bbc73b3276885fc75ecedad4c0381d";
+pub(crate) const DEPENDENCY_SOURCES_OUTPUT_PATH: &str = "workers/ortools/dependency-sources.json";
+const DEPENDENCY_SOURCES_SCHEMA_VERSION: u32 = 1;
+const ORTOOLS_VERSION: &str = "9.15.6755";
+const EXPECTED_DEPENDENCY_VERSIONS: [(&str, &str); 5] = [
+    ("abseil", "20250814.1"),
+    ("bzip2", "66c46b8c9436613fd81bc5d03f63a61933a4dcc3"),
+    ("eigen", "3.4.0"),
+    ("re2", "2025-08-12"),
+    ("zlib", "1.3.1"),
+];
 
 #[derive(Serialize)]
 struct SourceContract {
@@ -83,6 +93,29 @@ struct Worker {
     version: &'static str,
 }
 
+#[derive(Serialize)]
+struct DependencySources {
+    dependencies: BTreeMap<&'static str, DependencySource>,
+    ortools: DependencySourcesOrtools,
+    schema_version: u32,
+}
+
+#[derive(Serialize)]
+struct DependencySource {
+    archive_name: &'static str,
+    archive_root: &'static str,
+    patch: &'static str,
+    sha256: &'static str,
+    source_url: &'static str,
+    version: &'static str,
+}
+
+#[derive(Serialize)]
+struct DependencySourcesOrtools {
+    sha256: &'static str,
+    version: &'static str,
+}
+
 pub(crate) fn generated_file(repo_root: &Path) -> Result<(String, Vec<u8>)> {
     let contract = source_contract();
     validate_contract(repo_root, &contract)?;
@@ -90,6 +123,85 @@ pub(crate) fn generated_file(repo_root: &Path) -> Result<(String, Vec<u8>)> {
         .context("failed to serialize the approved OR-Tools source contract")?;
     contents.push('\n');
     Ok((OUTPUT_PATH.to_owned(), contents.into_bytes()))
+}
+
+pub(crate) fn dependency_sources_generated_file() -> Result<(String, Vec<u8>)> {
+    let sources = dependency_sources();
+    validate_dependency_sources(&sources)?;
+    let mut contents = serde_json::to_string_pretty(&sources)
+        .context("failed to serialize the OR-Tools dependency sources")?;
+    contents.push('\n');
+    Ok((
+        DEPENDENCY_SOURCES_OUTPUT_PATH.to_owned(),
+        contents.into_bytes(),
+    ))
+}
+
+fn dependency_sources() -> DependencySources {
+    DependencySources {
+        dependencies: BTreeMap::from([
+            (
+                "abseil",
+                DependencySource {
+                    archive_name: "abseil-cpp-20250814.1.tar.gz",
+                    archive_root: "abseil-cpp-20250814.1",
+                    patch: "abseil-cpp-20250814.1.patch",
+                    sha256: "1692f77d1739bacf3f94337188b78583cf09bab7e420d2dc6c5605a4f86785a1",
+                    source_url: "https://github.com/abseil/abseil-cpp/archive/refs/tags/20250814.1.tar.gz",
+                    version: "20250814.1",
+                },
+            ),
+            (
+                "bzip2",
+                DependencySource {
+                    archive_name: "bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz",
+                    archive_root: "bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3",
+                    patch: "bzip2.patch",
+                    sha256: "3a4cff5f9d197e9e6c6138660afa6b1f9370df0bed135bd949243f6dfc83b3e1",
+                    source_url: "https://gitlab.com/bzip2/bzip2/-/archive/66c46b8c9436613fd81bc5d03f63a61933a4dcc3/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz",
+                    version: "66c46b8c9436613fd81bc5d03f63a61933a4dcc3",
+                },
+            ),
+            (
+                "eigen",
+                DependencySource {
+                    archive_name: "eigen-3.4.0.tar.gz",
+                    archive_root: "eigen-3.4.0",
+                    patch: "eigen3-3.4.0.patch",
+                    sha256: "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+                    source_url: "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+                    version: "3.4.0",
+                },
+            ),
+            (
+                "re2",
+                DependencySource {
+                    archive_name: "re2-2025-08-12.tar.gz",
+                    archive_root: "re2-2025-08-12",
+                    patch: "re2-2025-08-12.patch",
+                    sha256: "2f3bec634c3e51ea1faf0d441e0a8718b73ef758d7020175ed7e352df3f6ae12",
+                    source_url: "https://github.com/google/re2/archive/refs/tags/2025-08-12.tar.gz",
+                    version: "2025-08-12",
+                },
+            ),
+            (
+                "zlib",
+                DependencySource {
+                    archive_name: "zlib-v1.3.1.tar.gz",
+                    archive_root: "zlib-1.3.1",
+                    patch: "ZLIB-v1.3.1.patch",
+                    sha256: "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
+                    source_url: "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+                    version: "1.3.1",
+                },
+            ),
+        ]),
+        ortools: DependencySourcesOrtools {
+            sha256: ORTOOLS_ARCHIVE_SHA256,
+            version: ORTOOLS_VERSION,
+        },
+        schema_version: DEPENDENCY_SOURCES_SCHEMA_VERSION,
+    }
 }
 
 fn source_contract() -> SourceContract {
@@ -134,7 +246,7 @@ fn source_contract() -> SourceContract {
             patch_sha256: ORTOOLS_PATCH_SHA256,
             sha256: ORTOOLS_ARCHIVE_SHA256,
             source_url: "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz",
-            version: "9.15.6755",
+            version: ORTOOLS_VERSION,
         },
         protobuf: Protobuf {
             cpp_runtime_version: "33.1.0",
@@ -153,6 +265,64 @@ fn source_contract() -> SourceContract {
             version: "0.1.0",
         },
     }
+}
+
+fn validate_dependency_sources(sources: &DependencySources) -> Result<()> {
+    ensure!(
+        sources.schema_version == DEPENDENCY_SOURCES_SCHEMA_VERSION,
+        "OR-Tools dependency sources schema version changed"
+    );
+    ensure!(
+        sources.ortools.version == ORTOOLS_VERSION
+            && sources.ortools.sha256 == ORTOOLS_ARCHIVE_SHA256,
+        "OR-Tools dependency sources are associated with an unexpected OR-Tools source"
+    );
+    ensure!(
+        sources
+            .dependencies
+            .keys()
+            .copied()
+            .eq(EXPECTED_DEPENDENCY_VERSIONS.iter().map(|(name, _)| *name)),
+        "OR-Tools dependency sources must contain exactly abseil, bzip2, eigen, re2, and zlib"
+    );
+    ensure!(
+        is_sha256(sources.ortools.sha256),
+        "OR-Tools dependency source digest is malformed"
+    );
+
+    for (name, expected_version) in EXPECTED_DEPENDENCY_VERSIONS {
+        let dependency = &sources.dependencies[name];
+        ensure!(
+            dependency.version == expected_version,
+            "{name} dependency version changed"
+        );
+        ensure!(
+            dependency.source_url.starts_with("https://"),
+            "{name} dependency source URL must use HTTPS"
+        );
+        ensure!(
+            is_sha256(dependency.sha256),
+            "{name} dependency digest must be lowercase SHA-256"
+        );
+        for (field, value) in [
+            ("archive_name", dependency.archive_name),
+            ("archive_root", dependency.archive_root),
+            ("patch", dependency.patch),
+        ] {
+            ensure!(
+                is_safe_leaf(value),
+                "{name} dependency {field} must be a safe path leaf"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn is_safe_leaf(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(byte) if byte.is_ascii_alphanumeric())
+        && bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-'))
 }
 
 fn validate_contract(repo_root: &Path, contract: &SourceContract) -> Result<()> {
@@ -332,10 +502,13 @@ fn is_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use serde_json::{Value, json};
 
-    use super::generated_file;
+    use super::{
+        DEPENDENCY_SOURCES_OUTPUT_PATH, dependency_sources, dependency_sources_generated_file,
+        generated_file, validate_dependency_sources,
+    };
 
     #[test]
     fn approved_contract_is_deterministic_and_canonical() -> Result<()> {
@@ -442,6 +615,139 @@ mod tests {
         assert_eq!(contract["schema_version"], 1);
         assert_eq!(contract["worker"]["identity"], "eutheto-ortools-worker");
         assert_eq!(contract["worker"]["version"], "0.1.0");
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_sources_are_deterministic_and_exact() -> Result<()> {
+        let (path, first) = dependency_sources_generated_file()?;
+        let (_, second) = dependency_sources_generated_file()?;
+        assert_eq!(path, DEPENDENCY_SOURCES_OUTPUT_PATH);
+        assert_eq!(first, second);
+        assert!(first.ends_with(b"\n"));
+        assert!(!first.ends_with(b"\n\n"));
+
+        let sources: Value = serde_json::from_slice(&first)?;
+        assert_eq!(
+            sources,
+            json!({
+                "dependencies": {
+                    "abseil": {
+                        "archive_name": "abseil-cpp-20250814.1.tar.gz",
+                        "archive_root": "abseil-cpp-20250814.1",
+                        "patch": "abseil-cpp-20250814.1.patch",
+                        "sha256": "1692f77d1739bacf3f94337188b78583cf09bab7e420d2dc6c5605a4f86785a1",
+                        "source_url": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20250814.1.tar.gz",
+                        "version": "20250814.1"
+                    },
+                    "bzip2": {
+                        "archive_name": "bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz",
+                        "archive_root": "bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3",
+                        "patch": "bzip2.patch",
+                        "sha256": "3a4cff5f9d197e9e6c6138660afa6b1f9370df0bed135bd949243f6dfc83b3e1",
+                        "source_url": "https://gitlab.com/bzip2/bzip2/-/archive/66c46b8c9436613fd81bc5d03f63a61933a4dcc3/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz",
+                        "version": "66c46b8c9436613fd81bc5d03f63a61933a4dcc3"
+                    },
+                    "eigen": {
+                        "archive_name": "eigen-3.4.0.tar.gz",
+                        "archive_root": "eigen-3.4.0",
+                        "patch": "eigen3-3.4.0.patch",
+                        "sha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+                        "source_url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+                        "version": "3.4.0"
+                    },
+                    "re2": {
+                        "archive_name": "re2-2025-08-12.tar.gz",
+                        "archive_root": "re2-2025-08-12",
+                        "patch": "re2-2025-08-12.patch",
+                        "sha256": "2f3bec634c3e51ea1faf0d441e0a8718b73ef758d7020175ed7e352df3f6ae12",
+                        "source_url": "https://github.com/google/re2/archive/refs/tags/2025-08-12.tar.gz",
+                        "version": "2025-08-12"
+                    },
+                    "zlib": {
+                        "archive_name": "zlib-v1.3.1.tar.gz",
+                        "archive_root": "zlib-1.3.1",
+                        "patch": "ZLIB-v1.3.1.patch",
+                        "sha256": "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
+                        "source_url": "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+                        "version": "1.3.1"
+                    }
+                },
+                "ortools": {
+                    "sha256": "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026",
+                    "version": "9.15.6755"
+                },
+                "schema_version": 1
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_sources_reject_schema_association_and_inventory_drift() {
+        let mut sources = dependency_sources();
+        sources.schema_version = 2;
+        assert!(validate_dependency_sources(&sources).is_err());
+
+        let mut sources = dependency_sources();
+        sources.ortools.version = "9.14.6206";
+        assert!(validate_dependency_sources(&sources).is_err());
+
+        let mut sources = dependency_sources();
+        sources.dependencies.remove("eigen");
+        assert!(validate_dependency_sources(&sources).is_err());
+    }
+
+    #[test]
+    fn dependency_sources_reject_untrusted_source_values() -> Result<()> {
+        let mut sources = dependency_sources();
+        sources
+            .dependencies
+            .get_mut("zlib")
+            .context("missing zlib test dependency")?
+            .source_url = "http://example.invalid/zlib.tar.gz";
+        assert!(validate_dependency_sources(&sources).is_err());
+
+        let mut sources = dependency_sources();
+        let uppercase_sha256 = "17E88863F3600672AB49182F217281B6FC4D3C762BDE361935E436A95214D05C";
+        sources
+            .dependencies
+            .get_mut("zlib")
+            .context("missing zlib test dependency")?
+            .sha256 = uppercase_sha256;
+        assert!(validate_dependency_sources(&sources).is_err());
+
+        let mut sources = dependency_sources();
+        sources
+            .dependencies
+            .get_mut("zlib")
+            .context("missing zlib test dependency")?
+            .archive_name = "../zlib.tar.gz";
+        assert!(validate_dependency_sources(&sources).is_err());
+
+        let mut sources = dependency_sources();
+        sources
+            .dependencies
+            .get_mut("zlib")
+            .context("missing zlib test dependency")?
+            .archive_root = "../zlib";
+        assert!(validate_dependency_sources(&sources).is_err());
+
+        let mut sources = dependency_sources();
+        sources
+            .dependencies
+            .get_mut("zlib")
+            .context("missing zlib test dependency")?
+            .patch = "../zlib.patch";
+        assert!(validate_dependency_sources(&sources).is_err());
+
+        let mut sources = dependency_sources();
+        sources
+            .dependencies
+            .get_mut("zlib")
+            .context("missing zlib test dependency")?
+            .version = "1.3.2";
+        assert!(validate_dependency_sources(&sources).is_err());
         Ok(())
     }
 }

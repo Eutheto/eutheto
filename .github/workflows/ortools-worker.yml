@@ -1,0 +1,100 @@
+name: OR-Tools Worker
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ortools-worker.yml"
+      - "workers/ortools/**"
+      - "protocol/**"
+      - "nix/ortools-worker.nix"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Justfile"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ortools-worker.yml"
+      - "workers/ortools/**"
+      - "protocol/**"
+      - "nix/ortools-worker.nix"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Justfile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ortools-worker-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  TZ: UTC
+  CARGO_TERM_COLOR: never
+
+jobs:
+  windows-native-worker:
+    name: Windows x86_64 / approved native worker build
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable the MSVC x64 command-line environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - name: Verify the native build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
+            throw "Expected AMD64 runner, found $env:PROCESSOR_ARCHITECTURE."
+          }
+          $rustVersion = (rustc --version).Split(' ')[1]
+          if ($rustVersion -ne "1.97.1") {
+            throw "Expected Rust 1.97.1, found $rustVersion."
+          }
+          rustc --version --verbose
+          cmake --version
+          ninja --version
+          (Get-Command cl.exe).Source
+          (Get-Command dumpbin.exe).Source
+
+      - name: Build and verify the approved native worker
+        shell: pwsh
+        run: |
+          # This is the exact command wrapped by `just worker-build-native`;
+          # the hosted Windows image does not install a second Just binary.
+          cargo xtask solver build-native
+
+      - name: Verify the final evidence boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $worker = ".cache/ortools-native/windows-x86_64/current/bin/ortools-worker.exe"
+          if (-not (Test-Path -Path $worker -PathType Leaf)) {
+            throw "The verified native worker is missing: $worker"
+          }
+          $dirty = git status --porcelain --untracked-files=all
+          if ($dirty) {
+            throw "The native worker build modified tracked or unignored repository files:`n$dirty"
+          }
+          @"
+          ### Windows x86_64 approved native worker build
+
+          This job verifies the fixed-hash OR-Tools 9.15.6755/protobuf 33.1 source build, the exact production CMake contract, native tests, recursive x64 project DLL closure, explicit Windows/MSVC release-runtime import classification, forbidden-dependency checks, and installed EOF startup behavior.
+
+          It does not establish the deferred solver manifest, exact license/SBOM payload, Tauri sidecar packaging, clean-machine installer behavior, backend registration, signing, or release readiness. No executable is uploaded or published.
+          "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY

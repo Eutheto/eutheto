@@ -139,7 +139,7 @@ coverage:
 worker-build-nix:
     nix build .#ortools-worker
 
-# Build the native OR-Tools worker once its equivalent Windows builder exists.
+# Build and verify the approved native Windows x86_64 worker.
 worker-build-native:
     cargo xtask solver build-native
 

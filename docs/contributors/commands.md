@@ -79,11 +79,11 @@ The CLI name and desktop identifier used by Phase 00 are development surfaces, n
 | Recipe | Behavior in Phase 03 |
 | --- | --- |
 | `just worker-build-nix` | Builds the approved OR-Tools 9.15.6755 source contract in the Nix sandbox, runs the native worker tests, and verifies that the installed worker starts with its packaged runtime libraries. This does not produce the deferred solver manifest, SBOM/license payload, sidecar, or backend registration. |
-| `just worker-build-native` | Delegates to `xtask` and remains blocked until the equivalent native Windows builder is implemented. |
+| `just worker-build-native` | On native Windows x86_64, downloads the fixed-hash source set, builds with MSVC/Ninja and the approved production contract, runs native tests, installs the recursive x64 project DLL closure, classifies exact Windows/MSVC runtime imports, and verifies installed EOF startup. The fresh result is `.cache/ortools-native/windows-x86_64/current`; no manifest, license/SBOM payload, clean-machine package, or release artifact is produced. |
 | `just worker-install-from-nix` | Delegates to `xtask`; installation remains blocked until the installed manifest and license payload contract exists. |
 | `just worker-smoke` | Delegates executable smoke testing to `xtask`; it remains blocked until manifest-validated worker installation exists. |
 
-Only the Nix build recipe is available at this stage. Native Windows parity, identical manifest semantics, the exact license/SBOM payload, sidecar assembly, and solver-backend availability remain later Phase 03 gates.
+The Nix build is available on x86_64 Linux and x86_64/aarch64 macOS; the equivalent native build is available only from an x64 Visual Studio developer environment on Windows x86_64. Identical installed-manifest semantics, the exact license/SBOM payload, manifest-validated installation/smoke, sidecar assembly, and solver-backend availability remain later Phase 03 gates.
 
 ### Supply chain and release
 
