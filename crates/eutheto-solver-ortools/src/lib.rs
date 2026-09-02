@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod candidate;
+mod descriptor;
 mod status;
 mod translation;
 
@@ -10,6 +11,10 @@ mod cp_sat {
 }
 
 pub use candidate::{CandidateDecodeError, DecodedCandidate, decode_projected_candidate};
+pub use descriptor::{
+    ORTOOLS_ADAPTER_VERSION, ORTOOLS_BACKEND_ID, ORTOOLS_VERSION, OrToolsDescriptorError,
+    ortools_descriptor,
+};
 pub use status::{
     AdapterDefectKind, CandidateProofClaim, CandidateStopCause, NormalizedWorkerTerminal,
     WorkerFailureKind, WorkerLimitKind, WorkerUnavailableKind, normalize_terminal,
