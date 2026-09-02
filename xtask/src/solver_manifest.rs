@@ -1109,7 +1109,7 @@ fn validate_spdx_document(manifest: &SolverManifest, root: &Path) -> Result<()> 
         );
     }
     validate_spdx_packages(&document.packages, manifest, &namespace_digest)?;
-    validate_spdx_relationships(&document.relationships, &document.files)
+    validate_spdx_relationships(&document.relationships, &document.files, manifest)
 }
 
 fn validate_spdx_packages(
@@ -1118,7 +1118,7 @@ fn validate_spdx_packages(
     namespace_digest: &str,
 ) -> Result<()> {
     let package = spdx_package;
-    let expected = vec![
+    let mut expected = vec![
         package(
             "SPDXRef-Package-abseil",
             "abseil-cpp",
@@ -1184,6 +1184,13 @@ fn validate_spdx_packages(
             "Zlib",
         ),
     ];
+    if manifest.build.target_triple == "x86_64-pc-windows-msvc" {
+        expected.push(spdx_unverified_package(
+            "SPDXRef-Package-msvc-runtime",
+            "Microsoft Visual C++ Runtime",
+            &manifest.build.compiler.version,
+        ));
+    }
     ensure!(
         packages == expected,
         "solver SBOM package authority profile does not match reviewed sources"
@@ -1213,28 +1220,61 @@ fn spdx_package(
     }
 }
 
+fn spdx_unverified_package(id: &str, name: &str, version: &str) -> SpdxPackage {
+    SpdxPackage {
+        spdx_id: id.to_owned(),
+        checksums: Vec::new(),
+        download_location: "NOASSERTION".to_owned(),
+        files_analyzed: false,
+        license_concluded: "NOASSERTION".to_owned(),
+        license_declared: "NOASSERTION".to_owned(),
+        name: name.to_owned(),
+        version_info: version.to_owned(),
+    }
+}
+
+fn is_msvc_runtime_file(path: &str) -> bool {
+    let Some(file_name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    Path::new(&file_name)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"))
+        && ["concrt", "msvcp", "vcomp", "vcruntime"]
+            .iter()
+            .any(|prefix| file_name.starts_with(prefix))
+}
+
 fn validate_spdx_relationships(
     relationships: &[SpdxRelationship],
     files: &[SpdxFile],
+    manifest: &SolverManifest,
 ) -> Result<()> {
-    let mut expected = vec![SpdxRelationship {
-        spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
-        relationship_type: "DESCRIBES".to_owned(),
-        related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
-    }];
-    for package in [
-        "abseil",
-        "bzip2",
-        "ortools",
-        "protobuf",
-        "re2",
-        "utf8-range",
-        "zlib",
-    ] {
-        expected.push(SpdxRelationship {
+    let mut expected = vec![
+        SpdxRelationship {
+            spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
+            relationship_type: "DESCRIBES".to_owned(),
+            related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
+        },
+        SpdxRelationship {
             spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
             relationship_type: "STATIC_LINK".to_owned(),
+            related_spdx_element: "SPDXRef-Package-ortools".to_owned(),
+        },
+    ];
+    for package in ["abseil", "bzip2", "protobuf", "re2", "utf8-range", "zlib"] {
+        expected.push(SpdxRelationship {
+            spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+            relationship_type: "DYNAMIC_LINK".to_owned(),
             related_spdx_element: format!("SPDXRef-Package-{package}"),
+        });
+    }
+    if manifest.build.target_triple == "x86_64-pc-windows-msvc" {
+        expected.push(SpdxRelationship {
+            spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+            relationship_type: "DYNAMIC_LINK".to_owned(),
+            related_spdx_element: "SPDXRef-Package-msvc-runtime".to_owned(),
         });
     }
     expected.push(SpdxRelationship {
@@ -1243,13 +1283,19 @@ fn validate_spdx_relationships(
         related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
     });
     expected.extend(files.iter().map(|file| SpdxRelationship {
-        spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+        spdx_element_id: if manifest.build.target_triple == "x86_64-pc-windows-msvc"
+            && is_msvc_runtime_file(&file.file_name)
+        {
+            "SPDXRef-Package-msvc-runtime".to_owned()
+        } else {
+            "SPDXRef-Package-eutheto".to_owned()
+        },
         relationship_type: "CONTAINS".to_owned(),
         related_spdx_element: file.spdx_id.clone(),
     }));
     ensure!(
         relationships == expected,
-        "solver SBOM relationships do not match the reviewed static-link and file profile"
+        "solver SBOM relationships do not match the reviewed linkage and file profile"
     );
     Ok(())
 }
@@ -1552,7 +1598,7 @@ fn validate_reviewed_cmake_values(
         name,
     )?;
     if windows {
-        require_cmake_string(map, "CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded", name)?;
+        require_cmake_string(map, "CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreadedDLL", name)?;
     }
     match scope {
         CmakeScope::Ortools => validate_ortools_cmake_values(map, windows, name)?,
@@ -2072,6 +2118,7 @@ struct SpdxChecksum {
 struct SpdxPackage {
     #[serde(rename = "SPDXID")]
     spdx_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     checksums: Vec<SpdxChecksum>,
     #[serde(rename = "downloadLocation")]
     download_location: String,
@@ -2546,7 +2593,7 @@ mod tests {
         if target == "x86_64-pc-windows-msvc" {
             map.insert(
                 "CMAKE_MSVC_RUNTIME_LIBRARY".to_owned(),
-                CacheValue::String("MultiThreaded".to_owned()),
+                CacheValue::String("MultiThreadedDLL".to_owned()),
             );
         }
         map
@@ -2600,7 +2647,7 @@ mod tests {
                 license_info_in_files: vec![license.to_owned()],
             });
         }
-        let packages = vec![
+        let mut packages = vec![
             spdx_package(
                 "SPDXRef-Package-abseil",
                 "abseil-cpp",
@@ -2666,24 +2713,37 @@ mod tests {
                 "Zlib",
             ),
         ];
-        let mut relationships = vec![SpdxRelationship {
-            spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
-            relationship_type: "DESCRIBES".to_owned(),
-            related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
-        }];
-        for package in [
-            "abseil",
-            "bzip2",
-            "ortools",
-            "protobuf",
-            "re2",
-            "utf8-range",
-            "zlib",
-        ] {
-            relationships.push(SpdxRelationship {
+        if target == "x86_64-pc-windows-msvc" {
+            packages.push(spdx_unverified_package(
+                "SPDXRef-Package-msvc-runtime",
+                "Microsoft Visual C++ Runtime",
+                "1.0",
+            ));
+        }
+        let mut relationships = vec![
+            SpdxRelationship {
+                spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
+                relationship_type: "DESCRIBES".to_owned(),
+                related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
+            },
+            SpdxRelationship {
                 spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
                 relationship_type: "STATIC_LINK".to_owned(),
+                related_spdx_element: "SPDXRef-Package-ortools".to_owned(),
+            },
+        ];
+        for package in ["abseil", "bzip2", "protobuf", "re2", "utf8-range", "zlib"] {
+            relationships.push(SpdxRelationship {
+                spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+                relationship_type: "DYNAMIC_LINK".to_owned(),
                 related_spdx_element: format!("SPDXRef-Package-{package}"),
+            });
+        }
+        if target == "x86_64-pc-windows-msvc" {
+            relationships.push(SpdxRelationship {
+                spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+                relationship_type: "DYNAMIC_LINK".to_owned(),
+                related_spdx_element: "SPDXRef-Package-msvc-runtime".to_owned(),
             });
         }
         relationships.push(SpdxRelationship {
@@ -2692,7 +2752,13 @@ mod tests {
             related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
         });
         relationships.extend(files.iter().map(|file| SpdxRelationship {
-            spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+            spdx_element_id: if target == "x86_64-pc-windows-msvc"
+                && is_msvc_runtime_file(&file.file_name)
+            {
+                "SPDXRef-Package-msvc-runtime".to_owned()
+            } else {
+                "SPDXRef-Package-eutheto".to_owned()
+            },
             relationship_type: "CONTAINS".to_owned(),
             related_spdx_element: file.spdx_id.clone(),
         }));

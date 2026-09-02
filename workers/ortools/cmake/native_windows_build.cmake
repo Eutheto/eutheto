@@ -366,7 +366,7 @@ set(ortools_configure_command
   "-DCMAKE_C_COMPILER=${c_compiler}"
   "-DCMAKE_CXX_COMPILER=${cxx_compiler}"
   "-DCMAKE_CXX_FLAGS=/DEIGEN_MPL2_ONLY"
-  "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+  "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"
   "-DCMAKE_POLICY_DEFAULT_CMP0077=NEW"
   "-DCMAKE_INSTALL_PREFIX=${ortools_install_dir}"
   "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
@@ -402,7 +402,7 @@ endforeach()
 require_cache_value("${ortools_cache}" FETCHCONTENT_FULLY_DISCONNECTED ON)
 require_cache_value("${ortools_cache}" CMAKE_GENERATOR Ninja)
 require_cache_value("${ortools_cache}" CMAKE_CXX_FLAGS /DEIGEN_MPL2_ONLY)
-require_cache_value("${ortools_cache}" CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+require_cache_value("${ortools_cache}" CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 require_cache_value("${ortools_cache}" CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 cache_value(actual_c_compiler "${ortools_cache}" CMAKE_C_COMPILER)
 cache_value(actual_cxx_compiler "${ortools_cache}" CMAKE_CXX_COMPILER)
@@ -433,16 +433,6 @@ if(NOT actual_ortools_version STREQUAL ortools_version)
     "Generated OR-Tools package version is ${actual_ortools_version}, expected ${ortools_version}.")
 endif()
 
-# Protobuf's Windows generator can race while parallel protoc commands create
-# shared output directories. Materialize every OR-Tools proto directory before
-# Ninja starts so generation never depends on concurrent directory creation.
-file(GLOB_RECURSE ortools_proto_sources
-  RELATIVE "${ortools_source_dir}"
-  "${ortools_source_dir}/ortools/*.proto")
-foreach(proto_source IN LISTS ortools_proto_sources)
-  cmake_path(GET proto_source PARENT_PATH proto_output_directory)
-  file(MAKE_DIRECTORY "${ortools_build_dir}/${proto_output_directory}")
-endforeach()
 
 run_stage("ortools-build" "${work_root}"
   "${CMAKE_COMMAND}" --build "${ortools_build_dir}" --config Release --parallel 2)
@@ -467,7 +457,7 @@ set(worker_configure_command
   -G Ninja
   ${common_cmake_flags}
   "-DCMAKE_CXX_COMPILER=${cxx_compiler}"
-  "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+  "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"
   "-DCMAKE_INSTALL_PREFIX=${staging_root}"
   "-DCMAKE_PREFIX_PATH=${ortools_install_dir}"
   "-Dortools_DIR=${ortools_package_dir}"
@@ -495,7 +485,7 @@ require_cache_value("${worker_cache}" EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS
 require_cache_value("${worker_cache}" EUTHETO_ORTOOLS_PHASE3_CONTRACT
   "${source_contract_path}")
 require_cache_value("${worker_cache}" CMAKE_INSTALL_PREFIX "${staging_root}")
-require_cache_value("${worker_cache}" CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+require_cache_value("${worker_cache}" CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 
 function(compiler_version_from_generated output_name build_dir)
   file(GLOB_RECURSE compiler_files LIST_DIRECTORIES FALSE
@@ -573,6 +563,31 @@ foreach(stage_dll IN LISTS stage_dlls)
   endif()
   list(APPEND stage_dll_names "${stage_dll_name}")
 endforeach()
+
+set(msvc_redist_root "$ENV{VCToolsRedistDir}")
+if(msvc_redist_root STREQUAL "" OR NOT IS_ABSOLUTE "${msvc_redist_root}")
+  message(FATAL_ERROR
+    "VCToolsRedistDir must identify the active MSVC redistributable root.")
+endif()
+cmake_path(NORMAL_PATH msvc_redist_root)
+if(NOT IS_DIRECTORY "${msvc_redist_root}")
+  message(FATAL_ERROR
+    "The active MSVC redistributable root does not exist: ${msvc_redist_root}")
+endif()
+file(GLOB_RECURSE msvc_runtime_dlls LIST_DIRECTORIES FALSE
+  "${msvc_redist_root}/x64/Microsoft.VC*.CRT/*.dll")
+if(NOT msvc_runtime_dlls)
+  message(FATAL_ERROR
+    "The active MSVC toolchain exposes no x64 app-local CRT payload.")
+endif()
+foreach(msvc_runtime_dll IN LISTS msvc_runtime_dlls)
+  if(IS_SYMLINK "${msvc_runtime_dll}" OR IS_DIRECTORY "${msvc_runtime_dll}")
+    message(FATAL_ERROR
+      "The MSVC redistributable contains a non-regular DLL: ${msvc_runtime_dll}.")
+  endif()
+endforeach()
+set(runtime_sources ${stage_dlls} ${msvc_runtime_dlls})
+
 
 set(windows_system_dll_allowlist
   advapi32.dll
@@ -682,20 +697,20 @@ while(runtime_queue)
 
 
     set(runtime_source "")
-    foreach(stage_dll IN LISTS stage_dlls)
-      cmake_path(GET stage_dll FILENAME stage_dll_name)
-      string(TOLOWER "${stage_dll_name}" stage_dll_name)
-      if(stage_dll_name STREQUAL runtime_dependency)
+    foreach(runtime_source_candidate IN LISTS runtime_sources)
+      cmake_path(GET runtime_source_candidate FILENAME runtime_source_name)
+      string(TOLOWER "${runtime_source_name}" runtime_source_name)
+      if(runtime_source_name STREQUAL runtime_dependency)
         if(NOT runtime_source STREQUAL "")
           message(FATAL_ERROR
-            "Runtime dependency has more than one staged source: ${runtime_dependency}")
+            "Runtime dependency has more than one source: ${runtime_dependency}")
         endif()
-        set(runtime_source "${stage_dll}")
+        set(runtime_source "${runtime_source_candidate}")
       endif()
     endforeach()
     if(runtime_source STREQUAL "")
       message(FATAL_ERROR
-        "Runtime dependency is neither explicitly allowed nor in the verified stage: ${artifact} -> ${runtime_dependency}")
+        "Runtime dependency is neither a Windows component nor in the verified OR-Tools/MSVC runtime sources: ${artifact} -> ${runtime_dependency}")
     endif()
 
     cmake_path(GET runtime_source FILENAME runtime_source_name)

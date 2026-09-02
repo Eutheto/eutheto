@@ -236,6 +236,7 @@ fn install_compliance_payload(
         &authorities.source,
         &authorities.dependencies,
         options.source_date,
+        build,
     );
     fs::create_dir(artifact_root.join("licenses"))
         .context("failed to create artifact licenses directory")?;
@@ -1046,10 +1047,11 @@ fn notice_bytes(
     source: &SourceContract,
     dependencies: &DependencySources,
     source_date: &str,
+    build: &BuildEvidence,
 ) -> Vec<u8> {
     let dependency = |name: &str| &dependencies.dependencies[name];
-    format!(
-        "eutheto\nCopyright 2026 eutheto contributors\n\nThis product is licensed under the Apache License, Version 2.0.\nSee eutheto-Apache-2.0.txt distributed beside this notice.\n\nEutheto bundled OR-Tools solver notices\n\nGenerated: {source_date}\nNo upstream NOTICE files apply. Verbatim license texts are installed beside this file.\n\n- eutheto {} — Apache-2.0 — LICENSE\n- OR-Tools {} — Apache-2.0 — {} — SHA256 {}\n- protobuf {} — BSD-3-Clause — {} — SHA256 {}\n- utf8_range (bundled with protobuf {}) — MIT — {} — SHA256 {}\n- Abseil {} — Apache-2.0 — {} — SHA256 {}\n- RE2 {} — BSD-3-Clause — {} — SHA256 {}\n- zlib {} — Zlib — {} — SHA256 {}\n- bzip2 {} — bzip2-1.0.6 — {} — SHA256 {}\n",
+    let mut notice = format!(
+        "eutheto\nCopyright 2026 eutheto contributors\n\nThis product is licensed under the Apache License, Version 2.0.\nSee eutheto-Apache-2.0.txt distributed beside this notice.\n\nEutheto bundled OR-Tools solver notices\n\nGenerated: {source_date}\nNo upstream NOTICE files apply to the reviewed open-source components. Their verbatim license texts are installed beside this file.\n\n- eutheto {} — Apache-2.0 — LICENSE\n- OR-Tools {} — Apache-2.0 — {} — SHA256 {}\n- protobuf {} — BSD-3-Clause — {} — SHA256 {}\n- utf8_range (bundled with protobuf {}) — MIT — {} — SHA256 {}\n- Abseil {} — Apache-2.0 — {} — SHA256 {}\n- RE2 {} — BSD-3-Clause — {} — SHA256 {}\n- zlib {} — Zlib — {} — SHA256 {}\n- bzip2 {} — bzip2-1.0.6 — {} — SHA256 {}\n",
         source.worker.version,
         source.ortools.version,
         source.ortools.source_url,
@@ -1072,8 +1074,15 @@ fn notice_bytes(
         dependency("bzip2").version,
         dependency("bzip2").source_url,
         dependency("bzip2").sha256,
-    )
-    .into_bytes()
+    );
+    if build.target_triple == "x86_64-pc-windows-msvc" {
+        notice.push_str("- Microsoft Visual C++ Runtime ");
+        notice.push_str(&build.compiler.version);
+        notice.push_str(
+            " — Copyright (c) Microsoft Corporation; app-local files supplied by the active licensed MSVC toolchain; redistribution is governed by the applicable Microsoft Visual Studio license terms — https://aka.ms/VCRedistLicense\n",
+        );
+    }
+    notice.into_bytes()
 }
 
 fn pre_sbom_inventory(root: &Path, build: &BuildEvidence) -> Result<Vec<(String, String)>> {
@@ -1115,13 +1124,27 @@ fn spdx_package(
     }
 }
 
+fn spdx_unverified_package(id: &str, name: &str, version: &str) -> SpdxPackage {
+    SpdxPackage {
+        spdx_id: id.to_owned(),
+        checksums: Vec::new(),
+        download_location: "NOASSERTION".to_owned(),
+        files_analyzed: false,
+        license_concluded: "NOASSERTION".to_owned(),
+        license_declared: "NOASSERTION".to_owned(),
+        name: name.to_owned(),
+        version_info: version.to_owned(),
+    }
+}
+
 fn spdx_packages(
     source: &SourceContract,
     dependencies: &DependencySources,
     namespace_digest: &str,
+    build: &BuildEvidence,
 ) -> Vec<SpdxPackage> {
     let dependency = |name: &str| &dependencies.dependencies[name];
-    vec![
+    let mut packages = vec![
         spdx_package(
             "SPDXRef-Package-abseil",
             "abseil-cpp",
@@ -1186,7 +1209,15 @@ fn spdx_packages(
             &dependency("zlib").sha256,
             "Zlib",
         ),
-    ]
+    ];
+    if build.target_triple == "x86_64-pc-windows-msvc" {
+        packages.push(spdx_unverified_package(
+            "SPDXRef-Package-msvc-runtime",
+            "Microsoft Visual C++ Runtime",
+            &build.compiler.version,
+        ));
+    }
+    packages
 }
 
 fn spdx_files(inventory: &[(String, String)], build: &BuildEvidence) -> Vec<SpdxFile> {
@@ -1220,25 +1251,44 @@ fn spdx_files(inventory: &[(String, String)], build: &BuildEvidence) -> Vec<Spdx
         .collect()
 }
 
-fn spdx_relationships(files: &[SpdxFile]) -> Vec<SpdxRelationship> {
-    let mut relationships = vec![SpdxRelationship {
-        spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
-        relationship_type: "DESCRIBES".to_owned(),
-        related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
-    }];
-    for dependency in [
-        "abseil",
-        "bzip2",
-        "ortools",
-        "protobuf",
-        "re2",
-        "utf8-range",
-        "zlib",
-    ] {
-        relationships.push(SpdxRelationship {
+fn is_msvc_runtime_file(path: &str) -> bool {
+    let Some(file_name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    Path::new(&file_name)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"))
+        && ["concrt", "msvcp", "vcomp", "vcruntime"]
+            .iter()
+            .any(|prefix| file_name.starts_with(prefix))
+}
+
+fn spdx_relationships(files: &[SpdxFile], target: &str) -> Vec<SpdxRelationship> {
+    let mut relationships = vec![
+        SpdxRelationship {
+            spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
+            relationship_type: "DESCRIBES".to_owned(),
+            related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
+        },
+        SpdxRelationship {
             spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
             relationship_type: "STATIC_LINK".to_owned(),
+            related_spdx_element: "SPDXRef-Package-ortools".to_owned(),
+        },
+    ];
+    for dependency in ["abseil", "bzip2", "protobuf", "re2", "utf8-range", "zlib"] {
+        relationships.push(SpdxRelationship {
+            spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+            relationship_type: "DYNAMIC_LINK".to_owned(),
             related_spdx_element: format!("SPDXRef-Package-{dependency}"),
+        });
+    }
+    if target == "x86_64-pc-windows-msvc" {
+        relationships.push(SpdxRelationship {
+            spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+            relationship_type: "DYNAMIC_LINK".to_owned(),
+            related_spdx_element: "SPDXRef-Package-msvc-runtime".to_owned(),
         });
     }
     relationships.push(SpdxRelationship {
@@ -1247,7 +1297,13 @@ fn spdx_relationships(files: &[SpdxFile]) -> Vec<SpdxRelationship> {
         related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
     });
     relationships.extend(files.iter().map(|file| SpdxRelationship {
-        spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+        spdx_element_id: if target == "x86_64-pc-windows-msvc"
+            && is_msvc_runtime_file(&file.file_name)
+        {
+            "SPDXRef-Package-msvc-runtime".to_owned()
+        } else {
+            "SPDXRef-Package-eutheto".to_owned()
+        },
         relationship_type: "CONTAINS".to_owned(),
         related_spdx_element: file.spdx_id.clone(),
     }));
@@ -1272,10 +1328,10 @@ fn build_spdx_document(
         },
         data_license: "CC0-1.0".to_owned(),
         document_namespace: format!("https://eutheto.dev/spdx/solver/{target}/{namespace_digest}"),
-        relationships: spdx_relationships(&files),
+        relationships: spdx_relationships(&files, target),
         files,
         name: format!("eutheto-solver-{target}"),
-        packages: spdx_packages(source, dependencies, namespace_digest),
+        packages: spdx_packages(source, dependencies, namespace_digest, build),
         spdx_version: "SPDX-2.3".to_owned(),
     }
 }
@@ -1732,6 +1788,7 @@ struct SpdxChecksum {
 struct SpdxPackage {
     #[serde(rename = "SPDXID")]
     spdx_id: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     checksums: Vec<SpdxChecksum>,
     #[serde(rename = "downloadLocation")]
     download_location: String,
@@ -1853,6 +1910,41 @@ mod tests {
                 .any(|(path, _)| path == SBOM_PATH || path == "solver-manifest.json")
         );
         assert!(inventory.iter().any(|(path, _)| path == NOTICE_PATH));
+    }
+
+    #[test]
+    fn spdx_distinguishes_static_ortools_from_dynamic_dependencies() {
+        let relationships = spdx_relationships(&[], "x86_64-unknown-linux-gnu");
+        assert!(relationships.iter().any(|relationship| {
+            relationship.relationship_type == "STATIC_LINK"
+                && relationship.related_spdx_element == "SPDXRef-Package-ortools"
+        }));
+        assert_eq!(
+            relationships
+                .iter()
+                .filter(|relationship| relationship.relationship_type == "DYNAMIC_LINK")
+                .count(),
+            6
+        );
+        assert!(!relationships.iter().any(|relationship| {
+            relationship.relationship_type == "STATIC_LINK"
+                && relationship.related_spdx_element != "SPDXRef-Package-ortools"
+        }));
+        let windows_relationships = spdx_relationships(&[], "x86_64-pc-windows-msvc");
+        assert_eq!(
+            windows_relationships
+                .iter()
+                .filter(|relationship| relationship.relationship_type == "DYNAMIC_LINK")
+                .count(),
+            7
+        );
+        assert!(windows_relationships.iter().any(|relationship| {
+            relationship.relationship_type == "DYNAMIC_LINK"
+                && relationship.related_spdx_element == "SPDXRef-Package-msvc-runtime"
+        }));
+        assert!(is_msvc_runtime_file("bin/MSVCP140.dll"));
+        assert!(is_msvc_runtime_file("bin/vcruntime140_1.dll"));
+        assert!(!is_msvc_runtime_file("bin/libprotobuf.dll"));
     }
 
     #[test]
