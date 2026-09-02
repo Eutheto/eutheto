@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
 
+use eutheto_domain_ir::OptimizationDirection;
 use eutheto_planning_ir::{
-    BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId, LinearComparison, Literal,
-    PlanningIrLimitsV1, PlanningProblem, ValidationError, Variable, validate,
+    BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId, LexicographicStrategy,
+    LinearComparison, Literal, PlanningIrLimitsV1, PlanningProblem, ValidationError, Variable,
+    lexicographic_strategy, validate,
 };
 use prost::Message;
 use thiserror::Error;
 
 use crate::cp_sat::{
-    BoolArgumentProto, ConstraintProto, CpModelProto, IntegerVariableProto, LinearConstraintProto,
-    constraint_proto,
+    BoolArgumentProto, ConstraintProto, CpModelProto, CpObjectiveProto, IntegerVariableProto,
+    LinearConstraintProto, constraint_proto,
 };
 const BOOLEAN_DOMAIN: [i64; 2] = [0, 1];
 
@@ -102,9 +104,9 @@ pub enum TranslationError {
     /// OR-Tools rejects integer domains or conservative linear sums outside its safe range.
     #[error("the translated integer expression exceeds OR-Tools' native safe range")]
     NativeIntegerOverflow,
-    /// Objectives are translated in a later stage.
-    #[error("objectives are not supported by the current CP-SAT translator")]
-    UnsupportedObjective,
+    /// This single-model adapter cannot execute exact lexicographic multipass solving.
+    #[error("the objective requires unsupported multipass lexicographic solving")]
+    UnsupportedMultipassObjective,
     /// Assumptions are translated in a later stage.
     #[error("assumptions are not supported by the current CP-SAT translator")]
     UnsupportedAssumption,
@@ -192,13 +194,15 @@ fn translate_variable_domains_validated(
 /// Translates every currently supported planning primitive into a complete CP-SAT model.
 ///
 /// At this stage the accepted model surface is Boolean and integer scalar variables plus Boolean
-/// clauses, conjunctions, implications, equivalences, one-of constraints, cardinality ranges, and
-/// integer linear comparisons. Unsupported primitives are rejected rather than omitted. Positive
-/// literals use their scalar variable index; negative literals use CP-SAT's exact `-index - 1`
-/// encoding. Common enforcement literals are copied onto every native constraint generated for
-/// their planning record. Empty clauses and exactly-one constraints remain empty and therefore
-/// false; empty conjunctions, at-most-one constraints, and the sole valid empty cardinality range
-/// `0..=0` remain true.
+/// clauses, conjunctions, implications, equivalences, one-of constraints, cardinality ranges,
+/// integer linear comparisons, and bounded objective terms. Exact lexicographic objectives are
+/// scalarized with their proven planning-IR weights; maximize levels are sign-normalized into
+/// CP-SAT's minimization objective. Unsupported primitives are rejected rather than omitted.
+/// Positive literals use their scalar variable index; negative literals use CP-SAT's exact
+/// `-index - 1` encoding. Common enforcement literals are copied onto every native constraint
+/// generated for their planning record. Empty clauses and exactly-one constraints remain empty and
+/// therefore false; empty conjunctions, at-most-one constraints, and the sole valid empty
+/// cardinality range `0..=0` remain true.
 /// # Errors
 ///
 /// Returns a validation error for invalid planning IR and an explicit unsupported-feature error
@@ -215,9 +219,12 @@ pub fn translate_supported_model(
     {
         return Err(TranslationError::UnsupportedIntervalVariable);
     }
-    if !problem.objectives.levels.is_empty() {
-        return Err(TranslationError::UnsupportedObjective);
-    }
+    let objective_weights = match lexicographic_strategy(&problem.objectives) {
+        LexicographicStrategy::ExactScalarization { weights } => weights,
+        LexicographicStrategy::Multipass => {
+            return Err(TranslationError::UnsupportedMultipassObjective);
+        }
+    };
     if !problem.assumptions.is_empty() {
         return Err(TranslationError::UnsupportedAssumption);
     }
@@ -230,13 +237,18 @@ pub fn translate_supported_model(
             &record.body,
             Constraint::LinearComparison(comparison) if comparison.expression.constant != 0
         )
-    });
+    }) || problem
+        .objectives
+        .levels
+        .iter()
+        .any(|level| level.terms.iter().any(|term| term.expression.constant != 0));
     let VariableTranslation {
         mut model,
         boolean_indices,
         integer_indices,
     } = translate_variable_domains_validated(problem, needs_constant_one)?;
     translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
+    translate_objective(problem, &objective_weights, &mut model, &integer_indices, 0)?;
 
     Ok(TranslatedCpSatModel {
         cp_model_proto: model.encode_to_vec(),
@@ -351,6 +363,70 @@ fn translate_constraints(
     Ok(())
 }
 
+fn translate_objective(
+    problem: &PlanningProblem,
+    weights: &[i64],
+    model: &mut CpModelProto,
+    integer_indices: &BTreeMap<IntVariableId, i32>,
+    constant_one_index: i32,
+) -> Result<(), TranslationError> {
+    if problem.objectives.levels.is_empty() {
+        return Ok(());
+    }
+
+    let mut combined = BTreeMap::<i32, i128>::new();
+    let mut constant = 0_i128;
+    for (level, &weight) in problem.objectives.levels.iter().zip(weights) {
+        let signed_weight = match level.direction {
+            OptimizationDirection::Minimize => i128::from(weight),
+            OptimizationDirection::Maximize => -i128::from(weight),
+        };
+        for term in &level.terms {
+            let weighted_constant = i128::from(term.expression.constant)
+                .checked_mul(signed_weight)
+                .ok_or(TranslationError::NativeIntegerOverflow)?;
+            constant = constant
+                .checked_add(weighted_constant)
+                .ok_or(TranslationError::NativeIntegerOverflow)?;
+            for expression_term in &term.expression.terms {
+                let index = integer_indices
+                    .get(&expression_term.variable)
+                    .copied()
+                    .ok_or(TranslationError::MissingIntegerIndex)?;
+                let contribution = i128::from(expression_term.coefficient)
+                    .checked_mul(signed_weight)
+                    .ok_or(TranslationError::NativeIntegerOverflow)?;
+                let coefficient = combined.entry(index).or_default();
+                *coefficient = coefficient
+                    .checked_add(contribution)
+                    .ok_or(TranslationError::NativeIntegerOverflow)?;
+            }
+        }
+    }
+    if constant != 0 {
+        combined.insert(constant_one_index, constant);
+    }
+    combined.retain(|_, coefficient| *coefficient != 0);
+
+    let mut native_variables = Vec::with_capacity(combined.len());
+    let mut coefficients = Vec::with_capacity(combined.len());
+    for (variable, coefficient) in combined {
+        native_variables.push(variable);
+        coefficients
+            .push(i64::try_from(coefficient).map_err(|_| TranslationError::NativeIntegerOverflow)?);
+    }
+    ensure_native_linear_safe(&native_variables, &coefficients, &model.variables)?;
+    model.objective = Some(CpObjectiveProto {
+        vars: native_variables,
+        coeffs: coefficients,
+        offset: 0.0,
+        scaling_factor: 1.0,
+        domain: Vec::new(),
+        ..CpObjectiveProto::default()
+    });
+    Ok(())
+}
+
 fn linear_comparison_constraint(
     comparison: &LinearComparison,
     integer_indices: &BTreeMap<IntVariableId, i32>,
@@ -415,6 +491,9 @@ fn ensure_native_linear_safe(
     let mut conservative_min = 0_i128;
     let mut conservative_max = 0_i128;
     for (&variable, &coefficient) in native_variables.iter().zip(coefficients) {
+        if coefficient == i64::MIN {
+            return Err(TranslationError::NativeIntegerOverflow);
+        }
         let variable = usize::try_from(variable)
             .ok()
             .and_then(|index| variables.get(index))
@@ -540,9 +619,11 @@ fn flatten_domain(domain: &IntDomain) -> Vec<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eutheto_domain_ir::ScoreCategoryId;
     use eutheto_planning_ir::{
         BoolVariable, Capability, CompilerId, ConstraintRecord, InclusiveRange, IntVariable,
-        IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm, ObjectivePlan,
+        IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm, ObjectiveLevel,
+        ObjectiveLevelId, ObjectivePlan, ObjectiveTerm, ObjectiveTermId, ObjectiveTermKind,
         PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningConstraintId,
         PlanningMetadata, ProvenanceId, ProvenanceRecord, ProvenanceSourceKind,
     };
@@ -643,6 +724,19 @@ mod tests {
             enforcement,
             provenance: ProvenanceId::new("translation.variable")?,
             tags: Vec::new(),
+        })
+    }
+    fn objective_term(
+        id: &str,
+        expression: LinearExpression,
+        kind: ObjectiveTermKind,
+    ) -> Result<ObjectiveTerm, Box<dyn Error>> {
+        Ok(ObjectiveTerm {
+            id: ObjectiveTermId::new(id)?,
+            expression,
+            kind,
+            category: ScoreCategoryId::new("translation.score")?,
+            provenance: ProvenanceId::new("translation.variable")?,
         })
     }
 
@@ -1061,6 +1155,330 @@ mod tests {
                 (&[0, 2][..], &[-2, -1][..], &[-5, i64::MAX][..]),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_objective_terms_preserve_coefficients_constants_and_kinds()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        problem.objectives = ObjectivePlan {
+            levels: vec![ObjectiveLevel {
+                id: ObjectiveLevelId::new("translation.level")?,
+                direction: OptimizationDirection::Minimize,
+                lower_bound: 4,
+                upper_bound: 9,
+                terms: vec![
+                    objective_term(
+                        "translation.objective.a",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: start.clone(),
+                                coefficient: 2,
+                            }],
+                            3,
+                        )?,
+                        ObjectiveTermKind::Penalty,
+                    )?,
+                    objective_term(
+                        "translation.objective.b",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: duration,
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Reward,
+                    )?,
+                ],
+                provenance: ProvenanceId::new("translation.variable")?,
+            }],
+        };
+        problem
+            .declared_capabilities
+            .extend([Capability::ObjectivePenalty, Capability::ObjectiveReward]);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        let objective = model.objective.as_ref().ok_or("missing objective")?;
+
+        assert_eq!(model.variables[0].domain, [1, 1]);
+        assert_eq!(translated.integer_index(&start), Some(2));
+        assert_eq!(objective.vars, [0, 2, 3]);
+        assert_eq!(objective.coeffs, [3, 2, 1]);
+        assert_eq!(objective.offset.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(objective.scaling_factor.to_bits(), 1.0_f64.to_bits());
+        Ok(())
+    }
+
+    #[test]
+    fn exact_lexicographic_objective_normalizes_mixed_directions() -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        problem.objectives = ObjectivePlan {
+            levels: vec![
+                ObjectiveLevel {
+                    id: ObjectiveLevelId::new("translation.level.high")?,
+                    direction: OptimizationDirection::Minimize,
+                    lower_bound: 0,
+                    upper_bound: 2,
+                    terms: vec![objective_term(
+                        "translation.objective.high",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: start.clone(),
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Penalty,
+                    )?],
+                    provenance: ProvenanceId::new("translation.variable")?,
+                },
+                ObjectiveLevel {
+                    id: ObjectiveLevelId::new("translation.level.low")?,
+                    direction: OptimizationDirection::Maximize,
+                    lower_bound: 1,
+                    upper_bound: 2,
+                    terms: vec![objective_term(
+                        "translation.objective.low",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: duration,
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Reward,
+                    )?],
+                    provenance: ProvenanceId::new("translation.variable")?,
+                },
+            ],
+        };
+        problem
+            .declared_capabilities
+            .extend([Capability::ObjectivePenalty, Capability::ObjectiveReward]);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        let objective = model.objective.as_ref().ok_or("missing objective")?;
+
+        assert_eq!(translated.integer_index(&start), Some(1));
+        assert_eq!(objective.vars, [1, 2]);
+        assert_eq!(objective.coeffs, [2, -1]);
+        Ok(())
+    }
+
+    #[test]
+    fn objective_requiring_multipass_is_rejected_before_dispatch() -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let start = IntVariableId::new("translation.b_start")?;
+        for variable in &mut problem.variables {
+            if let Variable::Integer(integer) = variable
+                && integer.id == start
+            {
+                integer.domain = IntDomain::new(vec![InclusiveRange {
+                    start: 0,
+                    end: 1_000_000,
+                }])?;
+            }
+        }
+        problem.objectives = ObjectivePlan {
+            levels: (0..4)
+                .map(|index| {
+                    Ok(ObjectiveLevel {
+                        id: ObjectiveLevelId::new(format!("translation.level.{index}"))?,
+                        direction: OptimizationDirection::Minimize,
+                        lower_bound: 0,
+                        upper_bound: 1_000_000,
+                        terms: vec![objective_term(
+                            &format!("translation.objective.{index}"),
+                            LinearExpression::new(
+                                vec![LinearTerm {
+                                    variable: start.clone(),
+                                    coefficient: 1,
+                                }],
+                                0,
+                            )?,
+                            ObjectiveTermKind::Penalty,
+                        )?],
+                        provenance: ProvenanceId::new("translation.variable")?,
+                    })
+                })
+                .collect::<Result<Vec<_>, Box<dyn Error>>>()?,
+        };
+        problem
+            .declared_capabilities
+            .insert(Capability::ObjectivePenalty);
+
+        assert!(matches!(
+            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+            Err(TranslationError::UnsupportedMultipassObjective)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn native_conservative_objective_overflow_is_rejected_before_dispatch()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        for variable in &mut problem.variables {
+            if let Variable::Integer(integer) = variable {
+                if integer.id == start {
+                    integer.domain = IntDomain::new(vec![InclusiveRange {
+                        start: 0,
+                        end: 3_000_000_000,
+                    }])?;
+                } else if integer.id == duration {
+                    integer.domain = IntDomain::new(vec![InclusiveRange {
+                        start: 0,
+                        end: 2_000_000_000,
+                    }])?;
+                }
+            }
+        }
+        problem.objectives = ObjectivePlan {
+            levels: vec![
+                ObjectiveLevel {
+                    id: ObjectiveLevelId::new("translation.level.high")?,
+                    direction: OptimizationDirection::Minimize,
+                    lower_bound: 0,
+                    upper_bound: 3_000_000_000,
+                    terms: vec![objective_term(
+                        "translation.objective.high",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: start,
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Penalty,
+                    )?],
+                    provenance: ProvenanceId::new("translation.variable")?,
+                },
+                ObjectiveLevel {
+                    id: ObjectiveLevelId::new("translation.level.low")?,
+                    direction: OptimizationDirection::Minimize,
+                    lower_bound: 0,
+                    upper_bound: 2_000_000_000,
+                    terms: vec![objective_term(
+                        "translation.objective.low",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: duration,
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Penalty,
+                    )?],
+                    provenance: ProvenanceId::new("translation.variable")?,
+                },
+            ],
+        };
+        problem
+            .declared_capabilities
+            .insert(Capability::ObjectivePenalty);
+
+        assert!(matches!(
+            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+            Err(TranslationError::NativeIntegerOverflow)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn minimum_scalarized_objective_coefficient_is_rejected_before_dispatch()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        let end = IntVariableId::new("translation.d_end")?;
+        for variable in &mut problem.variables {
+            if let Variable::Integer(integer) = variable {
+                if integer.id == start || integer.id == duration {
+                    integer.domain = IntDomain::new(vec![InclusiveRange {
+                        start: 0,
+                        end: i64::from(i32::MAX),
+                    }])?;
+                } else if integer.id == end {
+                    integer.domain = IntDomain::new(vec![InclusiveRange { start: 0, end: 0 }])?;
+                }
+            }
+        }
+        problem.objectives = ObjectivePlan {
+            levels: vec![
+                ObjectiveLevel {
+                    id: ObjectiveLevelId::new("translation.level.high")?,
+                    direction: OptimizationDirection::Maximize,
+                    lower_bound: 0,
+                    upper_bound: 0,
+                    terms: vec![objective_term(
+                        "translation.objective.high",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: end,
+                                coefficient: 2,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Reward,
+                    )?],
+                    provenance: ProvenanceId::new("translation.variable")?,
+                },
+                ObjectiveLevel {
+                    id: ObjectiveLevelId::new("translation.level.middle")?,
+                    direction: OptimizationDirection::Minimize,
+                    lower_bound: 0,
+                    upper_bound: i64::from(i32::MAX),
+                    terms: vec![objective_term(
+                        "translation.objective.middle",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: start,
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Penalty,
+                    )?],
+                    provenance: ProvenanceId::new("translation.variable")?,
+                },
+                ObjectiveLevel {
+                    id: ObjectiveLevelId::new("translation.level.low")?,
+                    direction: OptimizationDirection::Minimize,
+                    lower_bound: 0,
+                    upper_bound: i64::from(i32::MAX),
+                    terms: vec![objective_term(
+                        "translation.objective.low",
+                        LinearExpression::new(
+                            vec![LinearTerm {
+                                variable: duration,
+                                coefficient: 1,
+                            }],
+                            0,
+                        )?,
+                        ObjectiveTermKind::Penalty,
+                    )?],
+                    provenance: ProvenanceId::new("translation.variable")?,
+                },
+            ],
+        };
+        problem
+            .declared_capabilities
+            .extend([Capability::ObjectivePenalty, Capability::ObjectiveReward]);
+
+        assert!(matches!(
+            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+            Err(TranslationError::NativeIntegerOverflow)
+        ));
         Ok(())
     }
 

@@ -1078,6 +1078,7 @@ dependencies = [
 name = "eutheto-solver-ortools"
 version = "0.1.0"
 dependencies = [
+ "eutheto-domain-ir",
  "eutheto-planning-ir",
  "eutheto-protocol",
  "eutheto-types",
