@@ -1,6 +1,7 @@
 {
   pkgs,
   src,
+  solver-artifact-tool,
 }:
 let
   inherit (pkgs) lib stdenv;
@@ -60,6 +61,17 @@ let
     "aarch64-darwin"
   ];
   linuxRuntimeLibraryPath = lib.makeLibraryPath [ stdenv.cc.cc.lib ];
+  targetTriple =
+    {
+      "x86_64-linux" = "x86_64-unknown-linux-gnu";
+      "x86_64-darwin" = "x86_64-apple-darwin";
+      "aarch64-darwin" = "aarch64-apple-darwin";
+    }
+    .${stdenv.hostPlatform.system};
+  compilerIdentity = if stdenv.cc.isClang then "clang" else "gcc";
+  compilerVersion = lib.getVersion stdenv.cc.cc;
+  solverSourceDate = "2026-09-02T00:00:00Z";
+  ortoolsInstallLibDir = if stdenv.hostPlatform.isLinux then "lib64" else "lib";
 
   cmakeValue = value: if builtins.isBool value then if value then "ON" else "OFF" else toString value;
   commonCmakeFlags = lib.mapAttrsToList (
@@ -234,7 +246,8 @@ stdenv.mkDerivation {
       ${commonCmakeFlagsShell} \
       ${darwinCmakeFlagsShell} \
       "-DCMAKE_CXX_FLAGS=-DEIGEN_MPL2_ONLY" \
-      "-DCMAKE_INSTALL_PREFIX=$NIX_BUILD_TOP/ortools-stage" \
+      "-DCMAKE_INSTALL_PREFIX=$NIX_BUILD_TOP/ortools-install" \
+      "-DCMAKE_POLICY_DEFAULT_CMP0077=NEW" \
       "-DFETCHCONTENT_FULLY_DISCONNECTED=ON" \
       "-DFETCHCONTENT_SOURCE_DIR_ZLIB=$NIX_BUILD_TOP/sources/${dependencySources.zlib.archive_root}" \
       "-DFETCHCONTENT_SOURCE_DIR_BZIP2=$NIX_BUILD_TOP/sources/${dependencySources.bzip2.archive_root}" \
@@ -258,7 +271,14 @@ stdenv.mkDerivation {
       -G Ninja \
       ${commonCmakeFlagsShell} \
       ${darwinCmakeFlagsShell} \
-      "-DCMAKE_PREFIX_PATH=$NIX_BUILD_TOP/ortools-stage" \
+      "-DCMAKE_INSTALL_PREFIX=$out" \
+      "-DCMAKE_PREFIX_PATH=$NIX_BUILD_TOP/ortools-install" \
+      "-Dortools_DIR=$NIX_BUILD_TOP/ortools-install/${ortoolsInstallLibDir}/cmake/ortools" \
+      "-DProtobuf_DIR=$NIX_BUILD_TOP/ortools-install/${ortoolsInstallLibDir}/cmake/protobuf" \
+      "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=FALSE" \
+      "-DCMAKE_FIND_USE_PACKAGE_ROOT_PATH=FALSE" \
+      "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE" \
+      "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE" \
       "-DEUTHETO_ORTOOLS_DEVELOPMENT_BUILD=OFF" \
       "-DEUTHETO_ORTOOLS_BUILD_TESTS=ON" \
       "-DEUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS=OFF" \
@@ -333,17 +353,17 @@ stdenv.mkDerivation {
       is_system_dependency "$dependency" && continue
 
       runtimeName="$(basename "$dependency")"
-      grep -Fqx "$runtimeName" "$runtimeSeen" && continue
-      printf '%s\n' "$runtimeName" >>"$runtimeSeen"
-
       sourceLibrary=
       for libraryDirectory in \
-        "$NIX_BUILD_TOP/ortools-stage/lib" \
-        "$NIX_BUILD_TOP/ortools-stage/lib64"
+        "$NIX_BUILD_TOP/ortools-install/lib" \
+        "$NIX_BUILD_TOP/ortools-install/lib64"
       do
         if test -e "$libraryDirectory/$runtimeName"; then
+          if test -n "$sourceLibrary"; then
+            echo "runtime loader basename collides across staged directories: $runtimeName" >&2
+            exit 1
+          fi
           sourceLibrary="$libraryDirectory/$runtimeName"
-          break
         fi
       done
       if test -z "$sourceLibrary"; then
@@ -351,8 +371,14 @@ stdenv.mkDerivation {
         exit 1
       fi
 
+      linkDepth=0
       currentLibrary="$sourceLibrary"
       while test -L "$currentLibrary"; do
+        linkDepth=$((linkDepth + 1))
+        if test "$linkDepth" -gt 32; then
+          echo "runtime library symlink chain is unbounded: $sourceLibrary" >&2
+          exit 1
+        fi
         linkTarget="$(readlink "$currentLibrary")"
         case "$linkTarget" in
           /*|*/*)
@@ -360,35 +386,57 @@ stdenv.mkDerivation {
             exit 1
             ;;
         esac
-        cp -a "$currentLibrary" "$out/lib/"
         currentLibrary="$(dirname "$currentLibrary")/$linkTarget"
         if ! test -e "$currentLibrary"; then
           echo "runtime library symlink is unresolved: $sourceLibrary" >&2
           exit 1
         fi
       done
+      test -f "$currentLibrary" && ! test -L "$currentLibrary"
 
-      cp -a "$currentLibrary" "$out/lib/"
-      runtime_dependencies "$currentLibrary" >>"$runtimeQueue"
+      if grep -Fqx "$runtimeName" "$runtimeSeen"; then
+        continue
+      fi
+      printf '%s\n' "$runtimeName" >>"$runtimeSeen"
+      runtimeDestination="$out/lib/$runtimeName"
+      if test -e "$runtimeDestination" || test -L "$runtimeDestination"; then
+        echo "runtime output basename collision: $runtimeName" >&2
+        exit 1
+      fi
+      cp --dereference "$currentLibrary" "$runtimeDestination"
+      test -f "$runtimeDestination" && ! test -L "$runtimeDestination"
+      runtime_dependencies "$runtimeDestination" >>"$runtimeQueue"
       runtimeLibraryCount=$((runtimeLibraryCount + 1))
     done <"$runtimeQueue"
 
     if test "$runtimeLibraryCount" -eq 0; then
-      echo "worker runtime library closure is empty" >&2
-      exit 1
+      rmdir "$out/lib"
     fi
-
-    rm -rf "$NIX_BUILD_TOP/ortools-stage"
 
     runHook postInstall
   '';
 
-  postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
-    for binary in "$out/bin/ortools-worker" "$out"/lib/*.so "$out"/lib/*.so.*; do
-      test -e "$binary" || continue
-      test -L "$binary" && continue
-      patchelf --set-rpath "$out/lib:${linuxRuntimeLibraryPath}" "$binary"
-    done
+  postFixup = ''
+    ${lib.optionalString stdenv.hostPlatform.isLinux ''
+      for binary in "$out/bin/ortools-worker" "$out"/lib/*.so "$out"/lib/*.so.*; do
+        test -e "$binary" || continue
+        test -L "$binary" && exit 1
+        patchelf --set-rpath "$out/lib:${linuxRuntimeLibraryPath}" "$binary"
+      done
+    ''}
+    if find "$out" -type l -print -quit | grep -q .; then
+      echo "solver artifact contains a forbidden symlink before finalization" >&2
+      exit 1
+    fi
+    ${solver-artifact-tool}/bin/xtask solver finalize-artifact \
+      --authority-root ${src} \
+      --work-root "$NIX_BUILD_TOP" \
+      --artifact-root "$out" \
+      --target-triple ${targetTriple} \
+      --compiler-identity ${compilerIdentity} \
+      --compiler-version ${compilerVersion} \
+      --source-date ${solverSourceDate}
+    rm -rf "$NIX_BUILD_TOP/ortools-install"
   '';
 
   doInstallCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
@@ -453,19 +501,10 @@ stdenv.mkDerivation {
     }
 
     for artifact in "$out/bin/ortools-worker" "$out"/lib/*; do
-      if test -L "$artifact"; then
-        linkTarget="$(readlink "$artifact")"
-        case "$linkTarget" in
-          /*|*/*)
-            echo "installed runtime symlink has a non-local target: $artifact -> $linkTarget" >&2
-            exit 1
-            ;;
-        esac
-        if ! test -e "$artifact"; then
-          echo "installed runtime symlink is unresolved: $artifact" >&2
-          exit 1
-        fi
-        continue
+      test -e "$artifact" || continue
+      if test -L "$artifact" || ! test -f "$artifact"; then
+        echo "installed solver payload entry is not a regular file: $artifact" >&2
+        exit 1
       fi
 
       linkage="$(runtime_dependencies "$artifact")"
@@ -504,7 +543,16 @@ stdenv.mkDerivation {
         ;;
     esac
 
-    echo "installed worker startup and runtime-closure checks passed"
+    if find "$out" -type l -print -quit | grep -q .; then
+      echo "installed solver artifact contains a symlink" >&2
+      exit 1
+    fi
+    ${solver-artifact-tool}/bin/xtask solver validate-manifest \
+      --source-contract ${src}/workers/ortools/source-contract.json \
+      --protocol-schema ${src}/protocol/solver-worker.proto \
+      --protocol-policy ${src}/protocol/version.json \
+      --artifact-root "$out"
+    echo "installed finalized worker, runtime closure, and manifest checks passed"
 
     runHook postInstallCheck
   '';
@@ -513,9 +561,9 @@ stdenv.mkDerivation {
     inherit contract;
     sourceContractApproved = true;
     nixWorkerArtifactBuildable = true;
-    solverManifestAvailable = false;
-    sbomAvailable = false;
-    licensePayloadAvailable = false;
+    solverManifestAvailable = true;
+    sbomAvailable = true;
+    licensePayloadAvailable = true;
     packagingAvailable = false;
     backendAvailable = false;
     releaseReady = false;
@@ -529,7 +577,6 @@ stdenv.mkDerivation {
       bsd3
       bsdOriginal
       mit
-      mpl20
       zlib
     ];
     mainProgram = "ortools-worker";

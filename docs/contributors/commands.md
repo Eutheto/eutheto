@@ -78,12 +78,12 @@ The CLI name and desktop identifier used by Phase 00 are development surfaces, n
 
 | Recipe | Behavior in Phase 03 |
 | --- | --- |
-| `just worker-build-nix` | Builds the approved OR-Tools 9.15.6755 source contract in the Nix sandbox, runs the native worker tests, and verifies that the installed worker starts with its packaged runtime libraries. This does not produce the deferred solver manifest, SBOM/license payload, sidecar, or backend registration. |
-| `just worker-build-native` | On native Windows x86_64, downloads the fixed-hash source set, builds with MSVC/Ninja and the approved production contract, runs native tests, installs the recursive x64 project DLL closure, classifies exact Windows/MSVC runtime imports, and verifies installed EOF startup. The fresh result is `.cache/ortools-native/windows-x86_64/current`; no manifest, license/SBOM payload, clean-machine package, or release artifact is produced. |
-| `just worker-install-from-nix` | Delegates to `xtask`; installation remains blocked until the installed manifest and license payload contract exists. |
-| `just worker-smoke` | Delegates executable smoke testing to `xtask`; it remains blocked until manifest-validated worker installation exists. |
+| `just worker-build-nix` | Builds the approved OR-Tools 9.15.6755 source contract in the Nix sandbox, runs native worker tests, postprocesses the executable/runtime closure, installs the exact reviewed license and NOTICE payload, generates the artifact-specific SPDX SBOM and solver manifest, validates the complete nonsymlink inventory, and verifies installed EOF startup. It does not package a sidecar or register a backend. |
+| `just worker-build-native` | On native Windows x86_64, downloads the fixed-hash source set, builds with MSVC/Ninja and the approved production contract, runs native tests, installs the recursive x64 project DLL closure, rejects unexpected runtime imports, verifies installed EOF startup, finalizes the same license/SBOM/manifest contract, and replaces `.cache/ortools-native/windows-x86_64/current` only after validation. A failed pre-publication rerun preserves the last-good result. It does not create a clean-machine package or release artifact. |
+| `just worker-install-from-nix` | Delegates to `xtask`; installation remains blocked until the manifest-validated installer is implemented. |
+| `just worker-smoke` | Delegates executable smoke testing to `xtask`; it remains blocked until manifest-validated worker installation is implemented. |
 
-The Nix build is available on x86_64 Linux and x86_64/aarch64 macOS; the equivalent native build is available only from an x64 Visual Studio developer environment on Windows x86_64. Identical installed-manifest semantics, the exact license/SBOM payload, manifest-validated installation/smoke, sidecar assembly, and solver-backend availability remain later Phase 03 gates.
+The Nix build is available on x86_64 Linux and x86_64/aarch64 macOS; the equivalent native build is available only from an x64 Visual Studio developer environment on Windows x86_64. Both builders share the installed-manifest, license, NOTICE, and SPDX finalizer contract. Manifest-validated installation/smoke, sidecar assembly, and solver-backend availability remain later Phase 03 gates.
 
 ### Supply chain and release
 

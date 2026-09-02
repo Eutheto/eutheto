@@ -24,11 +24,6 @@ if(NOT NATIVE_ROOT STREQUAL expected_native_root)
   message(FATAL_ERROR
     "NATIVE_ROOT must be the dedicated repository cache path ${expected_native_root}.")
 endif()
-# A failed rerun must never leave a previous artifact visible as current.
-file(REMOVE_RECURSE
-  "${NATIVE_ROOT}/work"
-  "${NATIVE_ROOT}/staging"
-  "${NATIVE_ROOT}/current")
 
 
 set(source_contract_path
@@ -211,9 +206,16 @@ set(ortools_build_dir "${work_root}/ortools-build")
 set(ortools_install_dir "${work_root}/ortools-install")
 set(worker_build_dir "${work_root}/worker-build")
 set(staging_root "${NATIVE_ROOT}/staging")
-set(final_root "${NATIVE_ROOT}/current")
 set(staging_bin "${staging_root}/bin")
-set(final_worker "${final_root}/bin/ortools-worker.exe")
+
+foreach(preexisting_path
+    "${work_root}"
+    "${staging_root}")
+  if(EXISTS "${preexisting_path}" OR IS_SYMLINK "${preexisting_path}")
+    message(FATAL_ERROR
+      "Native build state must be cleared by the Rust coordinator: ${preexisting_path}")
+  endif()
+endforeach()
 
 file(MAKE_DIRECTORY "${download_root}" "${source_parent}" "${staging_bin}")
 
@@ -364,6 +366,7 @@ set(ortools_configure_command
   "-DCMAKE_C_COMPILER=${c_compiler}"
   "-DCMAKE_CXX_COMPILER=${cxx_compiler}"
   "-DCMAKE_CXX_FLAGS=/DEIGEN_MPL2_ONLY"
+  "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
   "-DCMAKE_POLICY_DEFAULT_CMP0077=NEW"
   "-DCMAKE_INSTALL_PREFIX=${ortools_install_dir}"
   "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
@@ -399,6 +402,7 @@ endforeach()
 require_cache_value("${ortools_cache}" FETCHCONTENT_FULLY_DISCONNECTED ON)
 require_cache_value("${ortools_cache}" CMAKE_GENERATOR Ninja)
 require_cache_value("${ortools_cache}" CMAKE_CXX_FLAGS /DEIGEN_MPL2_ONLY)
+require_cache_value("${ortools_cache}" CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 require_cache_value("${ortools_cache}" CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 cache_value(actual_c_compiler "${ortools_cache}" CMAKE_C_COMPILER)
 cache_value(actual_cxx_compiler "${ortools_cache}" CMAKE_CXX_COMPILER)
@@ -452,6 +456,8 @@ set(worker_configure_command
   -G Ninja
   ${common_cmake_flags}
   "-DCMAKE_CXX_COMPILER=${cxx_compiler}"
+  "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+  "-DCMAKE_INSTALL_PREFIX=${staging_root}"
   "-DCMAKE_PREFIX_PATH=${ortools_install_dir}"
   "-Dortools_DIR=${ortools_package_dir}"
   "-DProtobuf_DIR=${protobuf_package_dir}"
@@ -477,6 +483,41 @@ require_cache_value("${worker_cache}" EUTHETO_ORTOOLS_BUILD_TESTS ON)
 require_cache_value("${worker_cache}" EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS OFF)
 require_cache_value("${worker_cache}" EUTHETO_ORTOOLS_PHASE3_CONTRACT
   "${source_contract_path}")
+require_cache_value("${worker_cache}" CMAKE_INSTALL_PREFIX "${staging_root}")
+require_cache_value("${worker_cache}" CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+
+function(compiler_version_from_generated output_name build_dir)
+  file(GLOB_RECURSE compiler_files LIST_DIRECTORIES FALSE
+    "${build_dir}/CMakeFiles/CMakeCXXCompiler.cmake"
+    "${build_dir}/CMakeFiles/*/CMakeCXXCompiler.cmake")
+  list(REMOVE_DUPLICATES compiler_files)
+  list(LENGTH compiler_files compiler_file_count)
+  if(NOT compiler_file_count EQUAL 1)
+    message(FATAL_ERROR
+      "Expected exactly one generated C++ compiler authority in ${build_dir}.")
+  endif()
+  list(GET compiler_files 0 compiler_file)
+  file(STRINGS "${compiler_file}" compiler_version_lines
+    REGEX "^set\\(CMAKE_CXX_COMPILER_VERSION \"[0-9A-Za-z_.+-]+\"\\)$")
+  list(LENGTH compiler_version_lines compiler_version_count)
+  if(NOT compiler_version_count EQUAL 1)
+    message(FATAL_ERROR
+      "Expected exactly one normalized C++ compiler version in ${compiler_file}.")
+  endif()
+  list(GET compiler_version_lines 0 compiler_version_line)
+  string(REGEX REPLACE
+    "^set\\(CMAKE_CXX_COMPILER_VERSION \"([0-9A-Za-z_.+-]+)\"\\)$"
+    "\\1" compiler_version "${compiler_version_line}")
+  set(${output_name} "${compiler_version}" PARENT_SCOPE)
+endfunction()
+
+compiler_version_from_generated(ortools_compiler_version "${ortools_build_dir}")
+compiler_version_from_generated(worker_compiler_version "${worker_build_dir}")
+if(NOT ortools_compiler_version STREQUAL worker_compiler_version)
+  message(FATAL_ERROR
+    "OR-Tools and worker compiler versions differ: ${ortools_compiler_version} vs ${worker_compiler_version}.")
+endif()
+file(WRITE "${work_root}/compiler-version.txt" "${worker_compiler_version}\n")
 
 run_stage("worker-build" "${work_root}"
   "${CMAKE_COMMAND}" --build "${worker_build_dir}" --config Release --parallel 2)
@@ -501,10 +542,18 @@ set(staging_worker "${staging_bin}/ortools-worker.exe")
 if(NOT EXISTS "${staging_worker}")
   message(FATAL_ERROR "The production worker install did not create ${staging_worker}.")
 endif()
+if(IS_SYMLINK "${staging_worker}" OR IS_DIRECTORY "${staging_worker}")
+  message(FATAL_ERROR
+    "The production worker install is not a regular file: ${staging_worker}.")
+endif()
 
 file(GLOB stage_dlls "${ortools_install_dir}/bin/*.dll")
 set(stage_dll_names "")
 foreach(stage_dll IN LISTS stage_dlls)
+  if(IS_SYMLINK "${stage_dll}" OR IS_DIRECTORY "${stage_dll}")
+    message(FATAL_ERROR
+      "The verified OR-Tools stage contains a non-regular DLL: ${stage_dll}.")
+  endif()
   cmake_path(GET stage_dll FILENAME stage_dll_name)
   string(TOLOWER "${stage_dll_name}" stage_dll_name)
   if(stage_dll_name IN_LIST stage_dll_names)
@@ -520,11 +569,7 @@ set(windows_system_dll_allowlist
   dbghelp.dll
   kernel32.dll
   ntdll.dll
-)
-set(msvc_runtime_dll_allowlist
-  msvcp140.dll
-  vcruntime140.dll
-  vcruntime140_1.dll
+  ucrtbase.dll
 )
 function(inspect_pe artifact output_dependencies)
   execute_process(
@@ -595,6 +640,7 @@ endfunction()
 
 set(runtime_queue "${staging_worker}")
 set(inspected_runtime "")
+set(packaged_runtime "")
 while(runtime_queue)
   list(POP_FRONT runtime_queue artifact)
   string(TOLOWER "${artifact}" artifact_identity)
@@ -616,10 +662,13 @@ while(runtime_queue)
         "Debug MSVC runtime dependency is forbidden: ${artifact} -> ${runtime_dependency}")
     endif()
     if(runtime_dependency MATCHES "^(api|ext)-ms-win-.*\\.dll$"
-       OR runtime_dependency IN_LIST windows_system_dll_allowlist
-       OR runtime_dependency IN_LIST msvc_runtime_dll_allowlist)
+       OR runtime_dependency IN_LIST windows_system_dll_allowlist)
       continue()
     endif()
+    if(runtime_dependency IN_LIST packaged_runtime)
+      continue()
+    endif()
+
 
     set(runtime_source "")
     foreach(stage_dll IN LISTS stage_dlls)
@@ -640,7 +689,16 @@ while(runtime_queue)
 
     cmake_path(GET runtime_source FILENAME runtime_source_name)
     set(runtime_destination "${staging_bin}/${runtime_source_name}")
-    file(COPY_FILE "${runtime_source}" "${runtime_destination}" ONLY_IF_DIFFERENT)
+    if(EXISTS "${runtime_destination}" OR IS_SYMLINK "${runtime_destination}")
+      message(FATAL_ERROR
+        "Runtime loader basename would clobber an existing output: ${runtime_source_name}")
+    endif()
+    file(COPY_FILE "${runtime_source}" "${runtime_destination}")
+    if(IS_SYMLINK "${runtime_destination}" OR IS_DIRECTORY "${runtime_destination}")
+      message(FATAL_ERROR
+        "Copied runtime dependency is not a regular file: ${runtime_destination}")
+    endif()
+    list(APPEND packaged_runtime "${runtime_dependency}")
     list(APPEND runtime_queue "${runtime_destination}")
   endforeach()
 endwhile()
@@ -651,14 +709,19 @@ if(NOT staging_entries STREQUAL "bin")
 endif()
 file(GLOB final_bin_entries RELATIVE "${staging_bin}" "${staging_bin}/*")
 foreach(final_bin_entry IN LISTS final_bin_entries)
+  if(IS_SYMLINK "${staging_bin}/${final_bin_entry}"
+     OR IS_DIRECTORY "${staging_bin}/${final_bin_entry}")
+    message(FATAL_ERROR
+      "The native worker bin directory contains a non-regular entry: ${final_bin_entry}")
+  endif()
   if(NOT final_bin_entry STREQUAL "ortools-worker.exe"
      AND NOT final_bin_entry MATCHES "^[A-Za-z0-9_.+-]+\\.[dD][lL][lL]$")
     message(FATAL_ERROR "The native worker bin directory contains an unclassified file: ${final_bin_entry}")
   endif()
 endforeach()
 
-# Remove every alternative loader source before the installed startup smoke.
-file(REMOVE_RECURSE "${ortools_install_dir}" "${worker_build_dir}")
+# Keep the verified private OR-Tools install available for finalizer license and
+# build-authority checks, while ensuring it cannot satisfy the startup smoke.
 string(FIND "$ENV{PATH}" "${ortools_install_dir}" stage_path_index)
 if(NOT stage_path_index EQUAL -1)
   message(FATAL_ERROR "The OR-Tools staging directory remains on PATH before final smoke.")
@@ -683,10 +746,5 @@ if(NOT worker_stdout STREQUAL "")
   message(FATAL_ERROR "Installed worker wrote protocol output for empty stdin.")
 endif()
 
-file(RENAME "${staging_root}" "${final_root}")
-file(REMOVE_RECURSE "${work_root}")
-if(NOT EXISTS "${final_worker}")
-  message(FATAL_ERROR "Final native worker publication is incomplete: ${final_worker}")
-endif()
 message(STATUS
-  "Built and verified the Windows x86_64 worker at ${final_worker}. Solver manifest, license/SBOM payload, sidecar packaging, backend registration, and release readiness remain deferred.")
+  "Built and smoke-tested the Windows x86_64 staging payload at ${staging_root}; it is ready for Rust finalization and complete-directory publication. Sidecar signing, backend registration, and release readiness remain deferred.")

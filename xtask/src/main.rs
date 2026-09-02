@@ -6,6 +6,7 @@ mod protocol;
 mod protocol_generate;
 mod release;
 mod solver;
+mod solver_artifact;
 mod solver_manifest;
 mod source_contract;
 mod supply_chain;
@@ -91,6 +92,23 @@ enum SolverCommand {
     BuildNative,
     InstallFromNix,
     Smoke,
+    /// Finalize a pristine target artifact from reviewed repository and build authorities.
+    FinalizeArtifact {
+        #[arg(long)]
+        authority_root: PathBuf,
+        #[arg(long)]
+        work_root: PathBuf,
+        #[arg(long)]
+        artifact_root: PathBuf,
+        #[arg(long)]
+        target_triple: String,
+        #[arg(long)]
+        compiler_identity: String,
+        #[arg(long)]
+        compiler_version: String,
+        #[arg(long)]
+        source_date: String,
+    },
     /// Assemble canonical installed solver evidence from explicit inputs.
     AssembleManifest {
         #[arg(long)]
@@ -133,38 +151,7 @@ enum ReleaseCommand {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Solver {
-            command:
-                SolverCommand::AssembleManifest {
-                    source_contract,
-                    protocol_schema,
-                    protocol_policy,
-                    build_evidence,
-                    payload_evidence,
-                    artifact_root,
-                },
-        } => solver::assemble_manifest(
-            &source_contract,
-            &protocol_schema,
-            &protocol_policy,
-            &build_evidence,
-            &payload_evidence,
-            &artifact_root,
-        ),
-        Command::Solver {
-            command:
-                SolverCommand::ValidateManifest {
-                    source_contract,
-                    protocol_schema,
-                    protocol_policy,
-                    artifact_root,
-                },
-        } => solver::validate_manifest(
-            &source_contract,
-            &protocol_schema,
-            &protocol_policy,
-            &artifact_root,
-        ),
+        Command::Solver { command } => run_solver(command),
         command => {
             let root = repository_root()?;
             match command {
@@ -184,21 +171,9 @@ fn main() -> Result<()> {
                 Command::Architecture {
                     command: ArchitectureCommand::Verify,
                 } => architecture::verify(&root),
-                Command::Solver { command } => match command {
-                    SolverCommand::BuildNative => solver::build_native(&root),
-                    SolverCommand::InstallFromNix => unavailable_solver(
-                        "install-from-nix",
-                        "the installed solver manifest and license payload contracts exist",
-                    ),
-                    SolverCommand::Smoke => unavailable_solver(
-                        "smoke",
-                        "manifest-validated worker installation is implemented",
-                    ),
-                    SolverCommand::AssembleManifest { .. }
-                    | SolverCommand::ValidateManifest { .. } => {
-                        unreachable!("manifest commands are handled before repository lookup")
-                    }
-                },
+                Command::Solver { .. } => {
+                    unreachable!("solver commands are handled before root lookup")
+                }
                 Command::Licenses {
                     command: GenerateCommand::Generate,
                 } => supply_chain::generate_licenses(&root).map_err(anyhow::Error::from),
@@ -211,6 +186,62 @@ fn main() -> Result<()> {
                 },
             }
         }
+    }
+}
+fn run_solver(command: SolverCommand) -> Result<()> {
+    match command {
+        SolverCommand::FinalizeArtifact {
+            authority_root,
+            work_root,
+            artifact_root,
+            target_triple,
+            compiler_identity,
+            compiler_version,
+            source_date,
+        } => solver::finalize_artifact(
+            &authority_root,
+            &work_root,
+            &artifact_root,
+            &target_triple,
+            &compiler_identity,
+            &compiler_version,
+            &source_date,
+        ),
+        SolverCommand::AssembleManifest {
+            source_contract,
+            protocol_schema,
+            protocol_policy,
+            build_evidence,
+            payload_evidence,
+            artifact_root,
+        } => solver::assemble_manifest(
+            &source_contract,
+            &protocol_schema,
+            &protocol_policy,
+            &build_evidence,
+            &payload_evidence,
+            &artifact_root,
+        ),
+        SolverCommand::ValidateManifest {
+            source_contract,
+            protocol_schema,
+            protocol_policy,
+            artifact_root,
+        } => solver::validate_manifest(
+            &source_contract,
+            &protocol_schema,
+            &protocol_policy,
+            &artifact_root,
+        ),
+        SolverCommand::BuildNative => solver::build_native(&repository_root()?),
+        SolverCommand::InstallFromNix => unavailable_solver(
+            "install-from-nix",
+            "the installed solver manifest and license payload contracts exist",
+        ),
+        SolverCommand::Smoke => unavailable_solver(
+            "smoke",
+            "manifest-validated worker installation is implemented",
+        ),
     }
 }
 

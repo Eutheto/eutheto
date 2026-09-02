@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 const MAX_INPUT_BYTES: usize = 65_536;
-const MAX_INPUT_BYTES_ON_DISK: u64 = 65_536;
+const MAX_SBOM_BYTES: usize = 1_048_576;
 const MAX_DEPTH: usize = 8;
 const MAX_OBJECT_MEMBERS: usize = 128;
 const MAX_ARRAY_ENTRIES: usize = 256;
@@ -18,7 +18,7 @@ const MAX_STRING_BYTES: usize = 2_048;
 const MAX_CAPABILITIES: usize = 64;
 const MAX_CMAKE_ENTRIES: usize = 128;
 const MAX_RUNTIME_LIBRARIES: usize = 128;
-const MAX_LICENSES: usize = 256;
+const MAX_TREE_ENTRIES: usize = 256;
 const SCHEMA_VERSION: u32 = 1;
 const GENERATION_CONTRACT_VERSION: u32 = 1;
 const BACKEND_ID: &str = "ortools-cp-sat";
@@ -49,25 +49,13 @@ const PATH_TOKENS: [&str; 7] = [
     "@target-root@",
     "@toolchain-root@",
 ];
-const MEASURED_CMAKE_KEYS: [&str; 27] = [
+const ORTOOLS_CMAKE_KEYS: [&str; 13] = [
     "CMAKE_C_COMPILER",
     "CMAKE_CXX_COMPILER",
     "CMAKE_CXX_FLAGS",
-    "CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH",
-    "CMAKE_FIND_USE_PACKAGE_REGISTRY",
-    "CMAKE_FIND_USE_PACKAGE_ROOT_PATH",
-    "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY",
     "CMAKE_GENERATOR",
-    "CMAKE_INSTALL_NAME_DIR",
     "CMAKE_INSTALL_PREFIX",
-    "CMAKE_INSTALL_RPATH",
-    "CMAKE_MACOSX_RPATH",
     "CMAKE_POLICY_DEFAULT_CMP0077",
-    "CMAKE_PREFIX_PATH",
-    "EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS",
-    "EUTHETO_ORTOOLS_BUILD_TESTS",
-    "EUTHETO_ORTOOLS_DEVELOPMENT_BUILD",
-    "EUTHETO_ORTOOLS_PHASE3_CONTRACT",
     "FETCHCONTENT_FULLY_DISCONNECTED",
     "FETCHCONTENT_SOURCE_DIR_ABSL",
     "FETCHCONTENT_SOURCE_DIR_BZIP2",
@@ -75,10 +63,61 @@ const MEASURED_CMAKE_KEYS: [&str; 27] = [
     "FETCHCONTENT_SOURCE_DIR_PROTOBUF",
     "FETCHCONTENT_SOURCE_DIR_RE2",
     "FETCHCONTENT_SOURCE_DIR_ZLIB",
+];
+const WORKER_CMAKE_KEYS: [&str; 14] = [
+    "CMAKE_CXX_COMPILER",
+    "CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH",
+    "CMAKE_FIND_USE_PACKAGE_REGISTRY",
+    "CMAKE_FIND_USE_PACKAGE_ROOT_PATH",
+    "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY",
+    "CMAKE_GENERATOR",
+    "CMAKE_INSTALL_PREFIX",
+    "CMAKE_PREFIX_PATH",
+    "EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS",
+    "EUTHETO_ORTOOLS_BUILD_TESTS",
+    "EUTHETO_ORTOOLS_DEVELOPMENT_BUILD",
+    "EUTHETO_ORTOOLS_PHASE3_CONTRACT",
     "Protobuf_DIR",
     "ortools_DIR",
 ];
-const REVIEWED_SPDX_IDS: [&str; 5] = ["Apache-2.0", "BSD-3-Clause", "MIT", "Zlib", "bzip2-1.0.6"];
+const DARWIN_CMAKE_KEYS: [&str; 3] = [
+    "CMAKE_INSTALL_NAME_DIR",
+    "CMAKE_INSTALL_RPATH",
+    "CMAKE_MACOSX_RPATH",
+];
+const WINDOWS_CMAKE_KEYS: [&str; 1] = ["CMAKE_MSVC_RUNTIME_LIBRARY"];
+pub(crate) const NOTICE_PATH: &str = "licenses/NOTICE.txt";
+pub(crate) const SBOM_PATH: &str = "sbom/solver.spdx.json";
+pub(crate) const LICENSE_PROFILE: [(&str, &str); 8] = [
+    ("licenses/abseil-Apache-2.0.txt", "Apache-2.0"),
+    ("licenses/bzip2-bzip2-1.0.6.txt", "bzip2-1.0.6"),
+    ("licenses/eutheto-Apache-2.0.txt", "Apache-2.0"),
+    ("licenses/or-tools-Apache-2.0.txt", "Apache-2.0"),
+    ("licenses/protobuf-BSD-3-Clause.txt", "BSD-3-Clause"),
+    ("licenses/re2-BSD-3-Clause.txt", "BSD-3-Clause"),
+    ("licenses/utf8-range-MIT.txt", "MIT"),
+    ("licenses/zlib-Zlib.txt", "Zlib"),
+];
+const ABSEIL_VERSION: &str = "20250814.1";
+const ABSEIL_URL: &str = "https://github.com/abseil/abseil-cpp/archive/refs/tags/20250814.1.tar.gz";
+const ABSEIL_SHA256: &str = "1692f77d1739bacf3f94337188b78583cf09bab7e420d2dc6c5605a4f86785a1";
+const BZIP2_VERSION: &str = "66c46b8c9436613fd81bc5d03f63a61933a4dcc3";
+const BZIP2_URL: &str = "https://gitlab.com/bzip2/bzip2/-/archive/66c46b8c9436613fd81bc5d03f63a61933a4dcc3/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz";
+const BZIP2_SHA256: &str = "3a4cff5f9d197e9e6c6138660afa6b1f9370df0bed135bd949243f6dfc83b3e1";
+const RE2_VERSION: &str = "2025-08-12";
+const RE2_URL: &str = "https://github.com/google/re2/archive/refs/tags/2025-08-12.tar.gz";
+const RE2_SHA256: &str = "2f3bec634c3e51ea1faf0d441e0a8718b73ef758d7020175ed7e352df3f6ae12";
+const ZLIB_VERSION: &str = "1.3.1";
+const ZLIB_URL: &str = "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz";
+const ZLIB_SHA256: &str = "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c";
+const ORTOOLS_VERSION: &str = "9.15.6755";
+const ORTOOLS_URL: &str = "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz";
+const ORTOOLS_SHA256: &str = "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026";
+const PROTOBUF_SOURCE_VERSION: &str = "33.1";
+const PROTOBUF_RUNTIME_VERSION: &str = "33.1.0";
+const PROTOBUF_URL: &str =
+    "https://github.com/protocolbuffers/protobuf/releases/download/v33.1/protobuf-33.1.tar.gz";
+const PROTOBUF_SHA256: &str = "fda132cb0c86400381c0af1fe98bd0f775cb566cb247cdcc105e344e00acc30e";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AssembleOptions<'a> {
@@ -96,6 +135,26 @@ pub(crate) struct ValidateOptions<'a> {
     pub protocol_schema: &'a Path,
     pub protocol_policy: &'a Path,
     pub artifact_root: &'a Path,
+}
+
+pub(crate) fn validate_authority_inputs(
+    source_contract: &Path,
+    protocol_schema: &Path,
+    protocol_policy: &Path,
+) -> Result<()> {
+    let source_bytes = read_bounded(source_contract, "source contract")?;
+    require_canonical_json(&source_bytes, "source contract")?;
+    let source: SourceContract = parse_bounded_json(&source_bytes, "source contract")?;
+    validate_source_contract(&source)?;
+    let protocol_schema_bytes = read_bounded(protocol_schema, "protocol schema")?;
+    ensure!(
+        sha256_bytes(&protocol_schema_bytes) == source.protocol.schema_sha256,
+        "protocol schema SHA-256 does not match the approved source contract"
+    );
+    let policy_bytes = read_bounded(protocol_policy, "protocol policy")?;
+    require_canonical_json(&policy_bytes, "protocol policy")?;
+    let policy: ProtocolPolicy = parse_bounded_json(&policy_bytes, "protocol policy")?;
+    validate_protocol_policy(&policy, source.protocol.wire_version)
 }
 
 pub(crate) fn assemble(options: AssembleOptions<'_>) -> Result<String> {
@@ -133,6 +192,7 @@ pub(crate) fn assemble(options: AssembleOptions<'_>) -> Result<String> {
         &artifact_root,
     )?;
     validate_manifest_semantics(&manifest)?;
+    validate_pre_manifest_artifacts(&manifest, &artifact_root)?;
     let bytes = canonical_bytes(&manifest)?;
     ensure!(
         bytes.len() <= MAX_INPUT_BYTES,
@@ -336,8 +396,24 @@ fn validate_source_contract(source: &SourceContract) -> Result<()> {
         source.worker.identity == "eutheto-ortools-worker",
         "source contract has unexpected worker identity"
     );
-    validate_hash(&source.ortools.sha256, "OR-Tools source")?;
-    validate_hash(&source.protobuf.sha256, "protobuf source")?;
+    ensure!(
+        source.ortools.version == ORTOOLS_VERSION
+            && source.ortools.source_url == ORTOOLS_URL
+            && source.ortools.sha256 == ORTOOLS_SHA256,
+        "source contract selects an unsupported OR-Tools source"
+    );
+    ensure!(
+        source.protobuf.source_version == PROTOBUF_SOURCE_VERSION
+            && source.protobuf.protoc_version == PROTOBUF_SOURCE_VERSION
+            && source.protobuf.cpp_runtime_version == PROTOBUF_RUNTIME_VERSION
+            && source.protobuf.source_url == PROTOBUF_URL
+            && source.protobuf.sha256 == PROTOBUF_SHA256,
+        "source contract selects an unsupported protobuf source"
+    );
+    ensure!(
+        source.worker.version == "0.1.0",
+        "source contract selects an unsupported worker version"
+    );
     validate_hash(&source.protocol.schema_sha256, "protocol schema")?;
     ensure!(
         source.cmake.cache_entries.len() == 26,
@@ -348,16 +424,6 @@ fn validate_source_contract(source: &SourceContract) -> Result<()> {
         "source contract has an unexpected OR-Tools patch path"
     );
     validate_hash(&source.ortools.patch_sha256, "source-contract patch")?;
-    validate_https_url(&source.ortools.source_url, "OR-Tools source URL")?;
-    validate_resolved_version(&source.ortools.version, "OR-Tools version")?;
-    validate_https_url(&source.protobuf.source_url, "protobuf source URL")?;
-    validate_resolved_version(&source.protobuf.source_version, "protobuf source version")?;
-    validate_resolved_version(&source.protobuf.protoc_version, "protoc version")?;
-    validate_resolved_version(
-        &source.protobuf.cpp_runtime_version,
-        "protobuf C++ runtime version",
-    )?;
-    validate_resolved_version(&source.worker.version, "worker version")?;
     validate_cmake_map(&source.cmake.cache_entries, "source-contract CMake")?;
     Ok(())
 }
@@ -377,19 +443,6 @@ fn validate_approval_record(record: &str) -> Result<()> {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
         "source contract approval record must end with a 40-character lowercase Git revision"
     );
-    Ok(())
-}
-
-fn validate_https_url(value: &str, name: &str) -> Result<()> {
-    validate_nonempty(value, name)?;
-    ensure!(value.starts_with("https://"), "{name} must use HTTPS");
-    Ok(())
-}
-
-fn validate_resolved_version(value: &str, name: &str) -> Result<()> {
-    validate_nonempty(value, name)?;
-    ensure!(value.len() <= 64, "{name} is too long");
-    ensure!(value != "UNRESOLVED", "{name} is unresolved");
     Ok(())
 }
 
@@ -447,14 +500,20 @@ fn validate_build_evidence(build: &BuildEvidence, source: &SourceContract) -> Re
             .eq(CAPABILITIES),
         "build evidence capabilities do not match the reviewed capability set"
     );
-    ensure!(
-        build.cmake.ortools.len() >= 26,
-        "OR-Tools CMake map omits approved entries"
-    );
-    ensure!(
-        build.cmake.worker.len() >= 26,
-        "worker CMake map omits approved entries"
-    );
+    validate_exact_cmake_keys(
+        &build.cmake.ortools,
+        &source.cmake.cache_entries,
+        &ORTOOLS_CMAKE_KEYS,
+        &build.target_triple,
+        "OR-Tools CMake",
+    )?;
+    validate_exact_cmake_keys(
+        &build.cmake.worker,
+        &source.cmake.cache_entries,
+        &WORKER_CMAKE_KEYS,
+        &build.target_triple,
+        "worker CMake",
+    )?;
     validate_compiler(&build.compiler)?;
     validate_relative_path(&build.worker.executable_path, "worker executable path")?;
     validate_sorted_unique_paths(
@@ -463,23 +522,22 @@ fn validate_build_evidence(build: &BuildEvidence, source: &SourceContract) -> Re
         MAX_RUNTIME_LIBRARIES,
     )?;
     ensure!(
-        build.cmake.ortools.len() <= MAX_CMAKE_ENTRIES,
-        "OR-Tools CMake map exceeds {MAX_CMAKE_ENTRIES} entries"
+        build.worker.executable_path == expected_worker_path(&build.target_triple)?,
+        "worker executable path does not match the target contract"
     );
-    ensure!(
-        build.cmake.worker.len() <= MAX_CMAKE_ENTRIES,
-        "worker CMake map exceeds {MAX_CMAKE_ENTRIES} entries"
-    );
-    validate_cmake_map(&build.cmake.ortools, "OR-Tools CMake")?;
-    validate_cmake_map(&build.cmake.worker, "worker CMake")?;
-    validate_measured_cmake_extensions(
+    for path in &build.runtime_library_paths {
+        validate_runtime_library_path(path, &build.target_triple)?;
+    }
+    validate_reviewed_cmake_values(
         &build.cmake.ortools,
-        &source.cmake.cache_entries,
+        &build.target_triple,
+        CmakeScope::Ortools,
         "OR-Tools CMake",
     )?;
-    validate_measured_cmake_extensions(
+    validate_reviewed_cmake_values(
         &build.cmake.worker,
-        &source.cmake.cache_entries,
+        &build.target_triple,
+        CmakeScope::Worker,
         "worker CMake",
     )?;
     for (key, expected) in &source.cmake.cache_entries {
@@ -502,19 +560,17 @@ fn validate_payload_evidence(payload: &PayloadEvidence) -> Result<()> {
         payload.schema_version
     );
     ensure!(
-        !payload.licenses.is_empty(),
-        "license inventory must not be empty"
+        payload
+            .licenses
+            .iter()
+            .map(|license| (license.path.as_str(), license.spdx.as_str()))
+            .eq(LICENSE_PROFILE),
+        "payload license inventory does not match the exact reviewed path/SPDX profile"
     );
     ensure!(
-        payload.licenses.len() <= MAX_LICENSES,
-        "license inventory exceeds {MAX_LICENSES} entries"
+        payload.sbom_path == SBOM_PATH,
+        "payload SBOM path must be {SBOM_PATH}"
     );
-    validate_sorted_by_path(&payload.licenses, "license inventory")?;
-    for license in &payload.licenses {
-        validate_relative_path(&license.path, "license path")?;
-        validate_spdx(&license.spdx)?;
-    }
-    validate_relative_path(&payload.sbom_path, "SBOM path")?;
     Ok(())
 }
 
@@ -591,51 +647,51 @@ fn validate_manifest_semantics(manifest: &SolverManifest) -> Result<()> {
         manifest.worker.stability == STABILITY,
         "manifest stability mismatch"
     );
+    ensure!(
+        manifest.worker.executable.path == expected_worker_path(&manifest.build.target_triple)?,
+        "manifest worker executable path does not match the target contract"
+    );
     validate_relative_path(&manifest.worker.executable.path, "worker executable path")?;
     validate_hash(&manifest.worker.executable.sha256, "worker executable")?;
-    let common_cmake_entries = manifest
-        .build
-        .cmake
-        .ortools
-        .iter()
-        .filter(|(key, value)| manifest.build.cmake.worker.get(*key) == Some(*value))
-        .count();
-    ensure!(
-        common_cmake_entries >= 26,
-        "manifest CMake scopes do not share all approved entries"
-    );
+    // Exact key and value validation is repeated against source authority below.
     validate_sorted_by_path(&manifest.runtime_libraries, "runtime library inventory")?;
     ensure!(
         manifest.runtime_libraries.len() <= MAX_RUNTIME_LIBRARIES,
         "runtime library inventory is too large"
     );
     ensure!(
-        manifest.build.cmake.ortools.len() >= 26,
-        "manifest OR-Tools CMake map omits approved entries"
-    );
-    ensure!(
-        manifest.build.cmake.worker.len() >= 26,
-        "manifest worker CMake map omits approved entries"
+        manifest
+            .build
+            .cmake
+            .ortools
+            .contains_key("CMAKE_INSTALL_PREFIX")
+            && manifest
+                .build
+                .cmake
+                .worker
+                .contains_key("CMAKE_INSTALL_PREFIX"),
+        "manifest CMake maps must both include CMAKE_INSTALL_PREFIX"
     );
     for item in &manifest.runtime_libraries {
         validate_relative_path(&item.path, "runtime library path")?;
+        validate_runtime_library_path(&item.path, &manifest.build.target_triple)?;
         validate_hash(&item.sha256, "runtime library")?;
     }
-    validate_sorted_by_path(&manifest.licenses, "license inventory")?;
     ensure!(
-        manifest.licenses.len() <= MAX_LICENSES,
-        "license inventory is too large"
-    );
-    ensure!(
-        !manifest.licenses.is_empty(),
-        "license inventory must not be empty"
+        manifest
+            .licenses
+            .iter()
+            .map(|license| (license.path.as_str(), license.spdx.as_str()))
+            .eq(LICENSE_PROFILE),
+        "manifest license inventory does not match the exact reviewed path/SPDX profile"
     );
     for item in &manifest.licenses {
-        validate_relative_path(&item.path, "license path")?;
         validate_hash(&item.sha256, "license")?;
-        validate_spdx(&item.spdx)?;
     }
-    validate_relative_path(&manifest.sbom.path, "SBOM path")?;
+    ensure!(
+        manifest.sbom.path == SBOM_PATH,
+        "manifest SBOM path must be {SBOM_PATH}"
+    );
     validate_hash(&manifest.sbom.sha256, "SBOM")?;
     validate_hash(&manifest.protobuf.sha256, "protobuf source")?;
     ensure!(
@@ -714,30 +770,48 @@ fn validate_manifest_authority(
             && manifest.worker.version == source.worker.version,
         "manifest worker identity does not match the approved source contract"
     );
-    validate_measured_cmake_extensions(
+    validate_exact_cmake_keys(
         &manifest.build.cmake.ortools,
         &source.cmake.cache_entries,
+        &ORTOOLS_CMAKE_KEYS,
+        &manifest.build.target_triple,
         "manifest OR-Tools CMake",
     )?;
-    validate_measured_cmake_extensions(
+    validate_exact_cmake_keys(
         &manifest.build.cmake.worker,
         &source.cmake.cache_entries,
+        &WORKER_CMAKE_KEYS,
+        &manifest.build.target_triple,
         "manifest worker CMake",
     )?;
-    for (key, expected) in &source.cmake.cache_entries {
-        ensure!(
-            manifest.build.cmake.ortools.get(key) == Some(expected),
-            "manifest OR-Tools CMake entry {key} differs from the approved source contract"
-        );
-        ensure!(
-            manifest.build.cmake.worker.get(key) == Some(expected),
-            "manifest worker CMake entry {key} differs from the approved source contract"
-        );
-    }
+    validate_reviewed_cmake_values(
+        &manifest.build.cmake.ortools,
+        &manifest.build.target_triple,
+        CmakeScope::Ortools,
+        "manifest OR-Tools CMake",
+    )?;
+    validate_reviewed_cmake_values(
+        &manifest.build.cmake.worker,
+        &manifest.build.target_triple,
+        CmakeScope::Worker,
+        "manifest worker CMake",
+    )?;
     Ok(())
 }
 
 fn validate_artifacts(manifest: &SolverManifest, artifact_root: &Path) -> Result<()> {
+    validate_referenced_artifacts(manifest, artifact_root)?;
+    validate_exact_artifact_tree(manifest, artifact_root, true)?;
+    validate_spdx_document(manifest, artifact_root)
+}
+
+fn validate_pre_manifest_artifacts(manifest: &SolverManifest, artifact_root: &Path) -> Result<()> {
+    validate_referenced_artifacts(manifest, artifact_root)?;
+    validate_exact_artifact_tree(manifest, artifact_root, false)?;
+    validate_spdx_document(manifest, artifact_root)
+}
+
+fn validate_referenced_artifacts(manifest: &SolverManifest, artifact_root: &Path) -> Result<()> {
     let mut seen = HashSet::new();
     verify_artifact(&manifest.worker.executable, artifact_root, &mut seen)?;
     for item in &manifest.runtime_libraries {
@@ -753,7 +827,9 @@ fn validate_artifacts(manifest: &SolverManifest, artifact_root: &Path) -> Result
             &mut seen,
         )?;
     }
-    verify_artifact(&manifest.sbom, artifact_root, &mut seen)
+    verify_artifact(&manifest.sbom, artifact_root, &mut seen)?;
+    hash_artifact(NOTICE_PATH, artifact_root, &mut seen)?;
+    Ok(())
 }
 
 fn verify_artifact(item: &FileDigest, root: &Path, seen: &mut HashSet<PathBuf>) -> Result<()> {
@@ -776,8 +852,10 @@ fn hash_artifact(relative: &str, root: &Path, seen: &mut HashSet<PathBuf>) -> Re
         canonical.starts_with(root),
         "artifact path escapes the canonical artifact root: {relative}"
     );
+    let metadata = fs::metadata(&canonical)
+        .with_context(|| format!("failed to inspect artifact: {relative}"))?;
     ensure!(
-        canonical.is_file(),
+        metadata.is_file(),
         "artifact path is not a regular file: {relative}"
     );
     ensure!(
@@ -796,23 +874,10 @@ fn validate_local_symlink_components(relative: &str, root: &Path) -> Result<()> 
         candidate.push(component);
         let metadata = fs::symlink_metadata(&candidate)
             .with_context(|| format!("artifact is missing or inaccessible: {relative}"))?;
-        if metadata.file_type().is_symlink() {
-            let target = fs::read_link(&candidate)
-                .with_context(|| format!("failed to read artifact symlink: {relative}"))?;
-            ensure!(
-                target.is_relative()
-                    && target
-                        .components()
-                        .all(|part| !matches!(part, Component::Prefix(_) | Component::RootDir)),
-                "artifact symlink target must be relative: {relative}"
-            );
-            let resolved = fs::canonicalize(&candidate)
-                .with_context(|| format!("artifact symlink is invalid: {relative}"))?;
-            ensure!(
-                resolved.starts_with(root),
-                "artifact symlink escapes the canonical artifact root: {relative}"
-            );
-        }
+        ensure!(
+            !metadata.file_type().is_symlink(),
+            "artifact payload must not contain symlinks: {relative}"
+        );
     }
     Ok(())
 }
@@ -842,6 +907,430 @@ fn canonical_artifact_root(root: &Path) -> Result<PathBuf> {
     );
     Ok(canonical)
 }
+
+fn validate_exact_artifact_tree(
+    manifest: &SolverManifest,
+    root: &Path,
+    include_manifest: bool,
+) -> Result<()> {
+    let (actual_files, actual_directories) = collect_artifact_tree(root)?;
+    let mut expected_files = BTreeSet::new();
+    expected_files.insert(manifest.worker.executable.path.clone());
+    expected_files.extend(
+        manifest
+            .runtime_libraries
+            .iter()
+            .map(|item| item.path.clone()),
+    );
+    expected_files.extend(manifest.licenses.iter().map(|item| item.path.clone()));
+    expected_files.insert(NOTICE_PATH.to_owned());
+    expected_files.insert(SBOM_PATH.to_owned());
+    if include_manifest {
+        expected_files.insert("solver-manifest.json".to_owned());
+    }
+    ensure!(
+        actual_files == expected_files,
+        "artifact recursive file inventory differs from the exact manifest contract"
+    );
+
+    let mut expected_directories = BTreeSet::new();
+    for path in &expected_files {
+        let mut parent = Path::new(path).parent();
+        while let Some(directory) = parent {
+            if directory.as_os_str().is_empty() {
+                break;
+            }
+            let value = directory
+                .to_str()
+                .context("artifact directory path is not UTF-8")?
+                .replace('\\', "/");
+            expected_directories.insert(value);
+            parent = directory.parent();
+        }
+    }
+    ensure!(
+        actual_directories == expected_directories,
+        "artifact recursive directory inventory differs from the exact manifest contract"
+    );
+    Ok(())
+}
+
+fn collect_artifact_tree(root: &Path) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let mut files = BTreeSet::new();
+    let mut directories = BTreeSet::new();
+    let mut pending = vec![root.to_path_buf()];
+    let mut entries = 0usize;
+    while let Some(directory) = pending.pop() {
+        let mut children = fs::read_dir(&directory)
+            .with_context(|| format!("failed to read artifact directory {}", directory.display()))?
+            .collect::<std::io::Result<Vec<_>>>()
+            .with_context(|| {
+                format!(
+                    "failed to enumerate artifact directory {}",
+                    directory.display()
+                )
+            })?;
+        children.sort_by_key(fs::DirEntry::file_name);
+        for child in children {
+            entries = entries
+                .checked_add(1)
+                .context("artifact entry count overflow")?;
+            ensure!(
+                entries <= MAX_TREE_ENTRIES,
+                "artifact tree exceeds {MAX_TREE_ENTRIES} entries"
+            );
+            let path = child.path();
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("failed to inspect artifact entry {}", path.display()))?;
+            ensure!(
+                !metadata.file_type().is_symlink(),
+                "artifact payload must not contain symlinks: {}",
+                path.display()
+            );
+            let relative = path
+                .strip_prefix(root)
+                .context("artifact entry escaped root")?
+                .to_str()
+                .context("artifact entry path is not UTF-8")?
+                .replace('\\', "/");
+            validate_relative_path(&relative, "artifact inventory path")?;
+            if metadata.is_dir() {
+                ensure!(directories.insert(relative), "duplicate artifact directory");
+                pending.push(path);
+            } else {
+                ensure!(
+                    metadata.is_file(),
+                    "artifact contains a special file: {}",
+                    path.display()
+                );
+                ensure!(files.insert(relative), "duplicate artifact file");
+            }
+        }
+    }
+    Ok((files, directories))
+}
+
+fn validate_spdx_document(manifest: &SolverManifest, root: &Path) -> Result<()> {
+    let bytes = read_bounded_to(&root.join(SBOM_PATH), "solver SPDX SBOM", MAX_SBOM_BYTES)?;
+    require_canonical_json(&bytes, "solver SPDX SBOM")?;
+    let document: SpdxDocument = parse_bounded_json(&bytes, "solver SPDX SBOM")?;
+    ensure!(
+        document.spdx_version == "SPDX-2.3"
+            && document.data_license == "CC0-1.0"
+            && document.spdx_id == "SPDXRef-DOCUMENT"
+            && document.name == format!("eutheto-solver-{}", manifest.build.target_triple),
+        "solver SBOM document identity does not match the SPDX-2.3 contract"
+    );
+    validate_source_date(&document.creation_info.created)?;
+    ensure!(
+        document.creation_info.creators == ["Tool: eutheto-xtask-solver-finalizer".to_owned()],
+        "solver SBOM creator does not match the reviewed tool identity"
+    );
+
+    let mut expected_files = BTreeMap::new();
+    expected_files.insert(
+        manifest.worker.executable.path.clone(),
+        manifest.worker.executable.sha256.clone(),
+    );
+    expected_files.extend(
+        manifest
+            .runtime_libraries
+            .iter()
+            .map(|item| (item.path.clone(), item.sha256.clone())),
+    );
+    expected_files.extend(
+        manifest
+            .licenses
+            .iter()
+            .map(|item| (item.path.clone(), item.sha256.clone())),
+    );
+    expected_files.insert(
+        NOTICE_PATH.to_owned(),
+        sha256_file(&root.join(NOTICE_PATH))?,
+    );
+    let digest_files: Vec<(String, String)> = expected_files
+        .iter()
+        .map(|(path, digest)| (path.clone(), digest.clone()))
+        .collect();
+    let namespace_digest = pre_sbom_digest(
+        &manifest.build.target_triple,
+        &document.creation_info.created,
+        &manifest.approval.source_contract_sha256,
+        &digest_files,
+    )?;
+    ensure!(
+        document.document_namespace
+            == format!(
+                "https://eutheto.dev/spdx/solver/{}/{}",
+                manifest.build.target_triple, namespace_digest
+            ),
+        "solver SBOM namespace does not match its deterministic pre-SBOM digest"
+    );
+
+    ensure!(
+        document.files.len() == expected_files.len(),
+        "solver SBOM file inventory has the wrong size"
+    );
+    for (index, (file, (path, expected_hash))) in
+        document.files.iter().zip(expected_files.iter()).enumerate()
+    {
+        ensure!(
+            file.file_name == *path
+                && file.spdx_id == format!("SPDXRef-File-{index:04}")
+                && file.checksums
+                    == [SpdxChecksum {
+                        algorithm: "SHA256".to_owned(),
+                        checksum_value: expected_hash.clone(),
+                    }]
+                && file.copyright_text == "NOASSERTION",
+            "solver SBOM file entry does not match artifact bytes for {path}"
+        );
+        let expected_license = LICENSE_PROFILE
+            .iter()
+            .find_map(|(license_path, spdx)| (*license_path == path).then_some(*spdx))
+            .unwrap_or("NOASSERTION");
+        ensure!(
+            file.license_concluded == expected_license
+                && file.license_info_in_files == [expected_license.to_owned()]
+                && file.file_types
+                    == [
+                        if path == &manifest.worker.executable.path
+                            || manifest
+                                .runtime_libraries
+                                .iter()
+                                .any(|item| item.path == *path)
+                        {
+                            "BINARY".to_owned()
+                        } else {
+                            "TEXT".to_owned()
+                        }
+                    ],
+            "solver SBOM classification is incorrect for {path}"
+        );
+    }
+    validate_spdx_packages(&document.packages, manifest, &namespace_digest)?;
+    validate_spdx_relationships(&document.relationships, &document.files)
+}
+
+fn validate_spdx_packages(
+    packages: &[SpdxPackage],
+    manifest: &SolverManifest,
+    namespace_digest: &str,
+) -> Result<()> {
+    let package = spdx_package;
+    let expected = vec![
+        package(
+            "SPDXRef-Package-abseil",
+            "abseil-cpp",
+            ABSEIL_VERSION,
+            ABSEIL_URL,
+            ABSEIL_SHA256,
+            "Apache-2.0",
+        ),
+        package(
+            "SPDXRef-Package-bzip2",
+            "bzip2",
+            BZIP2_VERSION,
+            BZIP2_URL,
+            BZIP2_SHA256,
+            "bzip2-1.0.6",
+        ),
+        package(
+            "SPDXRef-Package-eutheto",
+            "eutheto-ortools-worker",
+            &manifest.worker.version,
+            "NOASSERTION",
+            namespace_digest,
+            "Apache-2.0",
+        ),
+        package(
+            "SPDXRef-Package-ortools",
+            "OR-Tools",
+            &manifest.backend_source.version,
+            &manifest.backend_source.source_url,
+            &manifest.backend_source.sha256,
+            "Apache-2.0",
+        ),
+        package(
+            "SPDXRef-Package-protobuf",
+            "protobuf",
+            &manifest.protobuf.source_version,
+            &manifest.protobuf.source_url,
+            &manifest.protobuf.sha256,
+            "BSD-3-Clause",
+        ),
+        package(
+            "SPDXRef-Package-re2",
+            "RE2",
+            RE2_VERSION,
+            RE2_URL,
+            RE2_SHA256,
+            "BSD-3-Clause",
+        ),
+        package(
+            "SPDXRef-Package-utf8-range",
+            "utf8_range",
+            &manifest.protobuf.source_version,
+            &manifest.protobuf.source_url,
+            &manifest.protobuf.sha256,
+            "MIT",
+        ),
+        package(
+            "SPDXRef-Package-zlib",
+            "zlib",
+            ZLIB_VERSION,
+            ZLIB_URL,
+            ZLIB_SHA256,
+            "Zlib",
+        ),
+    ];
+    ensure!(
+        packages == expected,
+        "solver SBOM package authority profile does not match reviewed sources"
+    );
+    Ok(())
+}
+fn spdx_package(
+    id: &str,
+    name: &str,
+    version: &str,
+    url: &str,
+    sha256: &str,
+    license: &str,
+) -> SpdxPackage {
+    SpdxPackage {
+        spdx_id: id.to_owned(),
+        checksums: vec![SpdxChecksum {
+            algorithm: "SHA256".to_owned(),
+            checksum_value: sha256.to_owned(),
+        }],
+        download_location: url.to_owned(),
+        files_analyzed: false,
+        license_concluded: license.to_owned(),
+        license_declared: license.to_owned(),
+        name: name.to_owned(),
+        version_info: version.to_owned(),
+    }
+}
+
+fn validate_spdx_relationships(
+    relationships: &[SpdxRelationship],
+    files: &[SpdxFile],
+) -> Result<()> {
+    let mut expected = vec![SpdxRelationship {
+        spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
+        relationship_type: "DESCRIBES".to_owned(),
+        related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
+    }];
+    for package in [
+        "abseil",
+        "bzip2",
+        "ortools",
+        "protobuf",
+        "re2",
+        "utf8-range",
+        "zlib",
+    ] {
+        expected.push(SpdxRelationship {
+            spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+            relationship_type: "STATIC_LINK".to_owned(),
+            related_spdx_element: format!("SPDXRef-Package-{package}"),
+        });
+    }
+    expected.push(SpdxRelationship {
+        spdx_element_id: "SPDXRef-Package-protobuf".to_owned(),
+        relationship_type: "CONTAINS".to_owned(),
+        related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
+    });
+    expected.extend(files.iter().map(|file| SpdxRelationship {
+        spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+        relationship_type: "CONTAINS".to_owned(),
+        related_spdx_element: file.spdx_id.clone(),
+    }));
+    ensure!(
+        relationships == expected,
+        "solver SBOM relationships do not match the reviewed static-link and file profile"
+    );
+    Ok(())
+}
+
+pub(crate) fn pre_sbom_digest(
+    target: &str,
+    source_date: &str,
+    source_contract_sha256: &str,
+    files: &[(String, String)],
+) -> Result<String> {
+    validate_source_date(source_date)?;
+    architecture_for_target(target)?;
+    validate_hash(source_contract_sha256, "source contract")?;
+    let seed = serde_json::json!({
+        "files": files,
+        "source_contract_sha256": source_contract_sha256,
+        "source_date": source_date,
+        "target": target,
+    });
+    Ok(sha256_bytes(&canonical_bytes(&seed)?))
+}
+
+pub(crate) fn validate_source_date(value: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    ensure!(
+        bytes.len() == 20
+            && bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes[10] == b'T'
+            && bytes[13] == b':'
+            && bytes[16] == b':'
+            && bytes[19] == b'Z'
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| matches!(index, 4 | 7 | 10 | 13 | 16 | 19)
+                    || byte.is_ascii_digit()),
+        "source date must be strict UTC YYYY-MM-DDTHH:MM:SSZ"
+    );
+    let number = |range: std::ops::Range<usize>| -> Result<u32> {
+        std::str::from_utf8(&bytes[range])
+            .context("source date contains non-UTF-8 bytes")?
+            .parse()
+            .context("source date contains a non-numeric component")
+    };
+    let year = number(0..4)?;
+    let month = number(5..7)?;
+    let day = number(8..10)?;
+    let hour = number(11..13)?;
+    let minute = number(14..16)?;
+    let second = number(17..19)?;
+    ensure!(
+        year >= 1970 && (1..=12).contains(&month),
+        "source date is out of range"
+    );
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    ensure!(
+        day >= 1
+            && day <= days[usize::try_from(month - 1).context("invalid source month")?]
+            && hour <= 23
+            && minute <= 59
+            && second <= 59,
+        "source date is out of range"
+    );
+    Ok(())
+}
+
 fn architecture_for_target(target: &str) -> Result<&'static str> {
     match target {
         "x86_64-unknown-linux-gnu" | "x86_64-apple-darwin" | "x86_64-pc-windows-msvc" => {
@@ -850,6 +1339,54 @@ fn architecture_for_target(target: &str) -> Result<&'static str> {
         "aarch64-apple-darwin" => Ok("aarch64"),
         _ => bail!("unsupported solver target triple: {target}"),
     }
+}
+fn expected_worker_path(target: &str) -> Result<&'static str> {
+    architecture_for_target(target)?;
+    Ok(if target == "x86_64-pc-windows-msvc" {
+        "bin/ortools-worker.exe"
+    } else {
+        "bin/ortools-worker"
+    })
+}
+
+fn validate_runtime_library_path(path: &str, target: &str) -> Result<()> {
+    let leaf = path
+        .rsplit('/')
+        .next()
+        .context("runtime library path has no leaf")?;
+    ensure!(
+        !leaf.is_empty()
+            && leaf.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-')
+            }),
+        "runtime library path has an unsafe filename"
+    );
+    let valid = match target {
+        "x86_64-pc-windows-msvc" => path.starts_with("bin/") && has_file_extension(leaf, "dll"),
+        "x86_64-unknown-linux-gnu" => {
+            path.starts_with("lib/")
+                && (has_file_extension(leaf, "so")
+                    || leaf.split_once(".so.").is_some_and(|(_, version)| {
+                        !version.is_empty()
+                            && version.split('.').all(|part| {
+                                !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+                            })
+                    }))
+        }
+        "x86_64-apple-darwin" | "aarch64-apple-darwin" => {
+            path.starts_with("lib/") && has_file_extension(leaf, "dylib")
+        }
+        _ => false,
+    };
+    ensure!(
+        valid,
+        "runtime library path does not match the target contract"
+    );
+    Ok(())
+}
+fn has_file_extension(name: &str, expected: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case(expected))
 }
 
 fn validate_capabilities(values: &[String]) -> Result<()> {
@@ -895,14 +1432,6 @@ fn validate_compiler(compiler: &Compiler) -> Result<()> {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_')
             }),
         "compiler version must be a normalized ASCII version"
-    );
-    Ok(())
-}
-
-fn validate_spdx(value: &str) -> Result<()> {
-    ensure!(
-        REVIEWED_SPDX_IDS.contains(&value),
-        "license SPDX identifier is not in the reviewed solver dependency set"
     );
     Ok(())
 }
@@ -969,55 +1498,187 @@ fn validate_cmake_map(map: &CmakeMap, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_measured_cmake_extensions(
+#[derive(Clone, Copy)]
+enum CmakeScope {
+    Ortools,
+    Worker,
+}
+
+fn validate_exact_cmake_keys(
     map: &CmakeMap,
     approved: &CmakeMap,
+    measured: &[&str],
+    target: &str,
     name: &str,
 ) -> Result<()> {
-    for (key, value) in map {
-        if approved.contains_key(key) {
-            continue;
-        }
+    validate_cmake_map(map, name)?;
+    let mut expected: BTreeSet<&str> = approved.keys().map(String::as_str).collect();
+    expected.extend(measured.iter().copied());
+    if target.ends_with("-apple-darwin") {
+        expected.extend(DARWIN_CMAKE_KEYS);
+    }
+    if target == "x86_64-pc-windows-msvc" {
+        expected.extend(WINDOWS_CMAKE_KEYS);
+    }
+    let actual: BTreeSet<&str> = map.keys().map(String::as_str).collect();
+    ensure!(
+        actual == expected,
+        "{name} keys do not match the exact reviewed target-specific set"
+    );
+    for (key, value) in approved {
         ensure!(
-            MEASURED_CMAKE_KEYS.contains(&key.as_str()),
-            "{name} contains unreviewed measured key {key}"
-        );
-        let valid = if is_cmake_path_key(key) {
-            matches!(value, CacheValue::String(_))
-        } else {
-            match key.as_str() {
-                "CMAKE_CXX_FLAGS" => matches!(
-                    value,
-                    CacheValue::String(value)
-                        if matches!(value.as_str(), "-DEIGEN_MPL2_ONLY" | "/DEIGEN_MPL2_ONLY")
-                ),
-                "CMAKE_GENERATOR" => {
-                    matches!(value, CacheValue::String(value) if value == "Ninja")
-                }
-                "CMAKE_POLICY_DEFAULT_CMP0077" => {
-                    matches!(value, CacheValue::String(value) if value == "NEW")
-                }
-                "CMAKE_MACOSX_RPATH"
-                | "EUTHETO_ORTOOLS_BUILD_TESTS"
-                | "FETCHCONTENT_FULLY_DISCONNECTED" => {
-                    matches!(value, CacheValue::Boolean(true))
-                }
-                "CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH"
-                | "CMAKE_FIND_USE_PACKAGE_REGISTRY"
-                | "CMAKE_FIND_USE_PACKAGE_ROOT_PATH"
-                | "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY"
-                | "EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS"
-                | "EUTHETO_ORTOOLS_DEVELOPMENT_BUILD" => {
-                    matches!(value, CacheValue::Boolean(false))
-                }
-                _ => false,
-            }
-        };
-        ensure!(
-            valid,
-            "{name} measured value for {key} does not match the reviewed form"
+            map.get(key) == Some(value),
+            "{name} entry {key} differs from the approved source contract"
         );
     }
+    Ok(())
+}
+
+fn validate_reviewed_cmake_values(
+    map: &CmakeMap,
+    target: &str,
+    scope: CmakeScope,
+    name: &str,
+) -> Result<()> {
+    let windows = target == "x86_64-pc-windows-msvc";
+    require_cmake_string(map, "CMAKE_GENERATOR", "Ninja", name)?;
+    require_cmake_string(
+        map,
+        "CMAKE_INSTALL_PREFIX",
+        match scope {
+            CmakeScope::Ortools => "@target-root@",
+            CmakeScope::Worker => "@artifact-root@",
+        },
+        name,
+    )?;
+    if windows {
+        require_cmake_string(map, "CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded", name)?;
+    }
+    match scope {
+        CmakeScope::Ortools => validate_ortools_cmake_values(map, windows, name)?,
+        CmakeScope::Worker => validate_worker_cmake_values(map, target, name)?,
+    }
+    if target.ends_with("-apple-darwin") {
+        require_cmake_string(map, "CMAKE_INSTALL_NAME_DIR", "@rpath", name)?;
+        require_cmake_string(map, "CMAKE_INSTALL_RPATH", "@artifact-root@/lib", name)?;
+        require_cmake_bool(map, "CMAKE_MACOSX_RPATH", true, name)?;
+    }
+    Ok(())
+}
+fn validate_ortools_cmake_values(map: &CmakeMap, windows: bool, name: &str) -> Result<()> {
+    require_tokenized_compiler(map, "CMAKE_C_COMPILER", name)?;
+    require_tokenized_compiler(map, "CMAKE_CXX_COMPILER", name)?;
+    require_cmake_string(
+        map,
+        "CMAKE_CXX_FLAGS",
+        if windows {
+            "/DEIGEN_MPL2_ONLY"
+        } else {
+            "-DEIGEN_MPL2_ONLY"
+        },
+        name,
+    )?;
+    require_cmake_string(map, "CMAKE_POLICY_DEFAULT_CMP0077", "NEW", name)?;
+    require_cmake_bool(map, "FETCHCONTENT_FULLY_DISCONNECTED", true, name)?;
+    for (key, path) in [
+        (
+            "FETCHCONTENT_SOURCE_DIR_ABSL",
+            "@source-root@/sources/abseil-cpp-20250814.1",
+        ),
+        (
+            "FETCHCONTENT_SOURCE_DIR_BZIP2",
+            "@source-root@/sources/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3",
+        ),
+        (
+            "FETCHCONTENT_SOURCE_DIR_EIGEN3",
+            "@source-root@/sources/eigen-3.4.0",
+        ),
+        (
+            "FETCHCONTENT_SOURCE_DIR_PROTOBUF",
+            "@source-root@/sources/protobuf-33.1",
+        ),
+        (
+            "FETCHCONTENT_SOURCE_DIR_RE2",
+            "@source-root@/sources/re2-2025-08-12",
+        ),
+        (
+            "FETCHCONTENT_SOURCE_DIR_ZLIB",
+            "@source-root@/sources/zlib-1.3.1",
+        ),
+    ] {
+        require_cmake_string(map, key, path, name)?;
+    }
+    Ok(())
+}
+
+fn validate_worker_cmake_values(map: &CmakeMap, target: &str, name: &str) -> Result<()> {
+    require_tokenized_compiler(map, "CMAKE_CXX_COMPILER", name)?;
+    require_cmake_string(map, "CMAKE_PREFIX_PATH", "@target-root@", name)?;
+    let library_directory = if target == "x86_64-unknown-linux-gnu" {
+        "lib64"
+    } else {
+        "lib"
+    };
+    require_cmake_string(
+        map,
+        "ortools_DIR",
+        &format!("@target-root@/{library_directory}/cmake/ortools"),
+        name,
+    )?;
+    require_cmake_string(
+        map,
+        "Protobuf_DIR",
+        &format!("@target-root@/{library_directory}/cmake/protobuf"),
+        name,
+    )?;
+    require_cmake_string(
+        map,
+        "EUTHETO_ORTOOLS_PHASE3_CONTRACT",
+        "@source-root@/workers/ortools/source-contract.json",
+        name,
+    )?;
+    for key in [
+        "CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH",
+        "CMAKE_FIND_USE_PACKAGE_REGISTRY",
+        "CMAKE_FIND_USE_PACKAGE_ROOT_PATH",
+        "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY",
+        "EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS",
+        "EUTHETO_ORTOOLS_DEVELOPMENT_BUILD",
+    ] {
+        require_cmake_bool(map, key, false, name)?;
+    }
+    require_cmake_bool(map, "EUTHETO_ORTOOLS_BUILD_TESTS", true, name)
+}
+
+fn require_cmake_string(map: &CmakeMap, key: &str, expected: &str, name: &str) -> Result<()> {
+    ensure!(
+        matches!(map.get(key), Some(CacheValue::String(value)) if value == expected),
+        "{name} entry {key} does not match the reviewed value"
+    );
+    Ok(())
+}
+
+fn require_cmake_bool(map: &CmakeMap, key: &str, expected: bool, name: &str) -> Result<()> {
+    ensure!(
+        matches!(map.get(key), Some(CacheValue::Boolean(value)) if *value == expected),
+        "{name} entry {key} does not match the reviewed Boolean value"
+    );
+    Ok(())
+}
+
+fn require_tokenized_compiler(map: &CmakeMap, key: &str, name: &str) -> Result<()> {
+    ensure!(
+        matches!(
+            map.get(key),
+            Some(CacheValue::String(value))
+                if value.strip_prefix("@toolchain-root@/").is_some_and(|leaf| {
+                    !leaf.is_empty()
+                        && !leaf.contains('/')
+                        && !leaf.chars().any(char::is_whitespace)
+                })
+        ),
+        "{name} entry {key} must be a normalized toolchain leaf path"
+    );
     Ok(())
 }
 
@@ -1148,6 +1809,10 @@ fn validate_hash(value: &str, name: &str) -> Result<()> {
 }
 
 fn read_bounded(path: &Path, name: &str) -> Result<Vec<u8>> {
+    read_bounded_to(path, name, MAX_INPUT_BYTES)
+}
+
+fn read_bounded_to(path: &Path, name: &str, max_bytes: usize) -> Result<Vec<u8>> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("failed to inspect {name} {}", path.display()))?;
     ensure!(
@@ -1155,21 +1820,22 @@ fn read_bounded(path: &Path, name: &str) -> Result<Vec<u8>> {
         "{name} is not a regular file: {}",
         path.display()
     );
+    let max_bytes_on_disk = max_bytes as u64;
     ensure!(
-        metadata.len() <= MAX_INPUT_BYTES_ON_DISK,
-        "{name} exceeds {MAX_INPUT_BYTES} bytes"
+        metadata.len() <= max_bytes_on_disk,
+        "{name} exceeds {max_bytes} bytes"
     );
     let capacity =
         usize::try_from(metadata.len()).context("input length does not fit memory size")?;
     let mut bytes = Vec::with_capacity(capacity);
     File::open(path)
         .with_context(|| format!("failed to open {name} {}", path.display()))?
-        .take(MAX_INPUT_BYTES_ON_DISK + 1)
+        .take(max_bytes_on_disk + 1)
         .read_to_end(&mut bytes)
         .with_context(|| format!("failed to read {name} {}", path.display()))?;
     ensure!(
-        bytes.len() <= MAX_INPUT_BYTES,
-        "{name} changed while reading and exceeds {MAX_INPUT_BYTES} bytes"
+        bytes.len() <= max_bytes,
+        "{name} changed while reading and exceeds {max_bytes} bytes"
     );
     Ok(bytes)
 }
@@ -1280,7 +1946,8 @@ fn require_canonical_json(bytes: &[u8], name: &str) -> Result<()> {
 }
 
 fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut bytes = serde_json::to_vec_pretty(value).context("failed to encode canonical JSON")?;
+    let value = serde_json::to_value(value).context("failed to normalize canonical JSON")?;
+    let mut bytes = serde_json::to_vec_pretty(&value).context("failed to encode canonical JSON")?;
     bytes.push(b'\n');
     Ok(bytes)
 }
@@ -1291,7 +1958,8 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 
 fn sha256_file(path: &Path) -> Result<String> {
     let mut reader = BufReader::new(
-        File::open(path).with_context(|| format!("failed to open artifact {}", path.display()))?,
+        crate::solver_artifact::open_read_no_follow(path)
+            .with_context(|| format!("failed to open artifact {}", path.display()))?,
     );
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 16 * 1024];
@@ -1345,6 +2013,88 @@ enum CacheValue {
     Boolean(bool),
     Integer(i64),
     String(String),
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpdxDocument {
+    #[serde(rename = "SPDXID")]
+    spdx_id: String,
+    #[serde(rename = "creationInfo")]
+    creation_info: SpdxCreationInfo,
+    #[serde(rename = "dataLicense")]
+    data_license: String,
+    #[serde(rename = "documentNamespace")]
+    document_namespace: String,
+    files: Vec<SpdxFile>,
+    name: String,
+    packages: Vec<SpdxPackage>,
+    relationships: Vec<SpdxRelationship>,
+    #[serde(rename = "spdxVersion")]
+    spdx_version: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpdxCreationInfo {
+    created: String,
+    creators: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpdxFile {
+    #[serde(rename = "SPDXID")]
+    spdx_id: String,
+    checksums: Vec<SpdxChecksum>,
+    #[serde(rename = "copyrightText")]
+    copyright_text: String,
+    #[serde(rename = "fileName")]
+    file_name: String,
+    #[serde(rename = "fileTypes")]
+    file_types: Vec<String>,
+    #[serde(rename = "licenseConcluded")]
+    license_concluded: String,
+    #[serde(rename = "licenseInfoInFiles")]
+    license_info_in_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpdxChecksum {
+    algorithm: String,
+    #[serde(rename = "checksumValue")]
+    checksum_value: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpdxPackage {
+    #[serde(rename = "SPDXID")]
+    spdx_id: String,
+    checksums: Vec<SpdxChecksum>,
+    #[serde(rename = "downloadLocation")]
+    download_location: String,
+    #[serde(rename = "filesAnalyzed")]
+    files_analyzed: bool,
+    #[serde(rename = "licenseConcluded")]
+    license_concluded: String,
+    #[serde(rename = "licenseDeclared")]
+    license_declared: String,
+    name: String,
+    #[serde(rename = "versionInfo")]
+    version_info: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpdxRelationship {
+    #[serde(rename = "spdxElementId")]
+    spdx_element_id: String,
+    #[serde(rename = "relationshipType")]
+    relationship_type: String,
+    #[serde(rename = "relatedSpdxElement")]
+    related_spdx_element: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1598,7 +2348,7 @@ mod tests {
     use super::*;
 
     struct Fixture {
-        temporary: TempDir,
+        _temporary: TempDir,
         artifact_root: PathBuf,
         build_evidence: PathBuf,
         payload_evidence: PathBuf,
@@ -1670,6 +2420,304 @@ mod tests {
     fn write_json(path: &Path, value: &Value) {
         fs::write(path, canonical_bytes(value).unwrap()).unwrap();
     }
+    #[allow(clippy::too_many_lines)]
+    fn measured_cmake(target: &str, scope: CmakeScope) -> CmakeMap {
+        let mut map = approved_cmake();
+        let compiler = CacheValue::String("@toolchain-root@/clang++".to_owned());
+        map.insert("CMAKE_CXX_COMPILER".to_owned(), compiler);
+        map.insert(
+            "CMAKE_GENERATOR".to_owned(),
+            CacheValue::String("Ninja".to_owned()),
+        );
+        map.insert(
+            "CMAKE_INSTALL_PREFIX".to_owned(),
+            CacheValue::String(
+                match scope {
+                    CmakeScope::Ortools => "@target-root@",
+                    CmakeScope::Worker => "@artifact-root@",
+                }
+                .to_owned(),
+            ),
+        );
+        match scope {
+            CmakeScope::Ortools => {
+                map.insert(
+                    "CMAKE_C_COMPILER".to_owned(),
+                    CacheValue::String("@toolchain-root@/clang".to_owned()),
+                );
+                map.insert(
+                    "CMAKE_CXX_FLAGS".to_owned(),
+                    CacheValue::String(
+                        if target == "x86_64-pc-windows-msvc" {
+                            "/DEIGEN_MPL2_ONLY"
+                        } else {
+                            "-DEIGEN_MPL2_ONLY"
+                        }
+                        .to_owned(),
+                    ),
+                );
+                map.insert(
+                    "CMAKE_POLICY_DEFAULT_CMP0077".to_owned(),
+                    CacheValue::String("NEW".to_owned()),
+                );
+                map.insert(
+                    "FETCHCONTENT_FULLY_DISCONNECTED".to_owned(),
+                    CacheValue::Boolean(true),
+                );
+                for (key, value) in [
+                    (
+                        "FETCHCONTENT_SOURCE_DIR_ABSL",
+                        "@source-root@/sources/abseil-cpp-20250814.1",
+                    ),
+                    (
+                        "FETCHCONTENT_SOURCE_DIR_BZIP2",
+                        "@source-root@/sources/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3",
+                    ),
+                    (
+                        "FETCHCONTENT_SOURCE_DIR_EIGEN3",
+                        "@source-root@/sources/eigen-3.4.0",
+                    ),
+                    (
+                        "FETCHCONTENT_SOURCE_DIR_PROTOBUF",
+                        "@source-root@/sources/protobuf-33.1",
+                    ),
+                    (
+                        "FETCHCONTENT_SOURCE_DIR_RE2",
+                        "@source-root@/sources/re2-2025-08-12",
+                    ),
+                    (
+                        "FETCHCONTENT_SOURCE_DIR_ZLIB",
+                        "@source-root@/sources/zlib-1.3.1",
+                    ),
+                ] {
+                    map.insert(key.to_owned(), CacheValue::String(value.to_owned()));
+                }
+            }
+            CmakeScope::Worker => {
+                for key in [
+                    "CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH",
+                    "CMAKE_FIND_USE_PACKAGE_REGISTRY",
+                    "CMAKE_FIND_USE_PACKAGE_ROOT_PATH",
+                    "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY",
+                    "EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS",
+                    "EUTHETO_ORTOOLS_DEVELOPMENT_BUILD",
+                ] {
+                    map.insert(key.to_owned(), CacheValue::Boolean(false));
+                }
+                map.insert(
+                    "EUTHETO_ORTOOLS_BUILD_TESTS".to_owned(),
+                    CacheValue::Boolean(true),
+                );
+                for (key, value) in [
+                    ("CMAKE_PREFIX_PATH", "@target-root@"),
+                    (
+                        "EUTHETO_ORTOOLS_PHASE3_CONTRACT",
+                        "@source-root@/workers/ortools/source-contract.json",
+                    ),
+                ] {
+                    map.insert(key.to_owned(), CacheValue::String(value.to_owned()));
+                }
+                let library_directory = if target == "x86_64-unknown-linux-gnu" {
+                    "lib64"
+                } else {
+                    "lib"
+                };
+                map.insert(
+                    "Protobuf_DIR".to_owned(),
+                    CacheValue::String(format!("@target-root@/{library_directory}/cmake/protobuf")),
+                );
+                map.insert(
+                    "ortools_DIR".to_owned(),
+                    CacheValue::String(format!("@target-root@/{library_directory}/cmake/ortools")),
+                );
+            }
+        }
+        if target.ends_with("-apple-darwin") {
+            map.insert(
+                "CMAKE_INSTALL_NAME_DIR".to_owned(),
+                CacheValue::String("@rpath".to_owned()),
+            );
+            map.insert(
+                "CMAKE_INSTALL_RPATH".to_owned(),
+                CacheValue::String("@artifact-root@/lib".to_owned()),
+            );
+            map.insert("CMAKE_MACOSX_RPATH".to_owned(), CacheValue::Boolean(true));
+        }
+        if target == "x86_64-pc-windows-msvc" {
+            map.insert(
+                "CMAKE_MSVC_RUNTIME_LIBRARY".to_owned(),
+                CacheValue::String("MultiThreaded".to_owned()),
+            );
+        }
+        map
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn write_spdx_fixture(
+        artifact_root: &Path,
+        target: &str,
+        executable: &str,
+        source_contract_sha256: &str,
+    ) {
+        let mut inventory = BTreeMap::new();
+        inventory.insert(
+            executable.to_owned(),
+            sha256_file(&artifact_root.join(executable)).unwrap(),
+        );
+        for (path, _) in LICENSE_PROFILE {
+            inventory.insert(
+                path.to_owned(),
+                sha256_file(&artifact_root.join(path)).unwrap(),
+            );
+        }
+        inventory.insert(
+            NOTICE_PATH.to_owned(),
+            sha256_file(&artifact_root.join(NOTICE_PATH)).unwrap(),
+        );
+        let digest_files: Vec<(String, String)> = inventory
+            .iter()
+            .map(|(path, digest)| (path.clone(), digest.clone()))
+            .collect();
+        let created = "2026-01-02T03:04:05Z";
+        let namespace_digest =
+            pre_sbom_digest(target, created, source_contract_sha256, &digest_files).unwrap();
+        let mut files = Vec::new();
+        for (index, (path, digest)) in inventory.iter().enumerate() {
+            let license = LICENSE_PROFILE
+                .iter()
+                .find_map(|(license_path, spdx)| (*license_path == path).then_some(*spdx))
+                .unwrap_or("NOASSERTION");
+            files.push(SpdxFile {
+                spdx_id: format!("SPDXRef-File-{index:04}"),
+                checksums: vec![SpdxChecksum {
+                    algorithm: "SHA256".to_owned(),
+                    checksum_value: digest.clone(),
+                }],
+                copyright_text: "NOASSERTION".to_owned(),
+                file_name: path.clone(),
+                file_types: vec![if path == executable { "BINARY" } else { "TEXT" }.to_owned()],
+                license_concluded: license.to_owned(),
+                license_info_in_files: vec![license.to_owned()],
+            });
+        }
+        let packages = vec![
+            spdx_package(
+                "SPDXRef-Package-abseil",
+                "abseil-cpp",
+                ABSEIL_VERSION,
+                ABSEIL_URL,
+                ABSEIL_SHA256,
+                "Apache-2.0",
+            ),
+            spdx_package(
+                "SPDXRef-Package-bzip2",
+                "bzip2",
+                BZIP2_VERSION,
+                BZIP2_URL,
+                BZIP2_SHA256,
+                "bzip2-1.0.6",
+            ),
+            spdx_package(
+                "SPDXRef-Package-eutheto",
+                "eutheto-ortools-worker",
+                "0.1.0",
+                "NOASSERTION",
+                &namespace_digest,
+                "Apache-2.0",
+            ),
+            spdx_package(
+                "SPDXRef-Package-ortools",
+                "OR-Tools",
+                ORTOOLS_VERSION,
+                ORTOOLS_URL,
+                ORTOOLS_SHA256,
+                "Apache-2.0",
+            ),
+            spdx_package(
+                "SPDXRef-Package-protobuf",
+                "protobuf",
+                PROTOBUF_SOURCE_VERSION,
+                PROTOBUF_URL,
+                PROTOBUF_SHA256,
+                "BSD-3-Clause",
+            ),
+            spdx_package(
+                "SPDXRef-Package-re2",
+                "RE2",
+                RE2_VERSION,
+                RE2_URL,
+                RE2_SHA256,
+                "BSD-3-Clause",
+            ),
+            spdx_package(
+                "SPDXRef-Package-utf8-range",
+                "utf8_range",
+                PROTOBUF_SOURCE_VERSION,
+                PROTOBUF_URL,
+                PROTOBUF_SHA256,
+                "MIT",
+            ),
+            spdx_package(
+                "SPDXRef-Package-zlib",
+                "zlib",
+                ZLIB_VERSION,
+                ZLIB_URL,
+                ZLIB_SHA256,
+                "Zlib",
+            ),
+        ];
+        let mut relationships = vec![SpdxRelationship {
+            spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
+            relationship_type: "DESCRIBES".to_owned(),
+            related_spdx_element: "SPDXRef-Package-eutheto".to_owned(),
+        }];
+        for package in [
+            "abseil",
+            "bzip2",
+            "ortools",
+            "protobuf",
+            "re2",
+            "utf8-range",
+            "zlib",
+        ] {
+            relationships.push(SpdxRelationship {
+                spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+                relationship_type: "STATIC_LINK".to_owned(),
+                related_spdx_element: format!("SPDXRef-Package-{package}"),
+            });
+        }
+        relationships.push(SpdxRelationship {
+            spdx_element_id: "SPDXRef-Package-protobuf".to_owned(),
+            relationship_type: "CONTAINS".to_owned(),
+            related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
+        });
+        relationships.extend(files.iter().map(|file| SpdxRelationship {
+            spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+            relationship_type: "CONTAINS".to_owned(),
+            related_spdx_element: file.spdx_id.clone(),
+        }));
+        let document = SpdxDocument {
+            spdx_id: "SPDXRef-DOCUMENT".to_owned(),
+            creation_info: SpdxCreationInfo {
+                created: created.to_owned(),
+                creators: vec!["Tool: eutheto-xtask-solver-finalizer".to_owned()],
+            },
+            data_license: "CC0-1.0".to_owned(),
+            document_namespace: format!(
+                "https://eutheto.dev/spdx/solver/{target}/{namespace_digest}"
+            ),
+            files,
+            name: format!("eutheto-solver-{target}"),
+            packages,
+            relationships,
+            spdx_version: "SPDX-2.3".to_owned(),
+        };
+        fs::write(
+            artifact_root.join(SBOM_PATH),
+            canonical_bytes(&document).unwrap(),
+        )
+        .unwrap();
+    }
 
     #[allow(clippy::too_many_lines)]
     fn fixture(target: &str, architecture: &str) -> Fixture {
@@ -1679,19 +2727,16 @@ mod tests {
         fs::create_dir_all(artifact_root.join("bin")).unwrap();
         fs::create_dir_all(artifact_root.join("licenses")).unwrap();
         fs::create_dir_all(artifact_root.join("sbom")).unwrap();
-
         let executable = if target == "x86_64-pc-windows-msvc" {
             "bin/ortools-worker.exe"
         } else {
             "bin/ortools-worker"
         };
         fs::write(artifact_root.join(executable), b"worker-bytes").unwrap();
-        fs::write(artifact_root.join("licenses/NOTICE.txt"), b"notice").unwrap();
-        fs::write(
-            artifact_root.join("sbom/worker.spdx.json"),
-            b"{\"spdx\":\"fixture\"}\n",
-        )
-        .unwrap();
+        fs::write(artifact_root.join(NOTICE_PATH), b"notice").unwrap();
+        for (path, _) in LICENSE_PROFILE {
+            fs::write(artifact_root.join(path), path.as_bytes()).unwrap();
+        }
 
         let protocol_schema = root.join("solver-worker.proto");
         fs::write(
@@ -1700,7 +2745,6 @@ mod tests {
         )
         .unwrap();
         let protocol_hash = sha256_file(&protocol_schema).unwrap();
-
         let source_contract = root.join("source-contract.json");
         write_json(
             &source_contract,
@@ -1710,35 +2754,26 @@ mod tests {
                     "record": "docs/roadmap/assumptions.md@0123456789abcdef0123456789abcdef01234567",
                     "status": "approved"
                 },
-                "cmake": {
-                    "cache_entries": approved_cmake()
-                },
+                "cmake": {"cache_entries": approved_cmake()},
                 "ortools": {
                     "patch_path": "workers/ortools/patches/9.15-candidate-fixes.patch",
                     "patch_sha256": "1".repeat(64),
-                    "sha256": "2".repeat(64),
-                    "source_url": "https://example.invalid/ortools.tar.gz",
-                    "version": "9.15.6755"
+                    "sha256": ORTOOLS_SHA256,
+                    "source_url": ORTOOLS_URL,
+                    "version": ORTOOLS_VERSION
                 },
                 "protobuf": {
-                    "cpp_runtime_version": "33.1.0",
-                    "protoc_version": "33.1",
-                    "sha256": "3".repeat(64),
-                    "source_url": "https://example.invalid/protobuf.tar.gz",
-                    "source_version": "33.1"
+                    "cpp_runtime_version": PROTOBUF_RUNTIME_VERSION,
+                    "protoc_version": PROTOBUF_SOURCE_VERSION,
+                    "sha256": PROTOBUF_SHA256,
+                    "source_url": PROTOBUF_URL,
+                    "source_version": PROTOBUF_SOURCE_VERSION
                 },
-                "protocol": {
-                    "schema_sha256": protocol_hash,
-                    "wire_version": 1
-                },
+                "protocol": {"schema_sha256": protocol_hash, "wire_version": 1},
                 "schema_version": 1,
-                "worker": {
-                    "identity": "eutheto-ortools-worker",
-                    "version": "0.1.0"
-                }
+                "worker": {"identity": "eutheto-ortools-worker", "version": "0.1.0"}
             }),
         );
-
         let protocol_policy = root.join("protocol-policy.json");
         write_json(
             &protocol_policy,
@@ -1751,26 +2786,19 @@ mod tests {
                 "limits": {},
                 "package": "eutheto.worker.v1",
                 "protocol": "eutheto.solver-worker",
-                "version": {
-                    "major": 1,
-                    "minor": 1
-                }
+                "version": {"major": 1, "minor": 1}
             }),
         );
-
         let build_evidence = root.join("build-evidence.json");
         write_json(
             &build_evidence,
             &json!({
                 "architecture": architecture,
                 "cmake": {
-                    "ortools": approved_cmake(),
-                    "worker": approved_cmake()
+                    "ortools": measured_cmake(target, CmakeScope::Ortools),
+                    "worker": measured_cmake(target, CmakeScope::Worker)
                 },
-                "compiler": {
-                    "identity": "clang",
-                    "version": "1.0"
-                },
+                "compiler": {"identity": "clang", "version": "1.0"},
                 "linkage": "static-ortools",
                 "runtime_library_paths": [],
                 "schema_version": 1,
@@ -1783,24 +2811,26 @@ mod tests {
                 }
             }),
         );
-
         let payload_evidence = root.join("payload-evidence.json");
         write_json(
             &payload_evidence,
             &json!({
-                "licenses": [
-                    {
-                        "path": "licenses/NOTICE.txt",
-                        "spdx": "Apache-2.0"
-                    }
-                ],
-                "sbom_path": "sbom/worker.spdx.json",
+                "licenses": LICENSE_PROFILE
+                    .iter()
+                    .map(|(path, spdx)| json!({"path": path, "spdx": spdx}))
+                    .collect::<Vec<_>>(),
+                "sbom_path": SBOM_PATH,
                 "schema_version": 1
             }),
         );
-
+        write_spdx_fixture(
+            &artifact_root,
+            target,
+            executable,
+            &sha256_file(&source_contract).unwrap(),
+        );
         Fixture {
-            temporary,
+            _temporary: temporary,
             artifact_root,
             build_evidence,
             payload_evidence,
@@ -2058,14 +3088,11 @@ mod tests {
 
         let mut build: BuildEvidence =
             parse_bounded_json(&fs::read(&fixture.build_evidence).unwrap(), "build").unwrap();
-        build.cmake.ortools.insert(
-            "CMAKE_CXX_FLAGS".to_owned(),
-            CacheValue::String("/DEIGEN_MPL2_ONLY".to_owned()),
-        );
-        build.cmake.ortools.insert(
-            "CMAKE_GENERATOR".to_owned(),
-            CacheValue::String("Ninja".to_owned()),
-        );
+        build.cmake.worker.remove("CMAKE_INSTALL_PREFIX");
+        assert!(validate_build_evidence(&build, &source).is_err());
+
+        let build: BuildEvidence =
+            parse_bounded_json(&fs::read(&fixture.build_evidence).unwrap(), "build").unwrap();
         assert!(validate_build_evidence(&build, &source).is_ok());
     }
 
@@ -2111,7 +3138,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn allows_contained_symlinks_and_rejects_escapes_or_aliases() {
+    fn rejects_all_payload_symlinks() {
         use std::os::unix::fs::symlink;
 
         let fixture = fixture("x86_64-unknown-linux-gnu", "x86_64");
@@ -2121,23 +3148,8 @@ mod tests {
         )
         .unwrap();
         let root = canonical_artifact_root(&fixture.artifact_root).unwrap();
-        hash_artifact("bin/relative-alias", &root, &mut HashSet::new()).unwrap();
-
-        let mut seen = HashSet::new();
-        hash_artifact("bin/ortools-worker", &root, &mut seen).unwrap();
-        assert!(hash_artifact("bin/relative-alias", &root, &mut seen).is_err());
-
-        let outside = fixture.temporary.path().join("outside");
-        fs::write(&outside, b"outside").unwrap();
-        symlink("../../outside", fixture.artifact_root.join("bin/escape")).unwrap();
-        assert!(hash_artifact("bin/escape", &root, &mut HashSet::new()).is_err());
-
-        symlink(
-            fixture.artifact_root.join("bin/ortools-worker"),
-            fixture.artifact_root.join("bin/absolute-alias"),
-        )
-        .unwrap();
-        assert!(hash_artifact("bin/absolute-alias", &root, &mut HashSet::new()).is_err());
+        assert!(hash_artifact("bin/relative-alias", &root, &mut HashSet::new()).is_err());
+        assert!(validate(fixture.validation_options()).is_err());
     }
 
     #[test]
@@ -2157,8 +3169,6 @@ mod tests {
             schema_version: 1,
         };
         assert!(validate_payload_evidence(&unsorted).is_err());
-        assert!(validate_spdx("Apache-2.0").is_ok());
-        assert!(validate_spdx("AKIAIOSFODNN7EXAMPLE").is_err());
 
         let duplicate = vec!["a".to_owned(), "a".to_owned()];
         assert!(validate_sorted_unique_strings(&duplicate, "inventory").is_err());
