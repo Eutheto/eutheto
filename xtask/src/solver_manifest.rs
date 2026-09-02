@@ -528,6 +528,10 @@ fn validate_build_evidence(build: &BuildEvidence, source: &SourceContract) -> Re
     for path in &build.runtime_library_paths {
         validate_runtime_library_path(path, &build.target_triple)?;
     }
+    validate_msvc_runtime_closure(
+        build.runtime_library_paths.iter().map(String::as_str),
+        &build.target_triple,
+    )?;
     validate_reviewed_cmake_values(
         &build.cmake.ortools,
         &build.target_triple,
@@ -677,6 +681,13 @@ fn validate_manifest_semantics(manifest: &SolverManifest) -> Result<()> {
         validate_runtime_library_path(&item.path, &manifest.build.target_triple)?;
         validate_hash(&item.sha256, "runtime library")?;
     }
+    validate_msvc_runtime_closure(
+        manifest
+            .runtime_libraries
+            .iter()
+            .map(|item| item.path.as_str()),
+        &manifest.build.target_triple,
+    )?;
     ensure!(
         manifest
             .licenses
@@ -1430,6 +1441,27 @@ fn validate_runtime_library_path(path: &str, target: &str) -> Result<()> {
     );
     Ok(())
 }
+fn validate_msvc_runtime_closure<'a>(
+    paths: impl IntoIterator<Item = &'a str>,
+    target: &str,
+) -> Result<()> {
+    if target != "x86_64-pc-windows-msvc" {
+        return Ok(());
+    }
+    let mut has_msvcp = false;
+    let mut has_vcruntime = false;
+    for path in paths {
+        let file_name = path.rsplit('/').next().unwrap_or_default();
+        has_msvcp |= file_name.to_ascii_lowercase().starts_with("msvcp");
+        has_vcruntime |= file_name.to_ascii_lowercase().starts_with("vcruntime");
+    }
+    ensure!(
+        has_msvcp && has_vcruntime,
+        "Windows MultiThreadedDLL artifacts must bundle the imported MSVC C++ runtime closure"
+    );
+    Ok(())
+}
+
 fn has_file_extension(name: &str, expected: &str) -> bool {
     name.rsplit_once('.')
         .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case(expected))
@@ -2604,6 +2636,7 @@ mod tests {
         artifact_root: &Path,
         target: &str,
         executable: &str,
+        runtime_paths: &[&str],
         source_contract_sha256: &str,
     ) {
         let mut inventory = BTreeMap::new();
@@ -2611,6 +2644,12 @@ mod tests {
             executable.to_owned(),
             sha256_file(&artifact_root.join(executable)).unwrap(),
         );
+        for path in runtime_paths {
+            inventory.insert(
+                (*path).to_owned(),
+                sha256_file(&artifact_root.join(path)).unwrap(),
+            );
+        }
         for (path, _) in LICENSE_PROFILE {
             inventory.insert(
                 path.to_owned(),
@@ -2642,7 +2681,14 @@ mod tests {
                 }],
                 copyright_text: "NOASSERTION".to_owned(),
                 file_name: path.clone(),
-                file_types: vec![if path == executable { "BINARY" } else { "TEXT" }.to_owned()],
+                file_types: vec![
+                    if path == executable || runtime_paths.contains(&path.as_str()) {
+                        "BINARY"
+                    } else {
+                        "TEXT"
+                    }
+                    .to_owned(),
+                ],
                 license_concluded: license.to_owned(),
                 license_info_in_files: vec![license.to_owned()],
             });
@@ -2803,6 +2849,14 @@ mod tests {
         for (path, _) in LICENSE_PROFILE {
             fs::write(artifact_root.join(path), path.as_bytes()).unwrap();
         }
+        let runtime_paths = if target == "x86_64-pc-windows-msvc" {
+            vec!["bin/msvcp140.dll", "bin/vcruntime140.dll"]
+        } else {
+            Vec::new()
+        };
+        for path in &runtime_paths {
+            fs::write(artifact_root.join(path), path.as_bytes()).unwrap();
+        }
 
         let protocol_schema = root.join("solver-worker.proto");
         fs::write(
@@ -2866,7 +2920,7 @@ mod tests {
                 },
                 "compiler": {"identity": "clang", "version": "1.0"},
                 "linkage": "static-ortools",
-                "runtime_library_paths": [],
+                "runtime_library_paths": runtime_paths,
                 "schema_version": 1,
                 "target_triple": target,
                 "worker": {
@@ -2893,6 +2947,7 @@ mod tests {
             &artifact_root,
             target,
             executable,
+            &runtime_paths,
             &sha256_file(&source_contract).unwrap(),
         );
         Fixture {
