@@ -10,6 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+eutheto-planning-ir = { path = "../eutheto-planning-ir" }
 eutheto-protocol = { path = "../eutheto-protocol" }
 eutheto-types = { path = "../eutheto-types" }
 prost = "=0.14.4"

@@ -1,11 +1,18 @@
 #![forbid(unsafe_code)]
 
 mod status;
+mod translation;
+
+#[allow(clippy::all, clippy::pedantic)]
+mod cp_sat {
+    include!("generated/operations_research.sat.rs");
+}
 
 pub use status::{
     AdapterDefectKind, CandidateProofClaim, CandidateStopCause, NormalizedWorkerTerminal,
     WorkerFailureKind, WorkerLimitKind, WorkerUnavailableKind, normalize_terminal,
 };
+pub use translation::{VariableTranslation, VariableTranslationError, translate_variable_domains};
 
 use std::collections::VecDeque;
 use std::fmt;

@@ -1389,7 +1389,9 @@ fn compare_generated_protocol_outputs(
 ) -> Result<()> {
     let mut drifted = Vec::new();
     for (relative, bytes) in expected.iter().filter(|(path, _)| {
-        path.starts_with("protocol/") || path == crate::protocol_generate::RUST_BINDING_PATH
+        path.starts_with("protocol/")
+            || path == crate::protocol_generate::RUST_BINDING_PATH
+            || path == crate::protocol_generate::ORTOOLS_RUST_BINDING_PATH
     }) {
         match fs::read(repo_root.join(relative)) {
             Ok(actual) if actual == *bytes => {}
