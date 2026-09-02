@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use eutheto_domain_ir::OptimizationDirection;
 use eutheto_planning_ir::{
-    Assumption, BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId,
+    Assumption, BoolVariableId, Capability, ComparisonOp, Constraint, IntDomain, IntVariableId,
     IntervalVariableId, LexicographicStrategy, LinearComparison, Literal, ObjectiveLevelId,
     ObjectivePlan, PlanningConstraintId, PlanningIrLimitsV1, PlanningProblem, ProjectionExpression,
     ProjectionId, ProvenanceId, ProvenanceRecord, SolutionProjection, ValidationError, Variable,
-    lexicographic_strategy, validate,
+    feature_usage, lexicographic_strategy, validate,
 };
 use eutheto_protocol::wire::ProjectionRequest as WorkerProjectionRequest;
 use prost::Message;
@@ -214,8 +214,11 @@ pub enum TranslationError {
     /// Validated planning IR referenced an integer absent from the retained index map.
     #[error("validated planning IR referenced an unindexed integer variable")]
     MissingIntegerIndex,
-    /// This incremental translator does not yet encode this constraint primitive.
-    #[error("the planning constraint is not supported by the current CP-SAT translator")]
+    /// A validated model requires capabilities outside this adapter's exact translation subset.
+    #[error("planning IR requires unsupported OR-Tools capabilities: {0:?}")]
+    UnsupportedCapabilities(Vec<Capability>),
+    /// Defensive failure if capability preflight and constraint translation diverge.
+    #[error("a preflight-approved planning constraint has no CP-SAT translation")]
     UnsupportedConstraint,
     /// Cardinality bounds and constant offsets must fit CP-SAT's signed integer domain.
     #[error("the cardinality constraint exceeds CP-SAT's signed 64-bit domain")]
@@ -226,12 +229,43 @@ pub enum TranslationError {
     /// This single-model adapter cannot execute exact lexicographic multipass solving.
     #[error("the objective requires unsupported multipass lexicographic solving")]
     UnsupportedMultipassObjective,
-    /// Assumptions are translated in a later stage.
-    #[error("assumptions are not supported by the current CP-SAT translator")]
-    UnsupportedAssumption,
+
     /// A worker-local candidate projection identifier could not fit the protocol field.
     #[error("the candidate projection index exceeds the unsigned 64-bit protocol range")]
     ProjectionIndexOverflow,
+}
+
+fn supports_capability(capability: Capability) -> bool {
+    matches!(
+        capability,
+        Capability::BoolOr
+            | Capability::BoolAnd
+            | Capability::Implication
+            | Capability::Equivalence
+            | Capability::AtMostOne
+            | Capability::ExactlyOne
+            | Capability::CardinalityRange
+            | Capability::LinearComparison
+            | Capability::ObjectivePenalty
+            | Capability::ObjectiveReward
+            | Capability::BooleanProjection
+            | Capability::IntegerProjection
+            | Capability::IntervalProjection
+            | Capability::AbsentProjection
+    )
+}
+
+fn reject_unsupported_capabilities(problem: &PlanningProblem) -> Result<(), TranslationError> {
+    let unsupported = feature_usage(problem)
+        .required_capabilities()
+        .into_iter()
+        .filter(|capability| !supports_capability(*capability))
+        .collect::<Vec<_>>();
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(TranslationError::UnsupportedCapabilities(unsupported))
+    }
 }
 
 /// Translates validated Boolean and integer domains into CP-SAT scalar declarations.
@@ -338,15 +372,13 @@ pub fn translate_supported_model(
     {
         return Err(TranslationError::UnsupportedIntervalVariable);
     }
+    reject_unsupported_capabilities(problem)?;
     let objective_weights = match lexicographic_strategy(&problem.objectives) {
         LexicographicStrategy::ExactScalarization { weights } => weights,
         LexicographicStrategy::Multipass => {
             return Err(TranslationError::UnsupportedMultipassObjective);
         }
     };
-    if !problem.assumptions.is_empty() {
-        return Err(TranslationError::UnsupportedAssumption);
-    }
 
     let needs_constant_one = problem.constraints.iter().any(|record| {
         matches!(
@@ -910,11 +942,12 @@ mod tests {
         ScoreCategoryId,
     };
     use eutheto_planning_ir::{
-        BoolVariable, Capability, CompilerId, ConstraintRecord, InclusiveRange, IntVariable,
-        IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm, ObjectiveLevel,
-        ObjectiveLevelId, ObjectivePlan, ObjectiveTerm, ObjectiveTermId, ObjectiveTermKind,
-        PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningConstraintId,
-        PlanningMetadata, ProvenanceId, ProvenanceRecord, ProvenanceSourceKind,
+        AssumptionId, BoolVariable, Capability, CompilerId, ConstraintRecord, InclusiveRange,
+        IntVariable, IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm,
+        ObjectiveLevel, ObjectiveLevelId, ObjectivePlan, ObjectiveTerm, ObjectiveTermId,
+        ObjectiveTermKind, PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION,
+        PlanningConstraintId, PlanningMetadata, ProvenanceId, ProvenanceRecord,
+        ProvenanceSourceKind,
     };
     use eutheto_types::{PackId, ScenarioId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -1951,6 +1984,38 @@ mod tests {
     }
 
     #[test]
+    fn interval_variables_are_rejected_during_translation_preflight() -> Result<(), Box<dyn Error>>
+    {
+        let problem = planning_problem()?;
+
+        assert!(matches!(
+            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+            Err(TranslationError::UnsupportedIntervalVariable)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn assumptions_are_reported_as_unsupported_during_preflight() -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        problem.assumptions.push(Assumption {
+            id: AssumptionId::new("translation.assumption")?,
+            literal: Literal::positive(BoolVariableId::new("translation.a_bool")?),
+            provenance: ProvenanceId::new("translation.variable")?,
+        });
+        problem
+            .declared_capabilities
+            .insert(Capability::Assumptions);
+
+        assert!(matches!(
+            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+            Err(TranslationError::UnsupportedCapabilities(capabilities))
+                if capabilities == vec![Capability::Assumptions]
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn unsupported_constraint_semantics_are_rejected_not_omitted() -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
         problem.constraints.push(constraint_record(
@@ -1964,7 +2029,8 @@ mod tests {
 
         assert!(matches!(
             translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
-            Err(TranslationError::UnsupportedConstraint)
+            Err(TranslationError::UnsupportedCapabilities(capabilities))
+                if capabilities == vec![Capability::AllDifferent]
         ));
         Ok(())
     }
