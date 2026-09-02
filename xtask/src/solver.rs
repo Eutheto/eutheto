@@ -316,9 +316,10 @@ fn read_compiler_version(path: &Path) -> Result<String> {
             path.display()
         )
     })?;
-    let value = std::str::from_utf8(&bytes)
-        .context("compiler version authority is not UTF-8")?
-        .strip_suffix('\n')
+    let text = std::str::from_utf8(&bytes).context("compiler version authority is not UTF-8")?;
+    let value = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
         .context("compiler version authority must end with one newline")?;
     ensure!(
         !value.is_empty()
@@ -563,6 +564,8 @@ mod tests {
         let version = root.path().join("compiler-version.txt");
         fs::write(&version, b"19.44.35217.0\n").unwrap();
         assert_eq!(read_compiler_version(&version).unwrap(), "19.44.35217.0");
+        fs::write(&version, b"19.51.36256.0\r\n").unwrap();
+        assert_eq!(read_compiler_version(&version).unwrap(), "19.51.36256.0");
 
         fs::write(&version, b"19.44\nextra\n").unwrap();
         assert!(read_compiler_version(&version).is_err());
