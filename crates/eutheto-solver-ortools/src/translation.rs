@@ -102,9 +102,6 @@ pub enum TranslationError {
     /// OR-Tools rejects integer domains or conservative linear sums outside its safe range.
     #[error("the translated integer expression exceeds OR-Tools' native safe range")]
     NativeIntegerOverflow,
-    /// Common constraint enforcement is translated in a later stage.
-    #[error("constraint enforcement is not supported by the current CP-SAT translator")]
-    UnsupportedEnforcement,
     /// Objectives are translated in a later stage.
     #[error("objectives are not supported by the current CP-SAT translator")]
     UnsupportedObjective,
@@ -194,13 +191,14 @@ fn translate_variable_domains_validated(
 
 /// Translates every currently supported planning primitive into a complete CP-SAT model.
 ///
-/// At this stage the accepted model surface is Boolean and integer scalar variables plus
-/// unenforced Boolean clauses, conjunctions, implications, equivalences, one-of constraints,
-/// cardinality ranges, and integer linear comparisons. Unsupported primitives are rejected rather
-/// than omitted. Positive literals use their scalar variable index; negative literals use
-/// CP-SAT's exact `-index - 1` encoding. Empty clauses and exactly-one constraints remain empty
-/// and therefore false; empty conjunctions, at-most-one constraints, and the sole valid empty
-/// cardinality range `0..=0` remain true.
+/// At this stage the accepted model surface is Boolean and integer scalar variables plus Boolean
+/// clauses, conjunctions, implications, equivalences, one-of constraints, cardinality ranges, and
+/// integer linear comparisons. Unsupported primitives are rejected rather than omitted. Positive
+/// literals use their scalar variable index; negative literals use CP-SAT's exact `-index - 1`
+/// encoding. Common enforcement literals are copied onto every native constraint generated for
+/// their planning record. Empty clauses and exactly-one constraints remain empty and therefore
+/// false; empty conjunctions, at-most-one constraints, and the sole valid empty cardinality range
+/// `0..=0` remain true.
 /// # Errors
 ///
 /// Returns a validation error for invalid planning IR and an explicit unsupported-feature error
@@ -256,9 +254,8 @@ fn translate_constraints(
 ) -> Result<(), TranslationError> {
     model.constraints.reserve(problem.constraints.len());
     for record in &problem.constraints {
-        if !record.enforcement.is_empty() {
-            return Err(TranslationError::UnsupportedEnforcement);
-        }
+        let enforcement = translate_literals(&record.enforcement, boolean_indices)?;
+        let first_generated = model.constraints.len();
         match &record.body {
             Constraint::BoolOr { literals } => {
                 model.constraints.push(boolean_constraint(
@@ -296,16 +293,34 @@ fn translate_constraints(
                 ));
             }
             Constraint::AtMostOne { literals } => {
-                model.constraints.push(boolean_constraint(
-                    constraint_proto::Constraint::AtMostOne,
-                    translate_literals(literals, boolean_indices)?,
-                ));
+                if enforcement.is_empty() {
+                    model.constraints.push(boolean_constraint(
+                        constraint_proto::Constraint::AtMostOne,
+                        translate_literals(literals, boolean_indices)?,
+                    ));
+                } else {
+                    model.constraints.push(cardinality_constraint(
+                        literals,
+                        0,
+                        1,
+                        boolean_indices,
+                    )?);
+                }
             }
             Constraint::ExactlyOne { literals } => {
-                model.constraints.push(boolean_constraint(
-                    constraint_proto::Constraint::ExactlyOne,
-                    translate_literals(literals, boolean_indices)?,
-                ));
+                if enforcement.is_empty() {
+                    model.constraints.push(boolean_constraint(
+                        constraint_proto::Constraint::ExactlyOne,
+                        translate_literals(literals, boolean_indices)?,
+                    ));
+                } else {
+                    model.constraints.push(cardinality_constraint(
+                        literals,
+                        1,
+                        1,
+                        boolean_indices,
+                    )?);
+                }
             }
             Constraint::CardinalityRange { literals, min, max } => {
                 model.constraints.push(cardinality_constraint(
@@ -324,6 +339,13 @@ fn translate_constraints(
                 )?);
             }
             _ => return Err(TranslationError::UnsupportedConstraint),
+        }
+        let generated = &mut model.constraints[first_generated..];
+        if let Some((last, prior)) = generated.split_last_mut() {
+            for constraint in prior {
+                constraint.enforcement_literal.clone_from(&enforcement);
+            }
+            last.enforcement_literal = enforcement;
         }
     }
     Ok(())
@@ -1103,20 +1125,68 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_enforcement_is_rejected_not_omitted() -> Result<(), Box<dyn Error>> {
+    fn enforcement_literals_apply_to_every_generated_native_constraint()
+    -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
         let bool_a = BoolVariableId::new("translation.a_bool")?;
-        problem.constraints.push(constraint_record(
-            "constraint.enforced",
-            Constraint::bool_or(Vec::new()),
-            vec![Literal::positive(bool_a)],
-        )?);
-        problem.declared_capabilities.insert(Capability::BoolOr);
+        let bool_z = BoolVariableId::new("translation.z_bool")?;
+        problem.constraints = vec![
+            constraint_record(
+                "constraint.a_enforced_clause",
+                Constraint::bool_or(vec![Literal::positive(bool_z.clone())]),
+                vec![
+                    Literal::positive(bool_a.clone()),
+                    Literal::negative(bool_z.clone()),
+                ],
+            )?,
+            constraint_record(
+                "constraint.b_enforced_equivalence",
+                Constraint::Equivalence {
+                    left: Literal::positive(bool_a.clone()),
+                    right: Literal::positive(bool_z.clone()),
+                },
+                vec![Literal::negative(bool_a.clone())],
+            )?,
+            constraint_record(
+                "constraint.c_enforced_at_most",
+                Constraint::at_most_one(vec![
+                    Literal::positive(bool_a.clone()),
+                    Literal::positive(bool_z.clone()),
+                ]),
+                vec![Literal::positive(bool_z.clone())],
+            )?,
+            constraint_record(
+                "constraint.d_enforced_exactly",
+                Constraint::exactly_one(vec![
+                    Literal::positive(bool_a),
+                    Literal::positive(bool_z.clone()),
+                ]),
+                vec![Literal::negative(bool_z)],
+            )?,
+        ];
+        problem.declared_capabilities.extend([
+            Capability::BoolOr,
+            Capability::Equivalence,
+            Capability::AtMostOne,
+            Capability::ExactlyOne,
+        ]);
 
-        assert!(matches!(
-            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
-            Err(TranslationError::UnsupportedEnforcement)
-        ));
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        let enforcement: Vec<_> = model
+            .constraints
+            .iter()
+            .map(|constraint| constraint.enforcement_literal.as_slice())
+            .collect();
+
+        assert_eq!(
+            enforcement,
+            [&[0, -5][..], &[-1][..], &[-1][..], &[4][..], &[-5][..],]
+        );
+        assert!(model.constraints[3..].iter().all(|constraint| matches!(
+            constraint.constraint,
+            Some(constraint_proto::Constraint::Linear(_))
+        )));
         Ok(())
     }
 }
