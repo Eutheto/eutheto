@@ -13,9 +13,14 @@ const NATIVE_WORKER: &str = ".cache/ortools-native/windows-x86_64/current/bin/or
 pub(crate) fn build_native(repo_root: &Path) -> Result<()> {
     require_native_target(env::consts::OS, env::consts::ARCH)?;
 
-    let repository = repo_root
-        .canonicalize()
-        .context("failed to resolve the repository root for the native worker build")?;
+    ensure!(
+        repo_root.is_absolute(),
+        "native worker repository root must be absolute: {}",
+        repo_root.display()
+    );
+    // CARGO_MANIFEST_DIR is already absolute. Avoid canonicalize on Windows:
+    // it emits a verbatim `\\?\` path that external Git does not accept.
+    let repository = repo_root.to_path_buf();
     let previous_result = repository.join(NATIVE_CURRENT);
     if previous_result.exists() {
         fs::remove_dir_all(&previous_result).with_context(|| {
