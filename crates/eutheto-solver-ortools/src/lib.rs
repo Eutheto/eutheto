@@ -12,7 +12,10 @@ pub use status::{
     AdapterDefectKind, CandidateProofClaim, CandidateStopCause, NormalizedWorkerTerminal,
     WorkerFailureKind, WorkerLimitKind, WorkerUnavailableKind, normalize_terminal,
 };
-pub use translation::{VariableTranslation, VariableTranslationError, translate_variable_domains};
+pub use translation::{
+    TranslatedCpSatModel, TranslationError, VariableTranslation, translate_supported_model,
+    translate_variable_domains,
+};
 
 use std::collections::VecDeque;
 use std::fmt;
