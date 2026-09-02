@@ -174,10 +174,11 @@ fn translate_variable_domains_validated(
 /// Translates every currently supported planning primitive into a complete CP-SAT model.
 ///
 /// At this stage the accepted model surface is Boolean and integer scalar variables plus
-/// unenforced Boolean clauses, conjunctions, implications, and equivalences. Unsupported
-/// primitives are rejected rather than omitted. Positive literals use their scalar variable
-/// index; negative literals use CP-SAT's exact `-index - 1` encoding. Empty clauses remain empty
-/// and therefore false; empty conjunctions remain empty and therefore true.
+/// unenforced Boolean clauses, conjunctions, implications, equivalences, at-most-one, and
+/// exactly-one constraints. Unsupported primitives are rejected rather than omitted. Positive
+/// literals use their scalar variable index; negative literals use CP-SAT's exact `-index - 1`
+/// encoding. Empty clauses and exactly-one constraints remain empty and therefore false; empty
+/// conjunctions and at-most-one constraints remain empty and therefore true.
 /// # Errors
 ///
 /// Returns a validation error for invalid planning IR and an explicit unsupported-feature error
@@ -249,6 +250,18 @@ pub fn translate_supported_model(
                 model.constraints.push(boolean_constraint(
                     constraint_proto::Constraint::BoolOr,
                     vec![left, !right],
+                ));
+            }
+            Constraint::AtMostOne { literals } => {
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::AtMostOne,
+                    translate_literals(literals, &boolean_indices)?,
+                ));
+            }
+            Constraint::ExactlyOne { literals } => {
+                model.constraints.push(boolean_constraint(
+                    constraint_proto::Constraint::ExactlyOne,
+                    translate_literals(literals, &boolean_indices)?,
                 ));
             }
             _ => return Err(TranslationError::UnsupportedConstraint),
@@ -605,14 +618,78 @@ mod tests {
     }
 
     #[test]
+    fn one_of_constraints_preserve_empty_and_literal_semantics() -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let bool_a = BoolVariableId::new("translation.a_bool")?;
+        let bool_z = BoolVariableId::new("translation.z_bool")?;
+        problem.constraints = vec![
+            constraint_record(
+                "constraint.a_empty_at_most",
+                Constraint::at_most_one(Vec::new()),
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.b_mixed_at_most",
+                Constraint::at_most_one(vec![
+                    Literal::positive(bool_a.clone()),
+                    Literal::negative(bool_z.clone()),
+                ]),
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.c_empty_exactly",
+                Constraint::exactly_one(Vec::new()),
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.d_mixed_exactly",
+                Constraint::exactly_one(vec![Literal::negative(bool_a), Literal::positive(bool_z)]),
+                Vec::new(),
+            )?,
+        ];
+        problem
+            .declared_capabilities
+            .extend([Capability::AtMostOne, Capability::ExactlyOne]);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        let constraints: Vec<_> = model
+            .constraints
+            .iter()
+            .map(|constraint| match constraint.constraint.as_ref() {
+                Some(constraint_proto::Constraint::AtMostOne(argument)) => {
+                    ("at_most", argument.literals.as_slice())
+                }
+                Some(constraint_proto::Constraint::ExactlyOne(argument)) => {
+                    ("exactly", argument.literals.as_slice())
+                }
+                _ => ("other", &[][..]),
+            })
+            .collect();
+
+        assert_eq!(
+            constraints,
+            [
+                ("at_most", &[][..]),
+                ("at_most", &[0, -5][..]),
+                ("exactly", &[][..]),
+                ("exactly", &[-1, 4][..]),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn unsupported_constraint_semantics_are_rejected_not_omitted() -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
         problem.constraints.push(constraint_record(
             "constraint.unsupported",
-            Constraint::at_most_one(Vec::new()),
+            Constraint::cardinality(Vec::new(), 0, 0)?,
             Vec::new(),
         )?);
-        problem.declared_capabilities.insert(Capability::AtMostOne);
+        problem
+            .declared_capabilities
+            .insert(Capability::CardinalityRange);
 
         assert!(matches!(
             translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
