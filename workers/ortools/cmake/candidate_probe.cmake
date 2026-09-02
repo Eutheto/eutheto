@@ -514,18 +514,24 @@ if(WIN32 AND PROBE_GENERATOR MATCHES "^Visual Studio")
   set(worker_executable "${worker_build_dir}/Release/ortools-worker.exe")
   set(worker_test_executable
     "${worker_build_dir}/tests/Release/ortools-worker-native-tests.exe")
+  set(worker_callback_test_executable
+    "${worker_build_dir}/tests/Release/ortools-worker-callback-tests.exe")
   set(worker_benchmark_executable
     "${worker_build_dir}/tests/Release/ortools-worker-candidate-benchmarks.exe")
 elseif(WIN32)
   set(worker_executable "${worker_build_dir}/ortools-worker.exe")
   set(worker_test_executable
     "${worker_build_dir}/tests/ortools-worker-native-tests.exe")
+  set(worker_callback_test_executable
+    "${worker_build_dir}/tests/ortools-worker-callback-tests.exe")
   set(worker_benchmark_executable
     "${worker_build_dir}/tests/ortools-worker-candidate-benchmarks.exe")
 else()
   set(worker_executable "${worker_build_dir}/ortools-worker")
   set(worker_test_executable
     "${worker_build_dir}/tests/ortools-worker-native-tests")
+  set(worker_callback_test_executable
+    "${worker_build_dir}/tests/ortools-worker-callback-tests")
   set(worker_benchmark_executable
     "${worker_build_dir}/tests/ortools-worker-candidate-benchmarks")
 endif()
@@ -536,6 +542,10 @@ if(NOT EXISTS "${worker_test_executable}")
   message(FATAL_ERROR
     "Expected worker test executable does not exist: ${worker_test_executable}")
 endif()
+if(NOT EXISTS "${worker_callback_test_executable}")
+  message(FATAL_ERROR
+    "Expected worker callback test executable does not exist: ${worker_callback_test_executable}")
+endif()
 if(NOT EXISTS "${worker_benchmark_executable}")
   message(FATAL_ERROR
     "Expected worker benchmark executable does not exist: ${worker_benchmark_executable}")
@@ -543,6 +553,7 @@ endif()
 file(APPEND "${report_file}"
   "worker_executable_inspected=true\n"
   "worker_test_executable_inspected=true\n"
+  "worker_callback_test_executable_inspected=true\n"
   "worker_benchmark_executable_inspected=true\n")
 
 if(WIN32)
@@ -566,6 +577,7 @@ endif()
 list(APPEND runtime_libraries
   "${worker_executable}"
   "${worker_test_executable}"
+  "${worker_callback_test_executable}"
   "${worker_benchmark_executable}")
 list(REMOVE_DUPLICATES runtime_libraries)
 list(SORT runtime_libraries)
@@ -597,6 +609,28 @@ file(APPEND "${report_file}" "runtime_closure_inspection=passed\n")
 if(WIN32)
   set(ENV{PATH} "${ortools_install_dir}/bin;$ENV{PATH}")
 endif()
+execute_process(
+  COMMAND "${worker_callback_test_executable}"
+  RESULT_VARIABLE callback_result
+  OUTPUT_FILE "${evidence_dir}/callback-behavior.txt"
+  ERROR_FILE "${evidence_dir}/callback-behavior.stderr.txt"
+  TIMEOUT 60
+  COMMAND_ECHO STDOUT
+  ENCODING UTF-8
+)
+file(APPEND "${report_file}" "callback_test_exit_code=${callback_result}\n")
+if(NOT "${callback_result}" STREQUAL "0")
+  message(FATAL_ERROR
+    "Candidate callback behavior tests failed with exit code ${callback_result}.")
+endif()
+file(READ "${evidence_dir}/callback-behavior.txt" callback_evidence)
+string(FIND "${callback_evidence}" "callback_result=passed" callback_result_marker)
+string(FIND "${callback_evidence}" "stop_status=feasible" callback_stop_marker)
+if(callback_result_marker EQUAL -1 OR callback_stop_marker EQUAL -1)
+  message(FATAL_ERROR
+    "Candidate callback behavior evidence is incomplete or malformed.")
+endif()
+file(APPEND "${report_file}" "callback_behavior_evidence=passed\n")
 execute_process(
   COMMAND "${worker_benchmark_executable}"
   RESULT_VARIABLE benchmark_result

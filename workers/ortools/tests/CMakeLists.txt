@@ -2,6 +2,10 @@
 add_executable(ortools-worker-native-tests native_tests.cc)
 target_link_libraries(ortools-worker-native-tests PRIVATE eutheto-ortools-worker-lib)
 set(native_worker_test_targets ortools-worker-native-tests)
+add_executable(ortools-worker-callback-tests callback_tests.cc)
+target_link_libraries(ortools-worker-callback-tests PRIVATE eutheto-ortools-worker-lib)
+list(APPEND native_worker_test_targets ortools-worker-callback-tests)
+
 
 if(EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS)
   add_executable(
@@ -35,4 +39,9 @@ foreach(native_worker_test_target IN LISTS native_worker_test_targets)
 endforeach()
 
 add_test(NAME ortools-worker-native COMMAND ortools-worker-native-tests)
-set_tests_properties(ortools-worker-native PROPERTIES TIMEOUT 60)
+add_test(NAME ortools-worker-callback COMMAND ortools-worker-callback-tests)
+set_tests_properties(
+  ortools-worker-native
+  ortools-worker-callback
+  PROPERTIES TIMEOUT 60
+)
