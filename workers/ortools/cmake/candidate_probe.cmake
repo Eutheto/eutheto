@@ -58,10 +58,10 @@ set(source_url "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.g
 set(expected_source_sha256
   "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026")
 set(source_patch_relative
-  "workers/ortools/patches/9.15-disable-gurobi-model-builder.patch")
+  "workers/ortools/patches/9.15-candidate-fixes.patch")
 set(source_patch "${REPOSITORY_ROOT}/${source_patch_relative}")
 set(expected_source_patch_sha256
-  "7cff195dab904bb7285411e611df8fa429d0a409553d1385ce83dc0053e185e6")
+  "d8944f207f540372c2b411c1735361c4d0b6925d23280c874a3e3713ecd98d07")
 string(LENGTH "${expected_source_sha256}" expected_source_sha256_length)
 if(NOT expected_source_sha256_length EQUAL 64
    OR NOT expected_source_sha256 MATCHES "^[0-9a-f]+$")
@@ -141,6 +141,23 @@ function(append_inspection log_name subject working_directory)
     message(FATAL_ERROR
       "${log_name} inspection failed for ${subject} with exit code "
       "${inspection_result}; see ${log_file}.")
+  endif()
+  if(WIN32 AND log_name STREQUAL "binary-linkage")
+    string(REGEX MATCHALL "[A-Za-z0-9_.+-]+\\.[dD][lL][lL]"
+      runtime_dependencies "${inspection_output}")
+    list(REMOVE_DUPLICATES runtime_dependencies)
+    cmake_path(GET subject PARENT_PATH subject_parent)
+    foreach(runtime_dependency IN LISTS runtime_dependencies)
+      if(NOT EXISTS "${working_directory}/${subject_parent}/${runtime_dependency}"
+         AND NOT EXISTS "${ortools_install_dir}/bin/${runtime_dependency}"
+         AND NOT EXISTS "$ENV{SystemRoot}/System32/${runtime_dependency}")
+        file(APPEND "${log_file}"
+          "unresolved_dependency=${subject}:${runtime_dependency}\n")
+        message(FATAL_ERROR
+          "Unresolved Windows runtime dependency ${runtime_dependency} for "
+          "${subject}; see ${log_file}.")
+      endif()
+    endforeach()
   endif()
 endfunction()
 
@@ -463,15 +480,27 @@ run_stage(worker-build "${PROBE_ROOT}"
 
 if(WIN32 AND PROBE_GENERATOR MATCHES "^Visual Studio")
   set(worker_executable "${worker_build_dir}/Release/ortools-worker.exe")
+  set(worker_test_executable
+    "${worker_build_dir}/tests/Release/ortools-worker-native-tests.exe")
 elseif(WIN32)
   set(worker_executable "${worker_build_dir}/ortools-worker.exe")
+  set(worker_test_executable
+    "${worker_build_dir}/tests/ortools-worker-native-tests.exe")
 else()
   set(worker_executable "${worker_build_dir}/ortools-worker")
+  set(worker_test_executable
+    "${worker_build_dir}/tests/ortools-worker-native-tests")
 endif()
 if(NOT EXISTS "${worker_executable}")
   message(FATAL_ERROR "Expected worker executable does not exist: ${worker_executable}")
 endif()
-file(APPEND "${report_file}" "worker_executable_inspected=true\n")
+if(NOT EXISTS "${worker_test_executable}")
+  message(FATAL_ERROR
+    "Expected worker test executable does not exist: ${worker_test_executable}")
+endif()
+file(APPEND "${report_file}"
+  "worker_executable_inspected=true\n"
+  "worker_test_executable_inspected=true\n")
 
 if(WIN32)
   file(GLOB runtime_libraries "${ortools_install_dir}/bin/*.dll")
@@ -491,7 +520,7 @@ else()
   find_program(file_executable file REQUIRED)
   find_program(ldd_executable ldd REQUIRED)
 endif()
-list(APPEND runtime_libraries "${worker_executable}")
+list(APPEND runtime_libraries "${worker_executable}" "${worker_test_executable}")
 list(REMOVE_DUPLICATES runtime_libraries)
 list(SORT runtime_libraries)
 list(LENGTH runtime_libraries runtime_binary_count)

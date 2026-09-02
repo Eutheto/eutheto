@@ -45,3 +45,18 @@ diff --git a/ortools/linear_solver/wrappers/model_builder_helper.cc b/ortools/li
  #if defined(USE_HIGHS)
      case MPModelRequest::HIGHS_LINEAR_PROGRAMMING:  // ABSL_FALLTHROUGH_INTENDED
      case MPModelRequest::HIGHS_MIXED_INTEGER_PROGRAMMING: {
+diff --git a/patches/bzip2.patch b/patches/bzip2.patch
+--- a/patches/bzip2.patch
++++ b/patches/bzip2.patch
+@@ -172,3 +172,11 @@ index c4b0b6e..ee39341 100644
+  if(ENABLE_APP AND Python3_FOUND)
+      enable_testing()
+      add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND})
++
++diff --git a/libbz2.def b/libbz2.def
++--- a/libbz2.def
+++++ b/libbz2.def
++@@ -1,2 +1,2 @@
++-LIBRARY			bz2-1
+++LIBRARY			bz2
++ EXPORTS
