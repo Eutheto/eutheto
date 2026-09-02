@@ -4,8 +4,9 @@
 
 This crate owns the bundled-worker descriptor, exact matrix-backed compatibility
 report, deterministic planning-IR-to-CP-SAT translation, strict projected
-candidate decoding, truthful bounded progress conversion, and the isolated
-worker executable identity, launch, and single-session protocol supervisor.
+candidate decoding, truthful bounded progress conversion, exact adapter timing
+and quality evidence aggregation, and the isolated worker executable identity,
+launch, and single-session protocol supervisor.
 Translation currently covers scalar variable domains plus Boolean-or,
 conjunction, implication, equivalence, one-of, cardinality-range, integer linear
 comparison constraints, enforcement literals, safely scalarizable bounded
