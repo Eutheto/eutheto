@@ -6,3 +6,4 @@ workers/ortools/source-contract.json text eol=lf
 workers/ortools/dependency-sources.json text eol=lf
 workers/ortools/VERSION text eol=lf
 protocol/solver-worker.proto text eol=lf
+protocol/version.json text eol=lf
