@@ -8,7 +8,8 @@ use prost::Message;
 use thiserror::Error;
 
 use crate::cp_sat::{
-    BoolArgumentProto, ConstraintProto, CpModelProto, IntegerVariableProto, constraint_proto,
+    BoolArgumentProto, ConstraintProto, CpModelProto, IntegerVariableProto, LinearConstraintProto,
+    constraint_proto,
 };
 const BOOLEAN_DOMAIN: [i64; 2] = [0, 1];
 
@@ -92,6 +93,9 @@ pub enum TranslationError {
     /// This incremental translator does not yet encode this constraint primitive.
     #[error("the planning constraint is not supported by the current CP-SAT translator")]
     UnsupportedConstraint,
+    /// Cardinality bounds and constant offsets must fit CP-SAT's signed integer domain.
+    #[error("the cardinality constraint exceeds CP-SAT's signed 64-bit domain")]
+    CardinalityBoundOverflow,
     /// Common constraint enforcement is translated in a later stage.
     #[error("constraint enforcement is not supported by the current CP-SAT translator")]
     UnsupportedEnforcement,
@@ -174,11 +178,11 @@ fn translate_variable_domains_validated(
 /// Translates every currently supported planning primitive into a complete CP-SAT model.
 ///
 /// At this stage the accepted model surface is Boolean and integer scalar variables plus
-/// unenforced Boolean clauses, conjunctions, implications, equivalences, at-most-one, and
-/// exactly-one constraints. Unsupported primitives are rejected rather than omitted. Positive
-/// literals use their scalar variable index; negative literals use CP-SAT's exact `-index - 1`
-/// encoding. Empty clauses and exactly-one constraints remain empty and therefore false; empty
-/// conjunctions and at-most-one constraints remain empty and therefore true.
+/// unenforced Boolean clauses, conjunctions, implications, equivalences, one-of constraints, and
+/// cardinality ranges. Unsupported primitives are rejected rather than omitted. Positive literals
+/// use their scalar variable index; negative literals use CP-SAT's exact `-index - 1` encoding.
+/// Empty clauses and exactly-one constraints remain empty and therefore false; empty conjunctions,
+/// at-most-one constraints, and the sole valid empty cardinality range `0..=0` remain true.
 /// # Errors
 ///
 /// Returns a validation error for invalid planning IR and an explicit unsupported-feature error
@@ -264,6 +268,14 @@ pub fn translate_supported_model(
                     translate_literals(literals, &boolean_indices)?,
                 ));
             }
+            Constraint::CardinalityRange { literals, min, max } => {
+                model.constraints.push(cardinality_constraint(
+                    literals,
+                    *min,
+                    *max,
+                    &boolean_indices,
+                )?);
+            }
             _ => return Err(TranslationError::UnsupportedConstraint),
         }
     }
@@ -272,6 +284,56 @@ pub fn translate_supported_model(
         cp_model_proto: model.encode_to_vec(),
         boolean_indices,
         integer_indices,
+    })
+}
+
+fn cardinality_constraint(
+    literals: &[Literal],
+    min: u64,
+    max: u64,
+    boolean_indices: &BTreeMap<BoolVariableId, i32>,
+) -> Result<ConstraintProto, TranslationError> {
+    let mut coefficients = BTreeMap::<i32, i64>::new();
+    let mut negative_count = 0_u64;
+    for literal in literals {
+        let index = boolean_indices
+            .get(&literal.variable)
+            .copied()
+            .ok_or(TranslationError::MissingBooleanIndex)?;
+        let coefficient = if literal.positive {
+            1
+        } else {
+            negative_count = negative_count
+                .checked_add(1)
+                .ok_or(TranslationError::CardinalityBoundOverflow)?;
+            -1
+        };
+        *coefficients.entry(index).or_default() += coefficient;
+    }
+    coefficients.retain(|_, coefficient| *coefficient != 0);
+
+    let offset =
+        i64::try_from(negative_count).map_err(|_| TranslationError::CardinalityBoundOverflow)?;
+    let lower = i64::try_from(min)
+        .ok()
+        .and_then(|min| min.checked_sub(offset))
+        .ok_or(TranslationError::CardinalityBoundOverflow)?;
+    let upper = i64::try_from(max)
+        .ok()
+        .and_then(|max| max.checked_sub(offset))
+        .ok_or(TranslationError::CardinalityBoundOverflow)?;
+    let (vars, coeffs) = coefficients.into_iter().unzip();
+
+    Ok(ConstraintProto {
+        name: String::new(),
+        enforcement_literal: Vec::new(),
+        constraint: Some(constraint_proto::Constraint::Linear(
+            LinearConstraintProto {
+                vars,
+                coeffs,
+                domain: vec![lower, upper],
+            },
+        )),
     })
 }
 
@@ -680,16 +742,86 @@ mod tests {
     }
 
     #[test]
+    fn cardinality_ranges_shift_negative_literals_and_combine_variables()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let bool_a = BoolVariableId::new("translation.a_bool")?;
+        let bool_z = BoolVariableId::new("translation.z_bool")?;
+        problem.constraints = vec![
+            constraint_record(
+                "constraint.a_empty",
+                Constraint::cardinality(Vec::new(), 0, 0)?,
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.b_mixed",
+                Constraint::cardinality(
+                    vec![
+                        Literal::positive(bool_a.clone()),
+                        Literal::negative(bool_z.clone()),
+                    ],
+                    1,
+                    1,
+                )?,
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.c_complementary",
+                Constraint::cardinality(
+                    vec![Literal::positive(bool_a.clone()), Literal::negative(bool_a)],
+                    1,
+                    1,
+                )?,
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.d_negative",
+                Constraint::cardinality(vec![Literal::negative(bool_z)], 0, 1)?,
+                Vec::new(),
+            )?,
+        ];
+        problem
+            .declared_capabilities
+            .insert(Capability::CardinalityRange);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        let constraints: Vec<_> = model
+            .constraints
+            .iter()
+            .map(|constraint| match constraint.constraint.as_ref() {
+                Some(constraint_proto::Constraint::Linear(linear)) => (
+                    linear.vars.as_slice(),
+                    linear.coeffs.as_slice(),
+                    linear.domain.as_slice(),
+                ),
+                _ => (&[][..], &[][..], &[][..]),
+            })
+            .collect();
+
+        assert_eq!(
+            constraints,
+            [
+                (&[][..], &[][..], &[0, 0][..]),
+                (&[0, 4][..], &[1, -1][..], &[0, 0][..]),
+                (&[][..], &[][..], &[0, 0][..]),
+                (&[4][..], &[-1][..], &[-1, 0][..]),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn unsupported_constraint_semantics_are_rejected_not_omitted() -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
         problem.constraints.push(constraint_record(
             "constraint.unsupported",
-            Constraint::cardinality(Vec::new(), 0, 0)?,
+            Constraint::all_different(Vec::new()),
             Vec::new(),
         )?);
         problem
             .declared_capabilities
-            .insert(Capability::CardinalityRange);
+            .insert(Capability::AllDifferent);
 
         assert!(matches!(
             translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
