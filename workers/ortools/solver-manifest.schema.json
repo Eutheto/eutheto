@@ -66,6 +66,7 @@
           "CMAKE_INSTALL_PREFIX",
           "CMAKE_INSTALL_RPATH",
           "CMAKE_MACOSX_RPATH",
+          "CMAKE_MSVC_RUNTIME_LIBRARY",
           "CMAKE_POLICY_DEFAULT_CMP0077",
           "CMAKE_PREFIX_PATH",
           "EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS",
@@ -94,6 +95,25 @@
           "ortools_DIR"
         ]
       },
+      "type": "object"
+    },
+    "non_windows_cmake_map": {
+      "not": {
+        "required": [
+          "CMAKE_MSVC_RUNTIME_LIBRARY"
+        ]
+      },
+      "type": "object"
+    },
+    "windows_cmake_map": {
+      "properties": {
+        "CMAKE_MSVC_RUNTIME_LIBRARY": {
+          "const": "MultiThreadedDLL"
+        }
+      },
+      "required": [
+        "CMAKE_MSVC_RUNTIME_LIBRARY"
+      ],
       "type": "object"
     },
     "file_digest": {
@@ -216,6 +236,46 @@
               ]
             }
           ]
+        },
+        {
+          "else": {
+            "properties": {
+              "cmake": {
+                "properties": {
+                  "ortools": {
+                    "$ref": "#/$defs/non_windows_cmake_map"
+                  },
+                  "worker": {
+                    "$ref": "#/$defs/non_windows_cmake_map"
+                  }
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "target_triple": {
+                "const": "x86_64-pc-windows-msvc"
+              }
+            },
+            "required": [
+              "target_triple"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cmake": {
+                "properties": {
+                  "ortools": {
+                    "$ref": "#/$defs/windows_cmake_map"
+                  },
+                  "worker": {
+                    "$ref": "#/$defs/windows_cmake_map"
+                  }
+                }
+              }
+            }
+          }
         }
       ],
       "properties": {

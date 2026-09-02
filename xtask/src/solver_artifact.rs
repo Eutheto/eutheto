@@ -1076,10 +1076,8 @@ fn notice_bytes(
         dependency("bzip2").sha256,
     );
     if build.target_triple == "x86_64-pc-windows-msvc" {
-        notice.push_str("- Microsoft Visual C++ Runtime ");
-        notice.push_str(&build.compiler.version);
         notice.push_str(
-            " — Copyright (c) Microsoft Corporation; app-local files supplied by the active licensed MSVC toolchain; redistribution is governed by the applicable Microsoft Visual Studio license terms — https://aka.ms/VCRedistLicense\n",
+            "- Microsoft Visual C++ Runtime — Copyright (c) Microsoft Corporation; app-local files supplied by the active licensed MSVC toolchain; redistribution is governed by the applicable Microsoft Visual Studio license terms — https://aka.ms/VCRedistLicense\n",
         );
     }
     notice.into_bytes()
@@ -1120,11 +1118,11 @@ fn spdx_package(
         license_concluded: license.to_owned(),
         license_declared: license.to_owned(),
         name: name.to_owned(),
-        version_info: version.to_owned(),
+        version_info: Some(version.to_owned()),
     }
 }
 
-fn spdx_unverified_package(id: &str, name: &str, version: &str) -> SpdxPackage {
+fn spdx_unverified_package(id: &str, name: &str) -> SpdxPackage {
     SpdxPackage {
         spdx_id: id.to_owned(),
         checksums: Vec::new(),
@@ -1133,7 +1131,7 @@ fn spdx_unverified_package(id: &str, name: &str, version: &str) -> SpdxPackage {
         license_concluded: "NOASSERTION".to_owned(),
         license_declared: "NOASSERTION".to_owned(),
         name: name.to_owned(),
-        version_info: version.to_owned(),
+        version_info: None,
     }
 }
 
@@ -1214,7 +1212,6 @@ fn spdx_packages(
         packages.push(spdx_unverified_package(
             "SPDXRef-Package-msvc-runtime",
             "Microsoft Visual C++ Runtime",
-            &build.compiler.version,
         ));
     }
     packages
@@ -1296,16 +1293,20 @@ fn spdx_relationships(files: &[SpdxFile], target: &str) -> Vec<SpdxRelationship>
         relationship_type: "CONTAINS".to_owned(),
         related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
     });
-    relationships.extend(files.iter().map(|file| SpdxRelationship {
-        spdx_element_id: if target == "x86_64-pc-windows-msvc"
-            && is_msvc_runtime_file(&file.file_name)
-        {
-            "SPDXRef-Package-msvc-runtime".to_owned()
+    relationships.extend(files.iter().map(|file| {
+        if target == "x86_64-pc-windows-msvc" && is_msvc_runtime_file(&file.file_name) {
+            SpdxRelationship {
+                spdx_element_id: file.spdx_id.clone(),
+                relationship_type: "GENERATED_FROM".to_owned(),
+                related_spdx_element: "SPDXRef-Package-msvc-runtime".to_owned(),
+            }
         } else {
-            "SPDXRef-Package-eutheto".to_owned()
-        },
-        relationship_type: "CONTAINS".to_owned(),
-        related_spdx_element: file.spdx_id.clone(),
+            SpdxRelationship {
+                spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+                relationship_type: "CONTAINS".to_owned(),
+                related_spdx_element: file.spdx_id.clone(),
+            }
+        }
     }));
     relationships
 }
@@ -1799,8 +1800,8 @@ struct SpdxPackage {
     #[serde(rename = "licenseDeclared")]
     license_declared: String,
     name: String,
-    #[serde(rename = "versionInfo")]
-    version_info: String,
+    #[serde(rename = "versionInfo", skip_serializing_if = "Option::is_none")]
+    version_info: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1941,6 +1942,25 @@ mod tests {
         assert!(windows_relationships.iter().any(|relationship| {
             relationship.relationship_type == "DYNAMIC_LINK"
                 && relationship.related_spdx_element == "SPDXRef-Package-msvc-runtime"
+        }));
+        let runtime_file = SpdxFile {
+            spdx_id: "SPDXRef-File-msvcp140".to_owned(),
+            checksums: vec![],
+            copyright_text: "NOASSERTION".to_owned(),
+            file_name: "bin/msvcp140.dll".to_owned(),
+            file_types: vec!["BINARY".to_owned()],
+            license_concluded: "NOASSERTION".to_owned(),
+            license_info_in_files: vec!["NOASSERTION".to_owned()],
+        };
+        let runtime_relationships = spdx_relationships(&[runtime_file], "x86_64-pc-windows-msvc");
+        assert!(runtime_relationships.iter().any(|relationship| {
+            relationship.spdx_element_id == "SPDXRef-File-msvcp140"
+                && relationship.relationship_type == "GENERATED_FROM"
+                && relationship.related_spdx_element == "SPDXRef-Package-msvc-runtime"
+        }));
+        assert!(!runtime_relationships.iter().any(|relationship| {
+            relationship.spdx_element_id == "SPDXRef-Package-msvc-runtime"
+                && relationship.relationship_type == "CONTAINS"
         }));
         assert!(is_msvc_runtime_file("bin/MSVCP140.dll"));
         assert!(is_msvc_runtime_file("bin/vcruntime140_1.dll"));

@@ -1199,7 +1199,6 @@ fn validate_spdx_packages(
         expected.push(spdx_unverified_package(
             "SPDXRef-Package-msvc-runtime",
             "Microsoft Visual C++ Runtime",
-            &manifest.build.compiler.version,
         ));
     }
     ensure!(
@@ -1227,11 +1226,11 @@ fn spdx_package(
         license_concluded: license.to_owned(),
         license_declared: license.to_owned(),
         name: name.to_owned(),
-        version_info: version.to_owned(),
+        version_info: Some(version.to_owned()),
     }
 }
 
-fn spdx_unverified_package(id: &str, name: &str, version: &str) -> SpdxPackage {
+fn spdx_unverified_package(id: &str, name: &str) -> SpdxPackage {
     SpdxPackage {
         spdx_id: id.to_owned(),
         checksums: Vec::new(),
@@ -1240,7 +1239,7 @@ fn spdx_unverified_package(id: &str, name: &str, version: &str) -> SpdxPackage {
         license_concluded: "NOASSERTION".to_owned(),
         license_declared: "NOASSERTION".to_owned(),
         name: name.to_owned(),
-        version_info: version.to_owned(),
+        version_info: None,
     }
 }
 
@@ -1293,16 +1292,22 @@ fn validate_spdx_relationships(
         relationship_type: "CONTAINS".to_owned(),
         related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
     });
-    expected.extend(files.iter().map(|file| SpdxRelationship {
-        spdx_element_id: if manifest.build.target_triple == "x86_64-pc-windows-msvc"
+    expected.extend(files.iter().map(|file| {
+        if manifest.build.target_triple == "x86_64-pc-windows-msvc"
             && is_msvc_runtime_file(&file.file_name)
         {
-            "SPDXRef-Package-msvc-runtime".to_owned()
+            SpdxRelationship {
+                spdx_element_id: file.spdx_id.clone(),
+                relationship_type: "GENERATED_FROM".to_owned(),
+                related_spdx_element: "SPDXRef-Package-msvc-runtime".to_owned(),
+            }
         } else {
-            "SPDXRef-Package-eutheto".to_owned()
-        },
-        relationship_type: "CONTAINS".to_owned(),
-        related_spdx_element: file.spdx_id.clone(),
+            SpdxRelationship {
+                spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+                relationship_type: "CONTAINS".to_owned(),
+                related_spdx_element: file.spdx_id.clone(),
+            }
+        }
     }));
     ensure!(
         relationships == expected,
@@ -2161,8 +2166,12 @@ struct SpdxPackage {
     #[serde(rename = "licenseDeclared")]
     license_declared: String,
     name: String,
-    #[serde(rename = "versionInfo")]
-    version_info: String,
+    #[serde(
+        default,
+        rename = "versionInfo",
+        skip_serializing_if = "Option::is_none"
+    )]
+    version_info: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2763,7 +2772,6 @@ mod tests {
             packages.push(spdx_unverified_package(
                 "SPDXRef-Package-msvc-runtime",
                 "Microsoft Visual C++ Runtime",
-                "1.0",
             ));
         }
         let mut relationships = vec![
@@ -2797,16 +2805,20 @@ mod tests {
             relationship_type: "CONTAINS".to_owned(),
             related_spdx_element: "SPDXRef-Package-utf8-range".to_owned(),
         });
-        relationships.extend(files.iter().map(|file| SpdxRelationship {
-            spdx_element_id: if target == "x86_64-pc-windows-msvc"
-                && is_msvc_runtime_file(&file.file_name)
-            {
-                "SPDXRef-Package-msvc-runtime".to_owned()
+        relationships.extend(files.iter().map(|file| {
+            if target == "x86_64-pc-windows-msvc" && is_msvc_runtime_file(&file.file_name) {
+                SpdxRelationship {
+                    spdx_element_id: file.spdx_id.clone(),
+                    relationship_type: "GENERATED_FROM".to_owned(),
+                    related_spdx_element: "SPDXRef-Package-msvc-runtime".to_owned(),
+                }
             } else {
-                "SPDXRef-Package-eutheto".to_owned()
-            },
-            relationship_type: "CONTAINS".to_owned(),
-            related_spdx_element: file.spdx_id.clone(),
+                SpdxRelationship {
+                    spdx_element_id: "SPDXRef-Package-eutheto".to_owned(),
+                    relationship_type: "CONTAINS".to_owned(),
+                    related_spdx_element: file.spdx_id.clone(),
+                }
+            }
         }));
         let document = SpdxDocument {
             spdx_id: "SPDXRef-DOCUMENT".to_owned(),

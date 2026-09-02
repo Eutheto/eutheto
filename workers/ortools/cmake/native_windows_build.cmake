@@ -595,7 +595,9 @@ set(windows_system_dll_allowlist
   dbghelp.dll
   kernel32.dll
   ntdll.dll
+  psapi.dll
   ucrtbase.dll
+  ws2_32.dll
 )
 function(inspect_pe artifact output_dependencies)
   execute_process(
