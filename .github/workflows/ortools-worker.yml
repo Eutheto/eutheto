@@ -117,7 +117,7 @@ jobs:
           @"
           ### Windows x86_64 approved native worker build
 
-          This job verifies the fixed-hash OR-Tools 9.15.6755/protobuf 33.1 source build, the exact production CMake contract, native tests, recursive x64 project DLL closure, explicit Windows/MSVC release-runtime import classification, forbidden-dependency checks, and installed EOF startup behavior.
+          This job verifies the fixed-hash OR-Tools 9.15.6755/protobuf 33.1 source build, the exact production CMake contract, native tests, recursive x64 project DLL closure, explicit Windows/MSVC release-runtime import classification, forbidden-dependency checks, installed EOF startup behavior, deterministic solver-manifest validation, and exact license/NOTICE/SPDX SBOM payload generation.
 
-          It does not establish the deferred solver manifest, exact license/SBOM payload, Tauri sidecar packaging, clean-machine installer behavior, backend registration, signing, or release readiness. No executable is uploaded or published.
+          It does not establish Tauri sidecar packaging, clean-machine installer behavior, backend registration, signing, or release readiness. No executable is uploaded or published.
           "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
