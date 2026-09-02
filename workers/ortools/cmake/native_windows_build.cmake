@@ -347,6 +347,7 @@ set(ortools_configure_command
   "-DCMAKE_C_COMPILER=${c_compiler}"
   "-DCMAKE_CXX_COMPILER=${cxx_compiler}"
   "-DCMAKE_CXX_FLAGS=/DEIGEN_MPL2_ONLY"
+  "-DCMAKE_POLICY_DEFAULT_CMP0077=NEW"
   "-DCMAKE_INSTALL_PREFIX=${ortools_install_dir}"
   "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
   "-DFETCHCONTENT_SOURCE_DIR_ZLIB=${source_parent}/${zlib_archive_root}"
@@ -381,6 +382,7 @@ endforeach()
 require_cache_value("${ortools_cache}" FETCHCONTENT_FULLY_DISCONNECTED ON)
 require_cache_value("${ortools_cache}" CMAKE_GENERATOR Ninja)
 require_cache_value("${ortools_cache}" CMAKE_CXX_FLAGS /DEIGEN_MPL2_ONLY)
+require_cache_value("${ortools_cache}" CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 cache_value(actual_c_compiler "${ortools_cache}" CMAKE_C_COMPILER)
 cache_value(actual_cxx_compiler "${ortools_cache}" CMAKE_CXX_COMPILER)
 cmake_path(GET actual_c_compiler FILENAME actual_c_compiler_name)
