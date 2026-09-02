@@ -433,6 +433,17 @@ if(NOT actual_ortools_version STREQUAL ortools_version)
     "Generated OR-Tools package version is ${actual_ortools_version}, expected ${ortools_version}.")
 endif()
 
+# Protobuf's Windows generator can race while parallel protoc commands create
+# shared output directories. Materialize every OR-Tools proto directory before
+# Ninja starts so generation never depends on concurrent directory creation.
+file(GLOB_RECURSE ortools_proto_sources
+  RELATIVE "${ortools_source_dir}"
+  "${ortools_source_dir}/ortools/*.proto")
+foreach(proto_source IN LISTS ortools_proto_sources)
+  cmake_path(GET proto_source PARENT_PATH proto_output_directory)
+  file(MAKE_DIRECTORY "${ortools_build_dir}/${proto_output_directory}")
+endforeach()
+
 run_stage("ortools-build" "${work_root}"
   "${CMAKE_COMMAND}" --build "${ortools_build_dir}" --config Release --parallel 2)
 run_stage("ortools-install" "${work_root}"
