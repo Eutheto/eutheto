@@ -574,19 +574,76 @@ else()
   find_program(file_executable file REQUIRED)
   find_program(ldd_executable ldd REQUIRED)
 endif()
-list(APPEND runtime_libraries
-  "${worker_executable}"
+
+file(REAL_PATH "${worker_executable}" worker_real_path)
+set(runtime_payload_candidates ${runtime_libraries} "${worker_executable}")
+set(runtime_payload_files "")
+foreach(runtime_payload_candidate IN LISTS runtime_payload_candidates)
+  file(REAL_PATH "${runtime_payload_candidate}" runtime_payload_real_path)
+  list(APPEND runtime_payload_files "${runtime_payload_real_path}")
+endforeach()
+list(REMOVE_DUPLICATES runtime_payload_files)
+list(SORT runtime_payload_files)
+
+set(runtime_payload_size_file
+  "${evidence_dir}/runtime-payload-sizes.txt")
+file(WRITE "${runtime_payload_size_file}"
+  "classification=candidate-non-distributable\n"
+  "scope=worker-plus-installed-runtime-libraries\n"
+  "excludes=native-tests-callback-tests-candidate-benchmark\n"
+  "identity=normalized-path-relative-to-probe-root\n"
+  "linkage=${PROBE_LINKAGE}\n")
+set(runtime_payload_aggregate_bytes 0)
+set(runtime_payload_index 0)
+foreach(runtime_payload_file IN LISTS runtime_payload_files)
+  math(EXPR runtime_payload_index "${runtime_payload_index} + 1")
+  file(SIZE "${runtime_payload_file}" runtime_payload_file_bytes)
+  math(EXPR runtime_payload_aggregate_bytes
+    "${runtime_payload_aggregate_bytes} + ${runtime_payload_file_bytes}")
+  set(runtime_payload_identity "${runtime_payload_file}")
+  cmake_path(RELATIVE_PATH runtime_payload_identity
+    BASE_DIRECTORY "${PROBE_ROOT}")
+  cmake_path(NORMAL_PATH runtime_payload_identity)
+  if(runtime_payload_file STREQUAL worker_real_path)
+    set(runtime_payload_classification "worker-executable")
+  else()
+    set(runtime_payload_classification "installed-runtime-library")
+  endif()
+  file(APPEND "${runtime_payload_size_file}"
+    "file.${runtime_payload_index}.classification=${runtime_payload_classification}\n"
+    "file.${runtime_payload_index}.scope=runtime-payload\n"
+    "file.${runtime_payload_index}.identity=${runtime_payload_identity}\n"
+    "file.${runtime_payload_index}.bytes=${runtime_payload_file_bytes}\n")
+endforeach()
+list(LENGTH runtime_payload_files runtime_payload_count)
+file(APPEND "${runtime_payload_size_file}"
+  "count=${runtime_payload_count}\n"
+  "aggregate_bytes=${runtime_payload_aggregate_bytes}\n")
+file(APPEND "${report_file}"
+  "runtime_payload_scope=worker-plus-installed-runtime-libraries\n"
+  "runtime_payload_excludes=native-tests-callback-tests-candidate-benchmark\n"
+  "runtime_payload_count=${runtime_payload_count}\n"
+  "runtime_payload_aggregate_bytes=${runtime_payload_aggregate_bytes}\n")
+
+set(inspection_candidates
+  ${runtime_payload_files}
   "${worker_test_executable}"
   "${worker_callback_test_executable}"
   "${worker_benchmark_executable}")
-list(REMOVE_DUPLICATES runtime_libraries)
-list(SORT runtime_libraries)
-list(LENGTH runtime_libraries runtime_binary_count)
+set(inspection_binaries "")
+foreach(inspection_candidate IN LISTS inspection_candidates)
+  file(REAL_PATH "${inspection_candidate}" inspection_real_path)
+  list(APPEND inspection_binaries "${inspection_real_path}")
+endforeach()
+list(REMOVE_DUPLICATES inspection_binaries)
+list(SORT inspection_binaries)
+list(LENGTH inspection_binaries runtime_binary_count)
 file(APPEND "${report_file}" "runtime_binary_count=${runtime_binary_count}\n")
 
-foreach(runtime_binary IN LISTS runtime_libraries)
+foreach(runtime_binary IN LISTS inspection_binaries)
   set(runtime_subject "${runtime_binary}")
   cmake_path(RELATIVE_PATH runtime_subject BASE_DIRECTORY "${PROBE_ROOT}")
+  cmake_path(NORMAL_PATH runtime_subject)
   if(WIN32)
     append_inspection(binary-architecture "${runtime_subject}" "${PROBE_ROOT}"
       "${dumpbin_executable}" /headers "${runtime_binary}")
@@ -609,6 +666,94 @@ file(APPEND "${report_file}" "runtime_closure_inspection=passed\n")
 if(WIN32)
   set(ENV{PATH} "${ortools_install_dir}/bin;$ENV{PATH}")
 endif()
+
+set(worker_empty_stdin_file "${evidence_dir}/worker-empty-stdin.txt")
+set(worker_startup_loading_file
+  "${evidence_dir}/worker-startup-loading.txt")
+file(WRITE "${worker_empty_stdin_file}" "")
+file(WRITE "${worker_startup_loading_file}"
+  "classification=candidate-non-distributable\n"
+  "scope=worker-process-spawn-runtime-loading-ortools-version-initialization-eof-rejection\n"
+  "not_evidence_of=handshake-adapter-solve-latency-cold-start-or-sla\n"
+  "protocol_expectation=empty-stdin-exit-64-empty-stdout\n"
+  "run_count=4\n")
+set(worker_high_resolution_elapsed_pattern
+  "Elapsed time \\(seconds\\):[ \t]*([0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?)")
+set(worker_legacy_elapsed_pattern
+  "Elapsed time: ([0-9]+) s[.] \\(time\\), ([0-9]+([.][0-9]+)?) s[.] \\(clock\\)")
+set(worker_elapsed_pattern
+  "(${worker_high_resolution_elapsed_pattern}|${worker_legacy_elapsed_pattern})")
+foreach(worker_run RANGE 1 4)
+  set(worker_run_stdout
+    "${evidence_dir}/worker-startup-loading-run-${worker_run}.stdout.txt")
+  set(worker_run_stderr
+    "${evidence_dir}/worker-startup-loading-run-${worker_run}.stderr.txt")
+  set(worker_run_timer_stdout
+    "${evidence_dir}/worker-startup-loading-run-${worker_run}.timer-stdout.txt")
+  set(worker_run_result_file
+    "${evidence_dir}/worker-startup-loading-run-${worker_run}.result.txt")
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E time "${worker_executable}"
+    INPUT_FILE "${worker_empty_stdin_file}"
+    OUTPUT_VARIABLE worker_run_timed_stdout
+    ERROR_FILE "${worker_run_stderr}"
+    RESULT_VARIABLE worker_run_result
+    TIMEOUT 60
+    ENCODING UTF-8
+  )
+  file(WRITE "${worker_run_timer_stdout}" "${worker_run_timed_stdout}")
+  file(WRITE "${worker_run_result_file}" "${worker_run_result}\n")
+  string(REPLACE "\r\n" "\n"
+    worker_run_timed_stdout_normalized "${worker_run_timed_stdout}")
+  string(REGEX MATCHALL "${worker_elapsed_pattern}"
+    worker_elapsed_matches "${worker_run_timed_stdout_normalized}")
+  list(LENGTH worker_elapsed_matches worker_elapsed_match_count)
+  if(NOT "${worker_run_result}" STREQUAL "64")
+    message(FATAL_ERROR
+      "Worker startup/loading run ${worker_run} returned ${worker_run_result}, expected 64.")
+  endif()
+  if(NOT worker_elapsed_match_count EQUAL 1)
+    message(FATAL_ERROR
+      "Worker startup/loading run ${worker_run} produced "
+      "${worker_elapsed_match_count} CMake elapsed-seconds records, expected one.")
+  endif()
+  list(GET worker_elapsed_matches 0 worker_elapsed_match)
+  string(REPLACE "${worker_elapsed_match}" ""
+    worker_run_stdout_content "${worker_run_timed_stdout_normalized}")
+  if(worker_run_stdout_content STREQUAL "\n")
+    set(worker_run_stdout_content "")
+  endif()
+  file(WRITE "${worker_run_stdout}" "${worker_run_stdout_content}")
+  file(SIZE "${worker_run_stdout}" worker_run_stdout_bytes)
+  if(NOT worker_run_stdout_bytes EQUAL 0)
+    message(FATAL_ERROR
+      "Worker startup/loading run ${worker_run} wrote ${worker_run_stdout_bytes} "
+      "unexpected stdout bytes.")
+  endif()
+  if(worker_elapsed_match MATCHES "^Elapsed time \\(seconds\\):")
+    string(REGEX REPLACE
+      "^Elapsed time \\(seconds\\):[ \t]*" ""
+      worker_elapsed_seconds "${worker_elapsed_match}")
+    set(worker_timer_format "high-resolution-wall-seconds")
+  else()
+    string(REGEX REPLACE
+      "^Elapsed time: ([0-9]+) s[.] \\(time\\),.*$" "\\1"
+      worker_elapsed_seconds "${worker_elapsed_match}")
+    set(worker_timer_format "legacy-whole-wall-seconds")
+  endif()
+  file(APPEND "${worker_startup_loading_file}"
+    "run.${worker_run}.result=${worker_run_result}\n"
+    "run.${worker_run}.stdout_bytes=${worker_run_stdout_bytes}\n"
+    "run.${worker_run}.timer_format=${worker_timer_format}\n"
+    "run.${worker_run}.elapsed_seconds_raw=${worker_elapsed_seconds}\n")
+endforeach()
+file(APPEND "${report_file}"
+  "worker_startup_loading_evidence=passed\n"
+  "worker_startup_loading_scope=process-spawn-runtime-loading-ortools-version-initialization-eof-rejection\n"
+  "worker_startup_loading_excludes=handshake-adapter-solve-latency-cold-start-sla\n"
+  "worker_startup_loading_run_count=4\n"
+  "worker_startup_loading_expected_exit_code=64\n"
+  "worker_startup_loading_stdout=empty\n")
 execute_process(
   COMMAND "${worker_callback_test_executable}"
   RESULT_VARIABLE callback_result
