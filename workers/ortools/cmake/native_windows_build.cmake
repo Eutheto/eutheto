@@ -290,23 +290,40 @@ foreach(dependency IN LISTS expected_dependencies)
     "${${dependency}_archive_root}")
 endforeach()
 
-run_stage("check-repository-patch" "${ortools_source_dir}"
-  "${git_executable}" apply --check "${ortools_patch}")
-run_stage("apply-repository-patch" "${ortools_source_dir}"
-  "${git_executable}" apply "${ortools_patch}")
+set(ortools_source_relative "${ortools_source_dir}")
+cmake_path(RELATIVE_PATH ortools_source_relative
+  BASE_DIRECTORY "${REPOSITORY_ROOT}")
+if(ortools_source_relative MATCHES "^\\.\\.")
+  message(FATAL_ERROR "The extracted OR-Tools source escaped the repository root.")
+endif()
+run_stage("check-repository-patch" "${REPOSITORY_ROOT}"
+  "${git_executable}" apply --check
+  "--directory=${ortools_source_relative}" "${ortools_patch}")
+run_stage("apply-repository-patch" "${REPOSITORY_ROOT}"
+  "${git_executable}" apply
+  "--directory=${ortools_source_relative}" "${ortools_patch}")
 foreach(dependency IN LISTS expected_dependencies)
   set(dependency_source_dir
     "${source_parent}/${${dependency}_archive_root}")
+  set(dependency_source_relative "${dependency_source_dir}")
+  cmake_path(RELATIVE_PATH dependency_source_relative
+    BASE_DIRECTORY "${REPOSITORY_ROOT}")
+  if(dependency_source_relative MATCHES "^\\.\\.")
+    message(FATAL_ERROR
+      "The extracted ${dependency} source escaped the repository root.")
+  endif()
   set(dependency_patch
     "${ortools_source_dir}/patches/${${dependency}_patch}")
   if(NOT EXISTS "${dependency_patch}")
     message(FATAL_ERROR
       "The verified OR-Tools source does not contain ${dependency_patch}.")
   endif()
-  run_stage("check-${dependency}-patch" "${dependency_source_dir}"
-    "${git_executable}" apply --check --ignore-whitespace "${dependency_patch}")
-  run_stage("apply-${dependency}-patch" "${dependency_source_dir}"
-    "${git_executable}" apply --ignore-whitespace "${dependency_patch}")
+  run_stage("check-${dependency}-patch" "${REPOSITORY_ROOT}"
+    "${git_executable}" apply --check --ignore-whitespace
+    "--directory=${dependency_source_relative}" "${dependency_patch}")
+  run_stage("apply-${dependency}-patch" "${REPOSITORY_ROOT}"
+    "${git_executable}" apply --ignore-whitespace
+    "--directory=${dependency_source_relative}" "${dependency_patch}")
 endforeach()
 
 set(common_cmake_flags "")
