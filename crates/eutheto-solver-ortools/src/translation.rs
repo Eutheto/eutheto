@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use eutheto_planning_ir::{
-    BoolVariableId, Constraint, IntDomain, IntVariableId, Literal, PlanningIrLimitsV1,
-    PlanningProblem, ValidationError, Variable, validate,
+    BoolVariableId, ComparisonOp, Constraint, IntDomain, IntVariableId, LinearComparison, Literal,
+    PlanningIrLimitsV1, PlanningProblem, ValidationError, Variable, validate,
 };
 use prost::Message;
 use thiserror::Error;
@@ -90,12 +90,18 @@ pub enum TranslationError {
     /// This incremental translator does not yet encode interval-variable semantics.
     #[error("interval variables are not supported by the current CP-SAT translator")]
     UnsupportedIntervalVariable,
+    /// Validated planning IR referenced an integer absent from the retained index map.
+    #[error("validated planning IR referenced an unindexed integer variable")]
+    MissingIntegerIndex,
     /// This incremental translator does not yet encode this constraint primitive.
     #[error("the planning constraint is not supported by the current CP-SAT translator")]
     UnsupportedConstraint,
     /// Cardinality bounds and constant offsets must fit CP-SAT's signed integer domain.
     #[error("the cardinality constraint exceeds CP-SAT's signed 64-bit domain")]
     CardinalityBoundOverflow,
+    /// OR-Tools rejects integer domains or conservative linear sums outside its safe range.
+    #[error("the translated integer expression exceeds OR-Tools' native safe range")]
+    NativeIntegerOverflow,
     /// Common constraint enforcement is translated in a later stage.
     #[error("constraint enforcement is not supported by the current CP-SAT translator")]
     UnsupportedEnforcement,
@@ -128,21 +134,31 @@ pub fn translate_variable_domains(
     limits: PlanningIrLimitsV1,
 ) -> Result<VariableTranslation, TranslationError> {
     validate(problem, limits)?;
-    translate_variable_domains_validated(problem)
+    translate_variable_domains_validated(problem, false)
 }
 
 fn translate_variable_domains_validated(
     problem: &PlanningProblem,
+    include_constant_one: bool,
 ) -> Result<VariableTranslation, TranslationError> {
     let scalar_count = problem
         .variables
         .iter()
         .filter(|variable| !matches!(variable, Variable::Interval(_)))
         .count();
+    let variable_capacity = scalar_count
+        .checked_add(usize::from(include_constant_one))
+        .ok_or(TranslationError::VariableIndexOverflow)?;
     let mut model = CpModelProto {
-        variables: Vec::with_capacity(scalar_count),
+        variables: Vec::with_capacity(variable_capacity),
         ..CpModelProto::default()
     };
+    if include_constant_one {
+        model.variables.push(IntegerVariableProto {
+            name: String::new(),
+            domain: vec![1, 1],
+        });
+    }
     let mut boolean_indices = BTreeMap::new();
     let mut integer_indices = BTreeMap::new();
 
@@ -158,6 +174,7 @@ fn translate_variable_domains_validated(
                 boolean_indices.insert(boolean.id.clone(), index);
             }
             Variable::Integer(integer) => {
+                ensure_native_domain(&integer.domain)?;
                 model.variables.push(IntegerVariableProto {
                     name: String::new(),
                     domain: flatten_domain(&integer.domain),
@@ -178,11 +195,12 @@ fn translate_variable_domains_validated(
 /// Translates every currently supported planning primitive into a complete CP-SAT model.
 ///
 /// At this stage the accepted model surface is Boolean and integer scalar variables plus
-/// unenforced Boolean clauses, conjunctions, implications, equivalences, one-of constraints, and
-/// cardinality ranges. Unsupported primitives are rejected rather than omitted. Positive literals
-/// use their scalar variable index; negative literals use CP-SAT's exact `-index - 1` encoding.
-/// Empty clauses and exactly-one constraints remain empty and therefore false; empty conjunctions,
-/// at-most-one constraints, and the sole valid empty cardinality range `0..=0` remain true.
+/// unenforced Boolean clauses, conjunctions, implications, equivalences, one-of constraints,
+/// cardinality ranges, and integer linear comparisons. Unsupported primitives are rejected rather
+/// than omitted. Positive literals use their scalar variable index; negative literals use
+/// CP-SAT's exact `-index - 1` encoding. Empty clauses and exactly-one constraints remain empty
+/// and therefore false; empty conjunctions, at-most-one constraints, and the sole valid empty
+/// cardinality range `0..=0` remain true.
 /// # Errors
 ///
 /// Returns a validation error for invalid planning IR and an explicit unsupported-feature error
@@ -209,13 +227,34 @@ pub fn translate_supported_model(
         return Err(TranslationError::UnsupportedProjection);
     }
 
+    let needs_constant_one = problem.constraints.iter().any(|record| {
+        matches!(
+            &record.body,
+            Constraint::LinearComparison(comparison) if comparison.expression.constant != 0
+        )
+    });
     let VariableTranslation {
         mut model,
         boolean_indices,
         integer_indices,
-    } = translate_variable_domains_validated(problem)?;
-    model.constraints.reserve(problem.constraints.len());
+    } = translate_variable_domains_validated(problem, needs_constant_one)?;
+    translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
 
+    Ok(TranslatedCpSatModel {
+        cp_model_proto: model.encode_to_vec(),
+        boolean_indices,
+        integer_indices,
+    })
+}
+
+fn translate_constraints(
+    problem: &PlanningProblem,
+    model: &mut CpModelProto,
+    boolean_indices: &BTreeMap<BoolVariableId, i32>,
+    integer_indices: &BTreeMap<IntVariableId, i32>,
+    constant_one_index: i32,
+) -> Result<(), TranslationError> {
+    model.constraints.reserve(problem.constraints.len());
     for record in &problem.constraints {
         if !record.enforcement.is_empty() {
             return Err(TranslationError::UnsupportedEnforcement);
@@ -224,29 +263,29 @@ pub fn translate_supported_model(
             Constraint::BoolOr { literals } => {
                 model.constraints.push(boolean_constraint(
                     constraint_proto::Constraint::BoolOr,
-                    translate_literals(literals, &boolean_indices)?,
+                    translate_literals(literals, boolean_indices)?,
                 ));
             }
             Constraint::BoolAnd { literals } => {
                 model.constraints.push(boolean_constraint(
                     constraint_proto::Constraint::BoolAnd,
-                    translate_literals(literals, &boolean_indices)?,
+                    translate_literals(literals, boolean_indices)?,
                 ));
             }
             Constraint::Implication {
                 antecedent,
                 consequent,
             } => {
-                let antecedent = translate_literal(antecedent, &boolean_indices)?;
-                let consequent = translate_literal(consequent, &boolean_indices)?;
+                let antecedent = translate_literal(antecedent, boolean_indices)?;
+                let consequent = translate_literal(consequent, boolean_indices)?;
                 model.constraints.push(boolean_constraint(
                     constraint_proto::Constraint::BoolOr,
                     vec![!antecedent, consequent],
                 ));
             }
             Constraint::Equivalence { left, right } => {
-                let left = translate_literal(left, &boolean_indices)?;
-                let right = translate_literal(right, &boolean_indices)?;
+                let left = translate_literal(left, boolean_indices)?;
+                let right = translate_literal(right, boolean_indices)?;
                 model.constraints.push(boolean_constraint(
                     constraint_proto::Constraint::BoolOr,
                     vec![!left, right],
@@ -259,13 +298,13 @@ pub fn translate_supported_model(
             Constraint::AtMostOne { literals } => {
                 model.constraints.push(boolean_constraint(
                     constraint_proto::Constraint::AtMostOne,
-                    translate_literals(literals, &boolean_indices)?,
+                    translate_literals(literals, boolean_indices)?,
                 ));
             }
             Constraint::ExactlyOne { literals } => {
                 model.constraints.push(boolean_constraint(
                     constraint_proto::Constraint::ExactlyOne,
-                    translate_literals(literals, &boolean_indices)?,
+                    translate_literals(literals, boolean_indices)?,
                 ));
             }
             Constraint::CardinalityRange { literals, min, max } => {
@@ -273,18 +312,117 @@ pub fn translate_supported_model(
                     literals,
                     *min,
                     *max,
-                    &boolean_indices,
+                    boolean_indices,
+                )?);
+            }
+            Constraint::LinearComparison(comparison) => {
+                model.constraints.push(linear_comparison_constraint(
+                    comparison,
+                    integer_indices,
+                    &model.variables,
+                    constant_one_index,
                 )?);
             }
             _ => return Err(TranslationError::UnsupportedConstraint),
         }
     }
+    Ok(())
+}
 
-    Ok(TranslatedCpSatModel {
-        cp_model_proto: model.encode_to_vec(),
-        boolean_indices,
-        integer_indices,
+fn linear_comparison_constraint(
+    comparison: &LinearComparison,
+    integer_indices: &BTreeMap<IntVariableId, i32>,
+    variables: &[IntegerVariableProto],
+    constant_one_index: i32,
+) -> Result<ConstraintProto, TranslationError> {
+    let has_constant = comparison.expression.constant != 0;
+    let mut native_variables =
+        Vec::with_capacity(comparison.expression.terms.len() + usize::from(has_constant));
+    let mut coefficients = Vec::with_capacity(native_variables.capacity());
+
+    if has_constant {
+        native_variables.push(constant_one_index);
+        coefficients.push(comparison.expression.constant);
+    }
+    for term in &comparison.expression.terms {
+        native_variables.push(
+            integer_indices
+                .get(&term.variable)
+                .copied()
+                .ok_or(TranslationError::MissingIntegerIndex)?,
+        );
+        coefficients.push(term.coefficient);
+    }
+    ensure_native_linear_safe(&native_variables, &coefficients, variables)?;
+
+    let domain = match comparison.op {
+        ComparisonOp::Equal => vec![comparison.rhs, comparison.rhs],
+        ComparisonOp::LessOrEqual => vec![i64::MIN, comparison.rhs],
+        ComparisonOp::GreaterOrEqual => vec![comparison.rhs, i64::MAX],
+    };
+    Ok(ConstraintProto {
+        name: String::new(),
+        enforcement_literal: Vec::new(),
+        constraint: Some(constraint_proto::Constraint::Linear(
+            LinearConstraintProto {
+                vars: native_variables,
+                coeffs: coefficients,
+                domain,
+            },
+        )),
     })
+}
+
+fn ensure_native_domain(domain: &IntDomain) -> Result<(), TranslationError> {
+    let (lower, upper) = domain
+        .bounds()
+        .ok_or(TranslationError::NativeIntegerOverflow)?;
+    let limit = i64::MAX / 2;
+    if lower < -limit || upper > limit {
+        return Err(TranslationError::NativeIntegerOverflow);
+    }
+    Ok(())
+}
+
+fn ensure_native_linear_safe(
+    native_variables: &[i32],
+    coefficients: &[i64],
+    variables: &[IntegerVariableProto],
+) -> Result<(), TranslationError> {
+    let limit = i128::from(i64::MAX / 2);
+    let mut conservative_min = 0_i128;
+    let mut conservative_max = 0_i128;
+    for (&variable, &coefficient) in native_variables.iter().zip(coefficients) {
+        let variable = usize::try_from(variable)
+            .ok()
+            .and_then(|index| variables.get(index))
+            .ok_or(TranslationError::NativeIntegerOverflow)?;
+        let lower = i128::from(
+            *variable
+                .domain
+                .first()
+                .ok_or(TranslationError::NativeIntegerOverflow)?,
+        );
+        let upper = i128::from(
+            *variable
+                .domain
+                .last()
+                .ok_or(TranslationError::NativeIntegerOverflow)?,
+        );
+        let coefficient = i128::from(coefficient);
+        let first = lower * coefficient;
+        let second = upper * coefficient;
+        conservative_min = conservative_min
+            .checked_add(first.min(second).min(0))
+            .ok_or(TranslationError::NativeIntegerOverflow)?;
+        conservative_max = conservative_max
+            .checked_add(first.max(second).max(0))
+            .ok_or(TranslationError::NativeIntegerOverflow)?;
+        if conservative_min < -limit || conservative_max > limit {
+            return Err(TranslationError::NativeIntegerOverflow);
+        }
+    }
+    Ok(())
 }
 
 fn cardinality_constraint(
@@ -382,9 +520,9 @@ mod tests {
     use super::*;
     use eutheto_planning_ir::{
         BoolVariable, Capability, CompilerId, ConstraintRecord, InclusiveRange, IntVariable,
-        IntervalVariable, IntervalVariableId, ObjectivePlan, PLANNING_IR_SCHEMA_VERSION,
-        PROJECTION_SCHEMA_VERSION, PlanningConstraintId, PlanningMetadata, ProvenanceId,
-        ProvenanceRecord, ProvenanceSourceKind,
+        IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm, ObjectivePlan,
+        PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningConstraintId,
+        PlanningMetadata, ProvenanceId, ProvenanceRecord, ProvenanceSourceKind,
     };
     use eutheto_types::{PackId, ScenarioId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -808,6 +946,140 @@ mod tests {
                 (&[4][..], &[-1][..], &[-1, 0][..]),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn integer_linear_comparisons_preserve_constants_coefficients_and_bounds()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let start = IntVariableId::new("translation.b_start")?;
+        let duration = IntVariableId::new("translation.c_duration")?;
+        let end = IntVariableId::new("translation.d_end")?;
+        problem.constraints = vec![
+            constraint_record(
+                "constraint.a_equal",
+                Constraint::LinearComparison(LinearComparison {
+                    expression: LinearExpression::new(
+                        vec![
+                            LinearTerm {
+                                variable: start.clone(),
+                                coefficient: 2,
+                            },
+                            LinearTerm {
+                                variable: duration,
+                                coefficient: -3,
+                            },
+                        ],
+                        7,
+                    )?,
+                    op: ComparisonOp::Equal,
+                    rhs: 5,
+                }),
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.b_less",
+                Constraint::LinearComparison(LinearComparison {
+                    expression: LinearExpression::new(
+                        vec![LinearTerm {
+                            variable: end,
+                            coefficient: 1,
+                        }],
+                        0,
+                    )?,
+                    op: ComparisonOp::LessOrEqual,
+                    rhs: 4,
+                }),
+                Vec::new(),
+            )?,
+            constraint_record(
+                "constraint.c_greater",
+                Constraint::LinearComparison(LinearComparison {
+                    expression: LinearExpression::new(
+                        vec![LinearTerm {
+                            variable: start.clone(),
+                            coefficient: -1,
+                        }],
+                        -2,
+                    )?,
+                    op: ComparisonOp::GreaterOrEqual,
+                    rhs: -5,
+                }),
+                Vec::new(),
+            )?,
+        ];
+        problem
+            .declared_capabilities
+            .insert(Capability::LinearComparison);
+
+        let translated = translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT)?;
+        let model = CpModelProto::decode(translated.cp_model_proto())?;
+        let constraints: Vec<_> = model
+            .constraints
+            .iter()
+            .map(|constraint| match constraint.constraint.as_ref() {
+                Some(constraint_proto::Constraint::Linear(linear)) => (
+                    linear.vars.as_slice(),
+                    linear.coeffs.as_slice(),
+                    linear.domain.as_slice(),
+                ),
+                _ => (&[][..], &[][..], &[][..]),
+            })
+            .collect();
+
+        assert_eq!(model.variables.len(), 6);
+        assert_eq!(model.variables[0].domain, [1, 1]);
+        assert_eq!(translated.integer_index(&start), Some(2));
+        assert_eq!(
+            constraints,
+            [
+                (&[0, 2, 3][..], &[7, 2, -3][..], &[5, 5][..]),
+                (&[4][..], &[1][..], &[i64::MIN, 4][..]),
+                (&[0, 2][..], &[-2, -1][..], &[-5, i64::MAX][..]),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_conservative_linear_overflow_is_rejected_before_dispatch()
+    -> Result<(), Box<dyn Error>> {
+        let mut problem = scalar_problem()?;
+        let start = IntVariableId::new("translation.b_start")?;
+        for variable in &mut problem.variables {
+            if let Variable::Integer(integer) = variable
+                && integer.id == start
+            {
+                integer.domain = IntDomain::new(vec![InclusiveRange {
+                    start: 0,
+                    end: 5_000_000,
+                }])?;
+            }
+        }
+        problem.constraints.push(constraint_record(
+            "constraint.native_overflow",
+            Constraint::LinearComparison(LinearComparison {
+                expression: LinearExpression::new(
+                    vec![LinearTerm {
+                        variable: start,
+                        coefficient: 1_000_000_000_000,
+                    }],
+                    0,
+                )?,
+                op: ComparisonOp::LessOrEqual,
+                rhs: 0,
+            }),
+            Vec::new(),
+        )?);
+        problem
+            .declared_capabilities
+            .insert(Capability::LinearComparison);
+
+        assert!(matches!(
+            translate_supported_model(&problem, PlanningIrLimitsV1::DEFAULT),
+            Err(TranslationError::NativeIntegerOverflow)
+        ));
         Ok(())
     }
 
