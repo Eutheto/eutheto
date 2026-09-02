@@ -15,7 +15,6 @@ on:
   push:
     branches:
       - main
-      - feat/phase03-worker-protocol
     paths:
       - ".github/workflows/ortools-worker.yml"
       - "workers/ortools/**"
