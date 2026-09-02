@@ -492,6 +492,7 @@ list(APPEND worker_configure_command
   "-DCMAKE_PREFIX_PATH=${ortools_install_dir}"
   "-DEUTHETO_ORTOOLS_DEVELOPMENT_BUILD=ON"
   "-DEUTHETO_ORTOOLS_BUILD_TESTS=ON"
+  "-DEUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS=ON"
 )
 run_stage(worker-configure "${PROBE_ROOT}" ${worker_configure_command})
 
@@ -499,6 +500,7 @@ set(worker_cache "${worker_build_dir}/CMakeCache.txt")
 require_cache_entry(worker "${worker_cache}" CMAKE_BUILD_TYPE Release)
 require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_DEVELOPMENT_BUILD ON)
 require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_BUILD_TESTS ON)
+require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS ON)
 require_cache_entry(worker "${worker_cache}" EUTHETO_ORTOOLS_PHASE3_CONTRACT "")
 record_cache_entry(worker "${worker_cache}" CMAKE_PREFIX_PATH)
 record_cache_entry(worker "${worker_cache}" ortools_DIR)
@@ -512,14 +514,20 @@ if(WIN32 AND PROBE_GENERATOR MATCHES "^Visual Studio")
   set(worker_executable "${worker_build_dir}/Release/ortools-worker.exe")
   set(worker_test_executable
     "${worker_build_dir}/tests/Release/ortools-worker-native-tests.exe")
+  set(worker_benchmark_executable
+    "${worker_build_dir}/tests/Release/ortools-worker-candidate-benchmarks.exe")
 elseif(WIN32)
   set(worker_executable "${worker_build_dir}/ortools-worker.exe")
   set(worker_test_executable
     "${worker_build_dir}/tests/ortools-worker-native-tests.exe")
+  set(worker_benchmark_executable
+    "${worker_build_dir}/tests/ortools-worker-candidate-benchmarks.exe")
 else()
   set(worker_executable "${worker_build_dir}/ortools-worker")
   set(worker_test_executable
     "${worker_build_dir}/tests/ortools-worker-native-tests")
+  set(worker_benchmark_executable
+    "${worker_build_dir}/tests/ortools-worker-candidate-benchmarks")
 endif()
 if(NOT EXISTS "${worker_executable}")
   message(FATAL_ERROR "Expected worker executable does not exist: ${worker_executable}")
@@ -528,9 +536,14 @@ if(NOT EXISTS "${worker_test_executable}")
   message(FATAL_ERROR
     "Expected worker test executable does not exist: ${worker_test_executable}")
 endif()
+if(NOT EXISTS "${worker_benchmark_executable}")
+  message(FATAL_ERROR
+    "Expected worker benchmark executable does not exist: ${worker_benchmark_executable}")
+endif()
 file(APPEND "${report_file}"
   "worker_executable_inspected=true\n"
-  "worker_test_executable_inspected=true\n")
+  "worker_test_executable_inspected=true\n"
+  "worker_benchmark_executable_inspected=true\n")
 
 if(WIN32)
   file(GLOB runtime_libraries "${ortools_install_dir}/bin/*.dll")
@@ -550,7 +563,10 @@ else()
   find_program(file_executable file REQUIRED)
   find_program(ldd_executable ldd REQUIRED)
 endif()
-list(APPEND runtime_libraries "${worker_executable}" "${worker_test_executable}")
+list(APPEND runtime_libraries
+  "${worker_executable}"
+  "${worker_test_executable}"
+  "${worker_benchmark_executable}")
 list(REMOVE_DUPLICATES runtime_libraries)
 list(SORT runtime_libraries)
 list(LENGTH runtime_libraries runtime_binary_count)
@@ -581,6 +597,28 @@ file(APPEND "${report_file}" "runtime_closure_inspection=passed\n")
 if(WIN32)
   set(ENV{PATH} "${ortools_install_dir}/bin;$ENV{PATH}")
 endif()
+execute_process(
+  COMMAND "${worker_benchmark_executable}"
+  RESULT_VARIABLE benchmark_result
+  OUTPUT_FILE "${evidence_dir}/primitive-benchmarks.txt"
+  ERROR_FILE "${evidence_dir}/primitive-benchmarks.stderr.txt"
+  TIMEOUT 60
+  COMMAND_ECHO STDOUT
+  ENCODING UTF-8
+)
+file(APPEND "${report_file}" "primitive_benchmark_exit_code=${benchmark_result}\n")
+if(NOT "${benchmark_result}" STREQUAL "0")
+  message(FATAL_ERROR
+    "Candidate primitive benchmarks failed with exit code ${benchmark_result}.")
+endif()
+file(READ "${evidence_dir}/primitive-benchmarks.txt" benchmark_evidence)
+string(FIND "${benchmark_evidence}" "fixture_count=9" benchmark_fixture_marker)
+string(FIND "${benchmark_evidence}" "benchmark_result=passed" benchmark_result_marker)
+if(benchmark_fixture_marker EQUAL -1 OR benchmark_result_marker EQUAL -1)
+  message(FATAL_ERROR
+    "Candidate primitive benchmark evidence is incomplete or malformed.")
+endif()
+file(APPEND "${report_file}" "primitive_benchmark_evidence=passed\n")
 execute_process(
   COMMAND "${CMAKE_CTEST_COMMAND}"
     --test-dir "${worker_build_dir}"

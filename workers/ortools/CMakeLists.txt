@@ -8,6 +8,11 @@ option(
   OFF
 )
 option(EUTHETO_ORTOOLS_BUILD_TESTS "Build focused native worker tests" OFF)
+option(
+  EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS
+  "Build non-distributable pre-pin primitive benchmark evidence"
+  OFF
+)
 set(
   EUTHETO_ORTOOLS_PHASE3_CONTRACT
   ""
@@ -25,6 +30,13 @@ if(NOT worker_version_line_count EQUAL 1
   message(FATAL_ERROR "workers/ortools/VERSION must contain exactly 0.1.0.")
 endif()
 
+
+if(EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS AND
+   NOT EUTHETO_ORTOOLS_BUILD_TESTS)
+  message(FATAL_ERROR
+    "Candidate benchmarks require EUTHETO_ORTOOLS_BUILD_TESTS=ON."
+  )
+endif()
 
 if(EUTHETO_ORTOOLS_DEVELOPMENT_BUILD)
   message(WARNING
