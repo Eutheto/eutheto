@@ -418,10 +418,12 @@ stdenv.mkDerivation {
 
   postFixup = ''
     ${lib.optionalString stdenv.hostPlatform.isLinux ''
-      for binary in "$out/bin/ortools-worker" "$out"/lib/*.so "$out"/lib/*.so.*; do
+      patchelf --set-rpath '$ORIGIN/../lib' "$out/bin/ortools-worker"
+      patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 "$out/bin/ortools-worker"
+      for binary in "$out"/lib/*.so "$out"/lib/*.so.*; do
         test -e "$binary" || continue
         test -L "$binary" && exit 1
-        patchelf --set-rpath "$out/lib:${linuxRuntimeLibraryPath}" "$binary"
+        patchelf --set-rpath '$ORIGIN' "$binary"
       done
     ''}
     if find "$out" -type l -print -quit | grep -q .; then
@@ -443,8 +445,17 @@ stdenv.mkDerivation {
   installCheckPhase = ''
     runHook preInstallCheck
 
+    workerUnderTest="$out/bin/ortools-worker"
+    ${lib.optionalString stdenv.hostPlatform.isLinux ''
+      workerUnderTest="$NIX_BUILD_TOP/ortools-worker-install-check"
+      cp "$out/bin/ortools-worker" "$workerUnderTest"
+      patchelf \
+        --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
+        --set-rpath "$out/lib:${linuxRuntimeLibraryPath}" \
+        "$workerUnderTest"
+    ''}
     set +e
-    "$out/bin/ortools-worker" </dev/null >worker.stdout 2>worker.stderr
+    "$workerUnderTest" </dev/null >worker.stdout 2>worker.stderr
     workerStatus=$?
     set -e
     if test "$workerStatus" -ne 64; then
@@ -521,6 +532,15 @@ stdenv.mkDerivation {
           exit 1
           ;;
       esac
+      ${lib.optionalString stdenv.hostPlatform.isLinux ''
+        case "$linkage:$runtimePaths" in
+          *"/nix/store/"*)
+            echo "installed solver payload retains a Nix-store loader reference: $artifact" >&2
+            printf '%s\n%s\n' "$linkage" "$runtimePaths" >&2
+            exit 1
+            ;;
+        esac
+      ''}
 
       while IFS= read -r dependency; do
         test -n "$dependency" || continue
@@ -534,14 +554,38 @@ stdenv.mkDerivation {
     done
 
     workerRuntimePaths="$(runtime_paths "$out/bin/ortools-worker")"
-    case "$workerRuntimePaths" in
-      *"$out/lib"*) ;;
-      *)
-        echo "installed worker does not search the packaged runtime directory" >&2
+    ${lib.optionalString stdenv.hostPlatform.isLinux ''
+      if test "$workerRuntimePaths" != '$ORIGIN/../lib'; then
+        echo "installed worker does not use only the packaged relative runtime directory" >&2
         printf '%s\n' "$workerRuntimePaths" >&2
         exit 1
-        ;;
-    esac
+      fi
+    ''}
+    ${lib.optionalString stdenv.hostPlatform.isDarwin ''
+      case "$workerRuntimePaths" in
+        *"$out/lib"*) ;;
+        *)
+          echo "installed worker does not search the packaged runtime directory" >&2
+          printf '%s\n' "$workerRuntimePaths" >&2
+          exit 1
+          ;;
+      esac
+    ''}
+
+    ${lib.optionalString stdenv.hostPlatform.isLinux ''
+      workerInterpreter="$(patchelf --print-interpreter "$out/bin/ortools-worker")"
+      if test "$workerInterpreter" != /lib64/ld-linux-x86-64.so.2; then
+        echo "installed worker uses a non-portable ELF interpreter: $workerInterpreter" >&2
+        exit 1
+      fi
+      case "$workerRuntimePaths" in
+        *"/nix/store/"*)
+          echo "installed worker retains a Nix-store runtime path" >&2
+          printf '%s\n' "$workerRuntimePaths" >&2
+          exit 1
+          ;;
+      esac
+    ''}
 
     if find "$out" -type l -print -quit | grep -q .; then
       echo "installed solver artifact contains a symlink" >&2
