@@ -281,7 +281,7 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 16 and
+      (.workspace_members | length) == 17 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
@@ -291,6 +291,7 @@
         "eutheto-domain-ir",
         "eutheto-export",
         "eutheto-import",
+        "eutheto-phase03-benchmark",
         "eutheto-planning-ir",
         "eutheto-protocol",
         "eutheto-solver-api",
