@@ -58,7 +58,7 @@ Never hand-edit a generated product. Change its authoritative input, run `just g
 | `just test-ui` | Runs pnpm UI unit and component tests. |
 | `just test` | Runs the Rust, documentation, and UI test recipes. |
 | `just coverage` | Runs the Rust workspace through `cargo llvm-cov nextest` with the full-shell tools. Coverage is diagnostic and does not replace behavioral tests. |
-| `just bench` | Fails until Phase 03 approves the OR-Tools pin and a real primitive benchmark corpus; Phase 00 does not report an empty Cargo benchmark run as evidence. |
+| `just bench` | Builds the exact pinned native OR-Tools worker, runs the checked-in Phase-03 primitive Planning IR corpus through the production adapter under fixed seed/thread/budget settings, writes versioned raw evidence under `.cache/benchmarks/`, and prints it. The evidence is not a product SLA and grants no candidate acceptance. |
 | `just e2e` | Fails with the Phase-11 packaged-desktop/WebDriver gate until supported targets and prerequisites exist. It does not pretend that a Vite browser test proves a packaged Tauri application. |
 
 ### Applications and builds

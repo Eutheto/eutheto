@@ -1040,6 +1040,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "eutheto-phase03-benchmark"
+version = "0.1.0"
+dependencies = [
+ "eutheto-planning-ir",
+ "eutheto-protocol",
+ "eutheto-solver-api",
+ "eutheto-solver-ortools",
+ "eutheto-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "eutheto-planning-ir"
 version = "0.1.0"
 dependencies = [

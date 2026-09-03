@@ -16,6 +16,7 @@ members = [
   "crates/eutheto-import",
   "crates/eutheto-cli",
   "apps/desktop/src-tauri",
+  "benchmarks/runner",
   "xtask",
 ]
 

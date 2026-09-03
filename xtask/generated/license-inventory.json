@@ -1261,6 +1261,14 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-phase03-benchmark",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "benchmarks/runner"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-planning-ir",
       "version": "0.1.0",
       "kind": "workspace",
