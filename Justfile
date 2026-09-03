@@ -36,7 +36,7 @@ protocol-check:
 fixtures-check:
     cargo xtask fixtures validate
 
-# Enforce Phase-02 workspace dependency direction.
+# Enforce workspace dependency direction and required architecture crates.
 architecture-check:
     cargo xtask architecture verify
 

@@ -48,6 +48,22 @@ Once released, a field name, numeric field tag, enum numeric value, tagged-union
 
 Renaming while reusing the same identifier for changed semantics is a breaking change, not a migration shortcut. A new meaning receives a new identifier and versioned migration. Aliases, dual writers, deprecated duplicate fields, and silent fallbacks are forbidden unless the published compatibility contract specifically requires a bounded read path. Internal callers migrate in the same change and obsolete write paths are removed.
 
+## Phase 04 result-contract compatibility
+
+| Surface | Current writer | Current reader | Retained legacy reader |
+|---|---:|---:|---|
+| `NormalizedSolution` | V1 | V1 only | None; the V1 shape remains current |
+| `VerificationScope` | V1 | V1 only | None |
+| `VerificationContextV1` | V1 | V1 only | None |
+| `VerificationReport` | V2 | V2 only | Exact V1 decoding through `LegacyVerificationReportV1`; inert and never accepted |
+| `AcceptedResult` | V2 | V2 only | Exact V1 decoding through `LegacyAcceptedResultV1`; inert and never upgraded in place |
+
+All current result contracts are closed to unknown fields, reject unknown versions, use canonical
+ordering where checksums depend on serialized bytes, and reject scenario revisions above
+`9_007_199_254_740_991`, the largest integer exactly representable by supported JSON/TypeScript
+clients. Current writers never emit V1 report/result data. Legacy readers neither construct a V2
+result nor grant acceptance authority.
+
 ## Worker protocol compatibility
 
 The authoritative protocol source, protocol version declaration, generator and runtime, matched upstream protobuf inputs, generated bindings, worker, desktop adapter, golden frames, hashes, and manifests are one reviewed contract. Peers negotiate before accepting model/request traffic. An unsupported version, capability, target, source/hash, or lifecycle contract produces a typed incompatibility and starts no solve.

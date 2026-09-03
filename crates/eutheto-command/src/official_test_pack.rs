@@ -13,9 +13,10 @@ use eutheto_domain_api::{
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
-    DomainEntityRef, NormalizedSolution, OptimizationDirection, ScoreCategoryId, ScoreLevelId,
-    ScoreLevelValue, ScoreVector, VERIFICATION_REPORT_SCHEMA_VERSION, VerificationIssue,
-    VerificationIssueId, VerificationReport, VerificationSeverity,
+    DomainEntityRef, NormalizedSolution, OptimizationDirection, RequiredRuleBinding,
+    RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue, ScoreVector,
+    VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
+    VerificationValue, blake3_hex,
 };
 use eutheto_planning_ir::{
     BoolVariable, BoolVariableId, CandidateValues, Capability, ComparisonOp, CompilerId,
@@ -28,8 +29,8 @@ use eutheto_planning_ir::{
     validate,
 };
 use eutheto_types::{
-    DomainCommandEnvelope, DomainPackRef, PackId, PersonId, ScenarioDocument, ScenarioDomain,
-    SolutionId, ValidationIssue, ValidationSeverity,
+    DomainCommandEnvelope, DomainPackRef, PackId, PersonId, RuleId, ScenarioDocument,
+    ScenarioDomain, SolutionId, ValidationIssue, ValidationSeverity,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -353,21 +354,44 @@ impl DomainPack for crate::OfficialTestPack {
         .map_err(contract)
     }
 
+    fn verification_scope(
+        &self,
+        document: &ScenarioDocument,
+        scenario_revision: u64,
+    ) -> Result<VerificationScope, DomainPackError> {
+        let required_rules = parse_entities(document)?
+            .into_values()
+            .map(|entity| {
+                Ok(RequiredRuleBinding {
+                    rule_id: RuleId::from_uuid(entity.id.as_uuid()),
+                    semantic_hash: blake3_hex(
+                        &serde_json::to_vec(&("official.test.required_target.v1", &entity))
+                            .map_err(|error| payload("/domain/entities", error))?,
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, DomainPackError>>()?;
+        VerificationScope::new(document.scenario_id, scenario_revision, required_rules)
+            .map_err(contract)
+    }
+
     fn verify(
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        context: &VerificationContextV1,
+        authoritative_score: &ScoreVector,
     ) -> Result<VerificationReport, DomainPackError> {
-        let (score, issues) = assess(document, solution)?;
-        let report = VerificationReport {
-            schema_version: VERIFICATION_REPORT_SCHEMA_VERSION,
-            scenario_revision: solution.scenario_revision,
-            feasible: issues.is_empty(),
-            issues,
-            score: Some(score),
-        };
-        report.validate().map_err(contract)?;
-        Ok(report)
+        validate_verification_context(*self, document, solution, context)?;
+        let evaluations = evaluate_required_rules(document, solution)?;
+        VerificationReport::new(
+            context,
+            evaluations,
+            authoritative_score.clone(),
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .map_err(contract)
     }
 
     fn score(
@@ -375,7 +399,7 @@ impl DomainPack for crate::OfficialTestPack {
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
     ) -> Result<ScoreVector, DomainPackError> {
-        assess(document, solution).map(|(score, _)| score)
+        authoritative_score(document, solution)
     }
 
     fn export_portable(
@@ -1226,10 +1250,32 @@ fn provenance_record(
     }
 }
 
-fn assess(
+fn validate_verification_context(
+    pack: crate::OfficialTestPack,
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
-) -> Result<(ScoreVector, Vec<VerificationIssue>), DomainPackError> {
+    context: &VerificationContextV1,
+) -> Result<(), DomainPackError> {
+    context.validate().map_err(contract)?;
+    let document_hash =
+        blake3_hex(&serde_json::to_vec(document).map_err(|error| payload("/document", error))?);
+    let normalized_solution_hash = solution.canonical_hash().map_err(contract)?;
+    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    if context.scenario_id != document.scenario_id
+        || context.evaluated_revision != solution.scenario_revision
+        || context.document_hash != document_hash
+        || context.normalized_solution_hash != normalized_solution_hash
+        || context.verification_scope_checksum != scope.checksum
+    {
+        return Err(contract("verification context binding mismatch"));
+    }
+    Ok(())
+}
+
+fn evaluate_required_rules(
+    document: &ScenarioDocument,
+    solution: &NormalizedSolution,
+) -> Result<Vec<RuleEvaluation>, DomainPackError> {
     require_pack(document)?;
     solution.validate().map_err(contract)?;
     if solution.pack_id != document.domain_pack.id || solution.scenario_id != document.scenario_id {
@@ -1241,7 +1287,7 @@ fn assess(
     let assignments: BTreeMap<_, _> = solution
         .assignments
         .iter()
-        .map(|assignment| (assignment.id.as_str().to_owned(), assignment.value.clone()))
+        .map(|assignment| (assignment.id.as_str().to_owned(), assignment))
         .collect();
     let expected_assignment_ids: BTreeSet<_> = entities
         .keys()
@@ -1261,15 +1307,30 @@ fn assess(
             "solution contains an unknown domain assignment".to_owned(),
         ));
     }
-    let mut issues = Vec::new();
-    let mut total = 0_i64;
+
+    let enabled_fact = VerificationFactId::new("official.test.fact.enabled").map_err(contract)?;
+    let target_fact = VerificationFactId::new("official.test.fact.target").map_err(contract)?;
+    let mut evaluations = Vec::with_capacity(entities.len());
     for (id, entity) in &entities {
         let suffix = id.to_string();
-        let enabled_id = format!("official.test.assignment.enabled.{suffix}");
-        let target_id = format!("official.test.assignment.target.{suffix}");
-        let enabled = assignments.get(enabled_id.as_str());
-        let target = assignments.get(target_id.as_str());
-        let valid = matches!(
+        let entity_ref = DomainEntityRef {
+            kind: DomainEntityKindId::new(ENTITY_KIND).map_err(contract)?,
+            id: DomainEntityId::new(format!("official.test.entity.{suffix}")).map_err(contract)?,
+        };
+        let enabled_assignment =
+            assignments.get(&format!("official.test.assignment.enabled.{suffix}"));
+        let target_assignment =
+            assignments.get(&format!("official.test.assignment.target.{suffix}"));
+        if enabled_assignment
+            .into_iter()
+            .chain(target_assignment)
+            .any(|assignment| assignment.entity != entity_ref)
+        {
+            return Err(contract("solution assignment entity mismatch"));
+        }
+        let enabled = enabled_assignment.map(|assignment| &assignment.value);
+        let target = target_assignment.map(|assignment| &assignment.value);
+        let satisfied = matches!(
             (enabled, target),
             (
                 Some(AssignmentValue::Boolean(enabled)),
@@ -1278,29 +1339,97 @@ fn assess(
                 && *target == entity.target
                 && *enabled == (*target >= 1)
         );
+        evaluations.push(RuleEvaluation {
+            rule_id: RuleId::from_uuid(id.as_uuid()),
+            satisfied,
+            affected_entities: vec![entity_ref],
+            message_key: "official.test.verify.required_target".to_owned(),
+            expected: [
+                (
+                    enabled_fact.clone(),
+                    VerificationValue::Boolean(entity.enabled),
+                ),
+                (
+                    target_fact.clone(),
+                    VerificationValue::Integer(entity.target),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            observed: [
+                (enabled_fact.clone(), assignment_verification_value(enabled)),
+                (target_fact.clone(), assignment_verification_value(target)),
+            ]
+            .into_iter()
+            .collect(),
+            evidence: Vec::new(),
+        });
+    }
+    Ok(evaluations)
+}
+
+fn authoritative_score(
+    document: &ScenarioDocument,
+    solution: &NormalizedSolution,
+) -> Result<ScoreVector, DomainPackError> {
+    require_pack(document)?;
+    solution.validate().map_err(contract)?;
+    if solution.pack_id != document.domain_pack.id || solution.scenario_id != document.scenario_id {
+        return Err(DomainPackError::Contract(
+            "solution scenario mismatch".to_owned(),
+        ));
+    }
+    let entities = parse_entities(document)?;
+    let assignments: BTreeMap<_, _> = solution
+        .assignments
+        .iter()
+        .map(|assignment| (assignment.id.as_str().to_owned(), &assignment.value))
+        .collect();
+    let expected_assignment_ids: BTreeSet<_> = entities
+        .keys()
+        .flat_map(|id| {
+            let suffix = id.to_string();
+            [
+                format!("official.test.assignment.enabled.{suffix}"),
+                format!("official.test.assignment.target.{suffix}"),
+            ]
+        })
+        .collect();
+    if assignments
+        .keys()
+        .any(|id| !expected_assignment_ids.contains(id))
+    {
+        return Err(contract("solution contains an unknown domain assignment"));
+    }
+
+    let mut feasibility = 0_i64;
+    let mut total = 0_i64;
+    for (id, entity) in &entities {
+        let suffix = id.to_string();
+        let enabled = assignments.get(&format!("official.test.assignment.enabled.{suffix}"));
+        let target = assignments.get(&format!("official.test.assignment.target.{suffix}"));
+        let satisfied = matches!(
+            (enabled, target),
+            (
+                Some(AssignmentValue::Boolean(enabled)),
+                Some(AssignmentValue::Integer(target))
+            ) if *enabled == entity.enabled
+                && *target == entity.target
+                && *enabled == (*target >= 1)
+        );
+        if !satisfied {
+            feasibility = feasibility
+                .checked_add(1)
+                .ok_or_else(|| contract("score feasibility overflow"))?;
+        }
         if let Some(AssignmentValue::Integer(value)) = target {
             total = total
                 .checked_add(*value)
-                .ok_or_else(|| DomainPackError::Contract("score overflow".to_owned()))?;
-        }
-        if !valid {
-            issues.push(VerificationIssue {
-                id: VerificationIssueId::new(format!("official.test.verify.{suffix}"))
-                    .map_err(contract)?,
-                severity: VerificationSeverity::Error,
-                message_key: "official.test.verify.required_target".to_owned(),
-                entities: vec![DomainEntityRef {
-                    kind: DomainEntityKindId::new(ENTITY_KIND).map_err(contract)?,
-                    id: DomainEntityId::new(format!("official.test.entity.{suffix}"))
-                        .map_err(contract)?,
-                }],
-                evidence: Vec::new(),
-            });
+                .ok_or_else(|| contract("score overflow"))?;
         }
     }
-    issues.sort_by(|left, right| left.id.cmp(&right.id));
-    let score = ScoreVector {
-        feasibility: i64::try_from(issues.len()).map_err(contract)?,
+    Ok(ScoreVector {
+        feasibility,
         levels: vec![ScoreLevelValue {
             level_id: ScoreLevelId::new(SCORE_LEVEL).map_err(contract)?,
             value: total,
@@ -1312,8 +1441,20 @@ fn assess(
             .into_iter()
             .collect(),
         }],
-    };
-    Ok((score, issues))
+    })
+}
+
+fn assignment_verification_value(value: Option<&AssignmentValue>) -> VerificationValue {
+    match value {
+        Some(AssignmentValue::Boolean(value)) => VerificationValue::Boolean(*value),
+        Some(AssignmentValue::Integer(value)) => VerificationValue::Integer(*value),
+        Some(AssignmentValue::Interval(value)) => VerificationValue::Text(format!(
+            "interval:{}:{}:{}",
+            value.start, value.duration, value.end
+        )),
+        Some(AssignmentValue::Absent) => VerificationValue::Text("absent".to_owned()),
+        None => VerificationValue::Text("missing".to_owned()),
+    }
 }
 
 fn payload(path: &str, error: impl std::fmt::Display) -> DomainPackError {

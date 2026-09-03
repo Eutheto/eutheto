@@ -1,24 +1,26 @@
 use eutheto_command::{OFFICIAL_TEST_PACK_ID, official_registry};
-use eutheto_domain_api::{CompileContext, DomainPack};
-use eutheto_domain_ir::{AssignmentValue, NormalizedSolution, ScoreVector, VerificationReport};
+use eutheto_core::RouterCandidateReviewer;
+use eutheto_domain_api::CompileContext;
+use eutheto_domain_ir::AssignmentValue;
 use eutheto_planning_ir::{
-    CandidateValues, PlanningIrLimitsV1, PlanningProblem, PlanningProblemSummary, Variable,
-    canonical_ir_hash, summarize, validate,
+    CandidateValues, PlanningIrLimitsV1, PlanningProblemSummary, Variable, canonical_ir_hash,
+    summarize, validate,
 };
 use eutheto_solver_api::*;
 use eutheto_solver_router::*;
 use eutheto_types::{
     BackendId, BackendSelection, CancellationToken, DurationMillis, ExplanationMode,
-    FixedMonotonicClock, PackId, ParentSolveBudget, PreservationPolicy, ReproducibilityMode,
-    ResourceLimits, ScenarioDocument, SolutionId, SolveMode, SolveOptions, SolveStatus,
+    FixedIdGenerator, FixedMonotonicClock, PackId, ParentSolveBudget, PreservationPolicy,
+    ReproducibilityMode, ResourceLimits, ScenarioDocument, SolveMode, SolveOptions, SolveStatus,
     WorkerThreadPolicy,
 };
+use eutheto_verify::{AcceptanceDecision, BackendObjectiveReconciliation, SystemVerificationClock};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use uuid::Uuid;
 
 const SCENARIO_ID: &str = "0195a5e4-7c00-7000-8000-000000000021";
 const ENTITY_ID: &str = "018f25a7-8b3c-7d11-8000-000000000021";
@@ -110,53 +112,6 @@ impl SolverBackend for ExactTestBackend {
                 },
             })
         })
-    }
-}
-
-struct ReviewingCandidate<'a> {
-    pack: &'a dyn DomainPack,
-    problem: &'a PlanningProblem,
-    document: &'a ScenarioDocument,
-    solution_id: SolutionId,
-    solution: Option<NormalizedSolution>,
-    verification: Option<VerificationReport>,
-    score: Option<ScoreVector>,
-    observed_raw_objective: Option<i64>,
-}
-
-impl CandidateReviewer for ReviewingCandidate<'_> {
-    fn review(&mut self, _backend_id: &BackendId, candidate: &BackendCandidate) -> CandidateReview {
-        self.observed_raw_objective = candidate
-            .objective
-            .as_ref()
-            .and_then(|objective| objective.objective_values.first().copied());
-        let Ok(solution) = self
-            .pack
-            .project(self.problem, &candidate.values, self.solution_id)
-        else {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.projection_failed".to_owned(),
-            };
-        };
-        let Ok(verification) = self.pack.verify(self.document, &solution) else {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.failed".to_owned(),
-            };
-        };
-        let Ok(score) = self.pack.score(self.document, &solution) else {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.score_failed".to_owned(),
-            };
-        };
-        if !verification.feasible || verification.score.as_ref() != Some(&score) {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.rejected".to_owned(),
-            };
-        }
-        self.solution = Some(solution);
-        self.verification = Some(verification);
-        self.score = Some(score);
-        CandidateReview::Verified
     }
 }
 
@@ -330,6 +285,8 @@ fn duration(value: u64) -> Result<DurationMillis, BackendError> {
 }
 
 #[tokio::test]
+// This vertical test keeps routing, verification, timing, and accepted-result assertions together.
+#[allow(clippy::too_many_lines)]
 async fn official_pack_candidate_is_projected_verified_and_scored_before_router_acceptance()
 -> TestResult {
     let domain_registry = official_registry()?;
@@ -359,16 +316,17 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
         CancellationToken::new(),
     )?;
     let mut progress = Progress;
-    let mut reviewer = ReviewingCandidate {
+    let verification_clock = SystemVerificationClock::default();
+    let id_generator = FixedIdGenerator::single(Uuid::parse_str(SOLUTION_ID)?);
+    let mut reviewer = RouterCandidateReviewer::new(
         pack,
-        problem: problem.as_ref(),
-        document: &source,
-        solution_id: SolutionId::from_str(SOLUTION_ID)?,
-        solution: None,
-        verification: None,
-        score: None,
-        observed_raw_objective: None,
-    };
+        &source,
+        context.scenario_revision,
+        problem.as_ref(),
+        &verification_clock,
+        &id_generator,
+    )
+    .map_err(|alarm| std::io::Error::other(alarm.diagnostic_code))?;
     let execution = SolverRouter::new(&solver_registry)
         .execute(
             problem.clone(),
@@ -386,7 +344,23 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
     assert_eq!(execution.terminal_status, SolveStatus::Feasible);
     assert_eq!(execution.invocation_count, 1);
     assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
-    assert_eq!(reviewer.observed_raw_objective, Some(RAW_BACKEND_OBJECTIVE));
+    assert_eq!(
+        execution.first_verified_feasible_milliseconds,
+        Some(DurationMillis::ZERO)
+    );
+    let decision = reviewer.decision().ok_or("acceptance decision missing")?;
+    let AcceptanceDecision::Accepted {
+        result,
+        objective_reconciliation,
+        ..
+    } = decision
+    else {
+        return Err(format!("expected accepted decision, got {decision:?}").into());
+    };
+    assert_eq!(
+        *objective_reconciliation,
+        BackendObjectiveReconciliation::Mismatch
+    );
     assert_eq!(
         execution
             .selected_candidate
@@ -396,10 +370,7 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
         Some(&RAW_BACKEND_OBJECTIVE)
     );
 
-    let solution = reviewer
-        .solution
-        .as_ref()
-        .ok_or("verified solution missing")?;
+    let solution = &result.solution;
     let enabled_assignment = format!("official.test.assignment.enabled.{ENTITY_ID}");
     let target_assignment = format!("official.test.assignment.target.{ENTITY_ID}");
     assert_eq!(
@@ -418,20 +389,12 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
             .map(|assignment| &assignment.value),
         Some(&AssignmentValue::Integer(3))
     );
-    let score = reviewer
-        .score
-        .as_ref()
-        .ok_or("authoritative score missing")?;
+    let score = &result.verification.score;
     assert_eq!(score.feasibility, 0);
     assert_eq!(score.levels[0].value, 3);
     assert_ne!(score.levels[0].value, RAW_BACKEND_OBJECTIVE);
-    assert_eq!(
-        reviewer
-            .verification
-            .as_ref()
-            .and_then(|report| report.score.as_ref()),
-        Some(score)
-    );
+    assert!(result.verification.accepted);
+    assert_eq!(result.verification.required_rule_results.len(), 1);
     Ok(())
 }
 

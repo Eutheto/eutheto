@@ -9,7 +9,10 @@ use eutheto_domain_api::{
     DomainValidationReport, HistoricalPortableDomainDocument, PortableDomainDocument,
     PortableImportContext, ShareResultOptions,
 };
-use eutheto_domain_ir::{AcceptedResult, NormalizedSolution, ScoreVector, VerificationReport};
+use eutheto_domain_ir::{
+    AcceptedResult, NormalizedSolution, ScoreVector, VerificationContextV1, VerificationReport,
+    VerificationScope,
+};
 use eutheto_export::{
     ApplicationMetadata, BackupSections, PortableScenario, ScenarioExportSnapshot,
     assemble_scenario_export,
@@ -190,10 +193,20 @@ impl DomainPack for HistoricalFixturePack {
         Self::unsupported()
     }
 
+    fn verification_scope(
+        &self,
+        _document: &ScenarioDocument,
+        _scenario_revision: u64,
+    ) -> Result<VerificationScope, DomainPackError> {
+        Self::unsupported()
+    }
+
     fn verify(
         &self,
         _document: &ScenarioDocument,
         _solution: &NormalizedSolution,
+        _context: &VerificationContextV1,
+        _authoritative_score: &ScoreVector,
     ) -> Result<VerificationReport, DomainPackError> {
         Self::unsupported()
     }

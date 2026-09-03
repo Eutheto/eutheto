@@ -5,10 +5,16 @@ use eutheto_domain_api::{
     HistoricalPortableDomainDocument, PortableImportContext, ShareResultOptions,
     validate_contract_value,
 };
-use eutheto_domain_ir::AcceptedResult;
-use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, Variable, summarize, validate};
+use eutheto_domain_ir::{
+    AcceptedResult, AssignmentValue, NormalizedSolution, VerificationContextV1, blake3_hex,
+};
+use eutheto_planning_ir::{
+    CandidateValues, PlanningIrLimitsV1, PlanningProblem, Variable, canonical_ir_hash, summarize,
+    validate,
+};
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, PackId, ScenarioDocument, SolutionId,
+    CancellationToken, DomainCommandEnvelope, PackId, PersonId, RuleId, ScenarioDocument,
+    SolutionId,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -79,6 +85,22 @@ fn context() -> CompileContext {
         cancellation: CancellationToken::new(),
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
+}
+fn verification_context(
+    pack: &dyn DomainPack,
+    document: &ScenarioDocument,
+    problem: &PlanningProblem,
+    solution: &NormalizedSolution,
+) -> Result<VerificationContextV1, Box<dyn Error>> {
+    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    Ok(VerificationContextV1::new(
+        document.scenario_id,
+        solution.scenario_revision,
+        blake3_hex(&serde_json::to_vec(document)?),
+        canonical_ir_hash(problem, PlanningIrLimitsV1::DEFAULT)?,
+        solution.canonical_hash()?,
+        scope.checksum,
+    )?)
 }
 
 #[test]
@@ -239,7 +261,14 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
         }
     }
     let solution = pack.project(&problem, &candidate, SolutionId::from_str(SOLUTION_ID)?)?;
-    let verification = pack.verify(&source, &solution)?;
+    let authoritative_score = pack.score(&source, &solution)?;
+    let verification_context = verification_context(&pack, &source, &problem, &solution)?;
+    let verification = pack.verify(
+        &source,
+        &solution,
+        &verification_context,
+        &authoritative_score,
+    )?;
     let accepted = AcceptedResult::new(solution, verification)?;
     source.extensions.insert(
         "nonsemantic.source-only".to_owned(),
@@ -258,7 +287,7 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
     assert!(shared.payload.get("extensions").is_none());
     assert!(!serde_json::to_string(&shared.payload)?.contains("must-not-be-shared"));
     let mut unaccepted = accepted.clone();
-    unaccepted.verification.feasible = false;
+    unaccepted.verification.accepted = false;
     assert!(
         pack.build_share_result(&source, &unaccepted, ShareResultOptions::default())
             .is_err()
@@ -373,11 +402,39 @@ fn portable_semantic_extensions_are_rejected_in_current_and_historical_data()
     Ok(())
 }
 
+fn satisfying_candidate(problem: &PlanningProblem) -> CandidateValues {
+    let mut candidate = CandidateValues::default();
+    for variable in &problem.variables {
+        match variable {
+            Variable::Boolean(value) => {
+                candidate.booleans.insert(value.id.clone(), true);
+            }
+            Variable::Integer(value) => {
+                candidate.integers.insert(value.id.clone(), 3);
+            }
+            Variable::Interval(_) => {}
+        }
+    }
+    candidate
+}
+
 #[test]
+// This contract test keeps compilation, projection, verification, and score determinism together.
+#[allow(clippy::too_many_lines)]
 fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Error>> {
     let pack = OfficialTestPack;
     let source = document()?;
     let limits = PlanningIrLimitsV1::DEFAULT;
+    let verification_scope = pack.verification_scope(&source, context().scenario_revision)?;
+    assert_eq!(
+        verification_scope,
+        pack.verification_scope(&source, context().scenario_revision)?
+    );
+    assert_eq!(verification_scope.required_rules.len(), 1);
+    assert_eq!(
+        verification_scope.required_rules[0].rule_id,
+        RuleId::from_uuid(PersonId::from_str(ENTITY_ID)?.as_uuid())
+    );
     let first = pack.compile(&source, &context())?;
     let second = pack.compile(&source, &context())?;
     validate(&first, limits)?;
@@ -421,26 +478,59 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
         first_summary.canonical_ir_hash
     );
 
-    let mut candidate = CandidateValues::default();
-    for variable in &first.variables {
-        match variable {
-            Variable::Boolean(value) => {
-                candidate.booleans.insert(value.id.clone(), true);
-            }
-            Variable::Integer(value) => {
-                candidate.integers.insert(value.id.clone(), 3);
-            }
-            Variable::Interval(_) => {}
-        }
-    }
+    let candidate = satisfying_candidate(&first);
     let solution = pack.project(&first, &candidate, SolutionId::from_str(SOLUTION_ID)?)?;
-    let report = pack.verify(&source, &solution)?;
-    assert!(report.feasible);
-    assert!(report.issues.is_empty());
-    let score = pack.score(&source, &solution)?;
-    assert_eq!(score.feasibility, 0);
-    assert_eq!(score.levels[0].value, 3);
-    assert_eq!(report.score, Some(score));
+    let authoritative_score = pack.score(&source, &solution)?;
+    let context_for_solution = verification_context(&pack, &source, &first, &solution)?;
+    let mut unsatisfied = solution.clone();
+    let target = unsatisfied
+        .assignments
+        .iter_mut()
+        .find(|assignment| assignment.id.as_str().contains(".target."))
+        .ok_or("target assignment missing")?;
+    target.value = AssignmentValue::Integer(4);
+    let unsatisfied_score = pack.score(&source, &unsatisfied)?;
+    let unsatisfied_context = verification_context(&pack, &source, &first, &unsatisfied)?;
+    let report = pack.verify(
+        &source,
+        &solution,
+        &context_for_solution,
+        &authoritative_score,
+    )?;
+    assert!(report.accepted);
+    assert_eq!(report.required_rule_results.len(), 1);
+    assert!(
+        report
+            .required_rule_results
+            .iter()
+            .all(|evaluation| evaluation.satisfied)
+    );
+    assert_eq!(authoritative_score.feasibility, 0);
+    assert_eq!(authoritative_score.levels[0].value, 3);
+    assert_eq!(report.score, authoritative_score);
+    assert_eq!(
+        report.verification_scope_checksum,
+        verification_scope.checksum
+    );
+    assert_eq!(
+        report.required_rule_results[0].rule_id,
+        verification_scope.required_rules[0].rule_id
+    );
+    assert_eq!(
+        report,
+        pack.verify(&source, &solution, &context_for_solution, &report.score)?
+    );
+
+    let unsatisfied_report = pack.verify(
+        &source,
+        &unsatisfied,
+        &unsatisfied_context,
+        &unsatisfied_score,
+    )?;
+    assert!(!unsatisfied_report.accepted);
+    assert_eq!(unsatisfied_report.required_rule_results.len(), 1);
+    assert!(!unsatisfied_report.required_rule_results[0].satisfied);
+    assert!(unsatisfied_report.warnings.is_empty());
     Ok(())
 }
 
@@ -449,7 +539,7 @@ fn unknown_internal_and_portable_fields_are_rejected() -> Result<(), Box<dyn Err
     let pack = OfficialTestPack;
     let mut source = document()?;
     source.domain.entities.insert(
-        eutheto_types::PersonId::from_str(ENTITY_ID)?,
+        PersonId::from_str(ENTITY_ID)?,
         json!({ "id": ENTITY_ID, "enabled": true, "target": 3, "future": true }),
     );
     assert!(!pack.validate_fast(&source).issues.is_empty());

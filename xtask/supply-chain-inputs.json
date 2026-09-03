@@ -118,6 +118,13 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-verify",
+      "version": "0.1.0",
+      "path": "crates/eutheto-verify",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "xtask",
       "version": "0.1.0",
       "path": "xtask",

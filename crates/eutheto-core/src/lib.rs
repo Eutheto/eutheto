@@ -2,8 +2,10 @@
 
 #[path = "app.rs"]
 mod application;
+mod verification;
 
 pub use application::*;
+pub use verification::*;
 
 use eutheto_types::FoundationStatus;
 

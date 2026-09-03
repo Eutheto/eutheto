@@ -7,7 +7,10 @@ mod schema;
 
 pub use schema::{ContractJsonLimits, validate_contract_schema, validate_contract_value};
 
-use eutheto_domain_ir::{AcceptedResult, NormalizedSolution, ScoreVector, VerificationReport};
+use eutheto_domain_ir::{
+    AcceptedResult, NormalizedSolution, ScoreVector, VerificationContextV1, VerificationReport,
+    VerificationScope,
+};
 use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, PlanningProblem};
 use eutheto_types::{
     CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, PackId,
@@ -521,7 +524,19 @@ pub trait DomainPack: Send + Sync {
         solution_id: SolutionId,
     ) -> Result<NormalizedSolution, DomainPackError>;
 
-    /// Verifies a normalized solution against its scenario document.
+    /// Declares the required-rule identities and semantic bindings for a scenario revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the document is invalid or its verification scope cannot be built.
+    fn verification_scope(
+        &self,
+        document: &ScenarioDocument,
+        scenario_revision: u64,
+    ) -> Result<VerificationScope, DomainPackError>;
+
+    /// Verifies required rules against a normalized solution and embeds the separately
+    /// recomputed authoritative score without deriving rule outcomes from it.
     ///
     /// # Errors
     ///
@@ -530,6 +545,8 @@ pub trait DomainPack: Send + Sync {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        context: &VerificationContextV1,
+        authoritative_score: &ScoreVector,
     ) -> Result<VerificationReport, DomainPackError>;
 
     /// Computes the pack-defined score vector for a solution.
