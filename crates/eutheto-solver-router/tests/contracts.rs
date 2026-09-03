@@ -96,6 +96,7 @@ impl SolverBackend for TestBackend {
                         first_incumbent_milliseconds: Some(millis(1)?),
                         objective: None,
                         evidence_refs: Vec::new(),
+                        execution: None,
                     },
                 });
             }
@@ -130,6 +131,7 @@ impl SolverBackend for TestBackend {
                         first_incumbent_milliseconds: Some(millis(1)?),
                         objective: None,
                         evidence_refs: Vec::new(),
+                        execution: None,
                     },
                 });
             }
@@ -167,6 +169,7 @@ impl SolverBackend for TestBackend {
                         },
                         objective: None,
                         evidence_refs: Vec::new(),
+                        execution: None,
                     },
                 }),
                 Behavior::AssignmentFlood => unreachable!("handled before backend outcome"),

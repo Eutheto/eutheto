@@ -58,7 +58,7 @@ Never hand-edit a generated product. Change its authoritative input, run `just g
 | `just test-ui` | Runs pnpm UI unit and component tests. |
 | `just test` | Runs the Rust, documentation, and UI test recipes. |
 | `just coverage` | Runs the Rust workspace through `cargo llvm-cov nextest` with the full-shell tools. Coverage is diagnostic and does not replace behavioral tests. |
-| `just bench` | Fails until Phase 03 approves the OR-Tools pin and a real primitive benchmark corpus; Phase 00 does not report an empty Cargo benchmark run as evidence. |
+| `just bench` | Builds the exact pinned native OR-Tools worker, runs the checked-in Phase-03 primitive Planning IR corpus through the production adapter under fixed seed/thread/budget settings, writes versioned raw evidence under `.cache/benchmarks/`, and prints it. The evidence is not a product SLA and grants no candidate acceptance. |
 | `just e2e` | Fails with the Phase-11 packaged-desktop/WebDriver gate until supported targets and prerequisites exist. It does not pretend that a Vite browser test proves a packaged Tauri application. |
 
 ### Applications and builds
@@ -76,14 +76,15 @@ The CLI name and desktop identifier used by Phase 00 are development surfaces, n
 
 ### Solver worker
 
-| Recipe | Behavior in Phase 00 |
+| Recipe | Behavior in Phase 03 |
 | --- | --- |
-| `just worker-build-nix` | Evaluates the Nix worker derivation contract and fails at its unresolved OR-Tools source/hash gate. |
-| `just worker-build-native` | Delegates to `xtask` and fails at the same Phase-03 source, protobuf, hash, and license gate. |
-| `just worker-install-from-nix` | Delegates installation to `xtask`; it cannot install an unapproved or dummy worker. |
-| `just worker-smoke` | Delegates executable smoke testing to `xtask`; it cannot report success before a real worker exists. |
+| `just worker-build-nix` | Builds the approved OR-Tools 9.15.6755 source contract in the Nix sandbox, runs native worker tests, postprocesses the executable/runtime closure, installs the exact reviewed license and NOTICE payload, generates the artifact-specific SPDX SBOM and solver manifest, validates the complete nonsymlink inventory, and verifies installed EOF startup. It does not assemble a Tauri package. |
+| `just worker-build-native` | On native Windows x86_64, downloads the fixed-hash source set, builds with MSVC/Ninja and the approved production contract, runs native tests, installs the recursive x64 project DLL closure, rejects unexpected runtime imports, verifies installed EOF startup, finalizes the same license/SBOM/manifest contract, and replaces `.cache/ortools-native/windows-x86_64/current` only after validation. A failed pre-publication rerun preserves the last-good result. It does not create a clean-machine package or release artifact. |
+| `just worker-install-from-nix` | Evaluates and builds the exact pinned `.#ortools-worker` output without changing links, requires the current Nix-created `result` symlink to resolve to that output, validates the artifact, then atomically stages its target-suffixed worker and complete manifest/runtime/compliance resources under the ignored Tauri sidecar input directory. It prints the trusted desktop-build wrapper command; this is unsigned packaging input, not a release artifact. |
+| `just worker-build-desktop` | Re-evaluates the pinned worker artifact (or builds the validated native Windows artifact), stages it, carries the independently validated manifest digest directly into the Tauri build, disables signing, and fails if staged metadata differs. Phase-03 smoke inputs are explicitly limited to Linux `deb,rpm`, macOS `app`, and Windows `msi`; AppImage rewriting and final release packaging remain later gates. |
+| `just worker-smoke <executable> <resource-root> <manifest-sha256>` | Accepts the exact packaged `ortools-worker` executable (`.exe` on Windows), packaged `solver/ortools` resource directory produced by the split Tauri layout, and the trusted manifest digest carried from that desktop build or a release manifest—not recomputed from the package under test. It rejects links, target/architecture/name/hash or manifest-authority drift, incomplete runtime/license/SBOM payloads, unsafe protocol output, diagnostics, and non-clean exit; launches a private validated snapshot of those exact bytes with a cleared environment and only the packaged runtime-library path when required; and completes one bounded manifest-bound handshake plus fixed trivial solve through clean EOF. This proves the unsigned packaged worker bytes launch and negotiate on the current target, not application UI, installer behavior, signing/publication, or Phase-04 candidate verification. |
 
-These failures are intentional. Phase 03 must approve one exact OR-Tools source, hash, matched protobuf contract, build flags, and license inventory before any worker recipe may succeed.
+The Nix build is available on x86_64 Linux and x86_64/aarch64 macOS; the equivalent native build is available only from an x64 Visual Studio developer environment on Windows x86_64. Both builders share the installed-manifest, license, NOTICE, and SPDX finalizer contract. Validated builders stage the external-binary/resource layout consumed by the opt-in desktop `bundled-ortools` build; pass the package's exact `ortools-worker` executable path, `solver/ortools` directory, and independently retained build manifest digest to `worker-smoke`. Final release packaging remains a later gate.
 
 ### Supply chain and release
 

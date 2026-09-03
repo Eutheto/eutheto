@@ -1,0 +1,60 @@
+{
+  "approval": {
+    "phase": 3,
+    "record": "docs/roadmap/assumptions.md@d74be8614150ad8474dd78f59ffe0dc761fd742f",
+    "status": "approved"
+  },
+  "cmake": {
+    "cache_entries": {
+      "BUILD_CXX": true,
+      "BUILD_CXX_EXAMPLES": false,
+      "BUILD_CXX_SAMPLES": false,
+      "BUILD_DEPS": true,
+      "BUILD_DOC": false,
+      "BUILD_DOTNET": false,
+      "BUILD_EXAMPLES": false,
+      "BUILD_FLATZINC": false,
+      "BUILD_JAVA": false,
+      "BUILD_MATH_OPT": false,
+      "BUILD_PYTHON": false,
+      "BUILD_SAMPLES": false,
+      "BUILD_SHARED_LIBS": false,
+      "BUILD_TESTING": false,
+      "CMAKE_BUILD_TYPE": "Release",
+      "INSTALL_BUILD_DEPS": true,
+      "USE_BOP": true,
+      "USE_COINOR": false,
+      "USE_CPLEX": false,
+      "USE_GLOP": true,
+      "USE_GLPK": false,
+      "USE_GUROBI": false,
+      "USE_HIGHS": false,
+      "USE_PDLP": false,
+      "USE_SCIP": false,
+      "USE_XPRESS": false
+    }
+  },
+  "ortools": {
+    "patch_path": "workers/ortools/patches/9.15-candidate-fixes.patch",
+    "patch_sha256": "3ab9c8c45d76aab2416195bc97266718986a395a37fcd6c8d6e6fa5322ecf6a6",
+    "sha256": "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026",
+    "source_url": "https://github.com/google/or-tools/archive/refs/tags/v9.15.tar.gz",
+    "version": "9.15.6755"
+  },
+  "protobuf": {
+    "cpp_runtime_version": "33.1.0",
+    "protoc_version": "33.1",
+    "sha256": "fda132cb0c86400381c0af1fe98bd0f775cb566cb247cdcc105e344e00acc30e",
+    "source_url": "https://github.com/protocolbuffers/protobuf/releases/download/v33.1/protobuf-33.1.tar.gz",
+    "source_version": "33.1"
+  },
+  "protocol": {
+    "schema_sha256": "fc93888cd78db39bb35a430e6e904092b6bbc73b3276885fc75ecedad4c0381d",
+    "wire_version": 1
+  },
+  "schema_version": 1,
+  "worker": {
+    "identity": "eutheto-ortools-worker",
+    "version": "0.1.0"
+  }
+}

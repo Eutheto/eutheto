@@ -1,0 +1,557 @@
+{
+  "$defs": {
+    "cache_value": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        {
+          "description": "A scalar measured cache value. Path values use @artifact-root@, @build-root@, @source-root@, @target-root@, or @toolchain-root@; literal macOS loader values may use @loader_path or @rpath. Raw host paths and unknown @ tokens are forbidden.",
+          "maxLength": 2048,
+          "anyOf": [
+            {
+              "pattern": "^[^/\\\\\\u0000-\\u001f\\u007f]*$"
+            },
+            {
+              "pattern": "^@(?:(?:artifact-root|build-root|source-root|target-root|toolchain-root)@|loader_path|rpath)(?:/(?!\\.{1,2}(?:/|$))[^/\\\\:@;=$%~\\s]+)*$"
+            },
+            {
+              "const": "/DEIGEN_MPL2_ONLY"
+            }
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "cmake_map": {
+      "additionalProperties": false,
+      "maxProperties": 128,
+      "minProperties": 26,
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]{0,127}$": {
+          "$ref": "#/$defs/cache_value"
+        }
+      },
+      "propertyNames": {
+        "enum": [
+          "BUILD_CXX",
+          "BUILD_CXX_EXAMPLES",
+          "BUILD_CXX_SAMPLES",
+          "BUILD_DEPS",
+          "BUILD_DOC",
+          "BUILD_DOTNET",
+          "BUILD_EXAMPLES",
+          "BUILD_FLATZINC",
+          "BUILD_JAVA",
+          "BUILD_MATH_OPT",
+          "BUILD_PYTHON",
+          "BUILD_SAMPLES",
+          "BUILD_SHARED_LIBS",
+          "BUILD_TESTING",
+          "CMAKE_BUILD_TYPE",
+          "CMAKE_CXX_COMPILER",
+          "CMAKE_CXX_FLAGS",
+          "CMAKE_C_COMPILER",
+          "CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH",
+          "CMAKE_FIND_USE_PACKAGE_REGISTRY",
+          "CMAKE_FIND_USE_PACKAGE_ROOT_PATH",
+          "CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY",
+          "CMAKE_GENERATOR",
+          "CMAKE_INSTALL_NAME_DIR",
+          "CMAKE_INSTALL_PREFIX",
+          "CMAKE_INSTALL_RPATH",
+          "CMAKE_MACOSX_RPATH",
+          "CMAKE_MSVC_RUNTIME_LIBRARY",
+          "CMAKE_POLICY_DEFAULT_CMP0077",
+          "CMAKE_PREFIX_PATH",
+          "EUTHETO_ORTOOLS_BUILD_CANDIDATE_BENCHMARKS",
+          "EUTHETO_ORTOOLS_BUILD_TESTS",
+          "EUTHETO_ORTOOLS_DEVELOPMENT_BUILD",
+          "EUTHETO_ORTOOLS_PHASE3_CONTRACT",
+          "FETCHCONTENT_FULLY_DISCONNECTED",
+          "FETCHCONTENT_SOURCE_DIR_ABSL",
+          "FETCHCONTENT_SOURCE_DIR_BZIP2",
+          "FETCHCONTENT_SOURCE_DIR_EIGEN3",
+          "FETCHCONTENT_SOURCE_DIR_PROTOBUF",
+          "FETCHCONTENT_SOURCE_DIR_RE2",
+          "FETCHCONTENT_SOURCE_DIR_ZLIB",
+          "INSTALL_BUILD_DEPS",
+          "Protobuf_DIR",
+          "USE_BOP",
+          "USE_COINOR",
+          "USE_CPLEX",
+          "USE_GLOP",
+          "USE_GLPK",
+          "USE_GUROBI",
+          "USE_HIGHS",
+          "USE_PDLP",
+          "USE_SCIP",
+          "USE_XPRESS",
+          "ortools_DIR"
+        ]
+      },
+      "type": "object"
+    },
+    "non_windows_cmake_map": {
+      "not": {
+        "required": [
+          "CMAKE_MSVC_RUNTIME_LIBRARY"
+        ]
+      },
+      "type": "object"
+    },
+    "windows_cmake_map": {
+      "properties": {
+        "CMAKE_MSVC_RUNTIME_LIBRARY": {
+          "const": "MultiThreadedDLL"
+        }
+      },
+      "required": [
+        "CMAKE_MSVC_RUNTIME_LIBRARY"
+      ],
+      "type": "object"
+    },
+    "file_digest": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "relative_path": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "pattern": "^(?!/|~|[A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^\\\\:]+$",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://eutheto.dev/schemas/solver-manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "approval": {
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "const": 3
+        },
+        "record": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "phase",
+        "record",
+        "source_contract_sha256"
+      ],
+      "type": "object"
+    },
+    "backend_source": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ortools"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_url": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^https://",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "sha256",
+        "source_url",
+        "version"
+      ],
+      "type": "object"
+    },
+    "build": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "architecture": {
+                  "const": "aarch64"
+                },
+                "target_triple": {
+                  "const": "aarch64-apple-darwin"
+                }
+              },
+              "required": [
+                "architecture",
+                "target_triple"
+              ]
+            },
+            {
+              "properties": {
+                "architecture": {
+                  "const": "x86_64"
+                },
+                "target_triple": {
+                  "enum": [
+                    "x86_64-apple-darwin",
+                    "x86_64-pc-windows-msvc",
+                    "x86_64-unknown-linux-gnu"
+                  ]
+                }
+              },
+              "required": [
+                "architecture",
+                "target_triple"
+              ]
+            }
+          ]
+        },
+        {
+          "else": {
+            "properties": {
+              "cmake": {
+                "properties": {
+                  "ortools": {
+                    "$ref": "#/$defs/non_windows_cmake_map"
+                  },
+                  "worker": {
+                    "$ref": "#/$defs/non_windows_cmake_map"
+                  }
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "target_triple": {
+                "const": "x86_64-pc-windows-msvc"
+              }
+            },
+            "required": [
+              "target_triple"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cmake": {
+                "properties": {
+                  "ortools": {
+                    "$ref": "#/$defs/windows_cmake_map"
+                  },
+                  "worker": {
+                    "$ref": "#/$defs/windows_cmake_map"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "architecture": {
+          "enum": [
+            "aarch64",
+            "x86_64"
+          ]
+        },
+        "cmake": {
+          "additionalProperties": false,
+          "properties": {
+            "ortools": {
+              "$ref": "#/$defs/cmake_map"
+            },
+            "worker": {
+              "$ref": "#/$defs/cmake_map"
+            }
+          },
+          "required": [
+            "ortools",
+            "worker"
+          ],
+          "type": "object"
+        },
+        "compiler": {
+          "additionalProperties": false,
+          "properties": {
+            "identity": {
+              "enum": [
+                "clang",
+                "gcc",
+                "msvc"
+              ]
+            },
+            "version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._+-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "identity",
+            "version"
+          ],
+          "type": "object"
+        },
+        "linkage": {
+          "const": "static-ortools"
+        },
+        "target_triple": {
+          "enum": [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu"
+          ]
+        }
+      },
+      "required": [
+        "architecture",
+        "cmake",
+        "compiler",
+        "linkage",
+        "target_triple"
+      ],
+      "type": "object"
+    },
+    "capabilities": {
+      "const": [
+        "cp-sat",
+        "deterministic-time",
+        "intermediate-solutions",
+        "objective-bounds",
+        "progress",
+        "solution-projection",
+        "solution-stats"
+      ],
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "licenses": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/relative_path"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "spdx": {
+            "enum": [
+              "Apache-2.0",
+              "BSD-3-Clause",
+              "MIT",
+              "Zlib",
+              "bzip2-1.0.6"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "spdx"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "generation_contract_version": {
+          "const": 1
+        },
+        "schema_version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "generation_contract_version",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "protobuf": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_proto_checksums": {
+          "additionalProperties": false,
+          "properties": {
+            "cp_model_proto": {
+              "const": "c967180600fab5db4fc8b7477fef56c3c6d3c0714b1f0355697f96d147f77d96"
+            },
+            "sat_parameters_proto": {
+              "const": "9a5e08486a63414191870bd9953f9e561af221e165654913a33662bf1b674308"
+            }
+          },
+          "required": [
+            "cp_model_proto",
+            "sat_parameters_proto"
+          ],
+          "type": "object"
+        },
+        "cpp_runtime_version": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "protoc_version": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_url": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^https://",
+          "type": "string"
+        },
+        "source_version": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "approved_proto_checksums",
+        "cpp_runtime_version",
+        "protoc_version",
+        "sha256",
+        "source_url",
+        "source_version"
+      ],
+      "type": "object"
+    },
+    "protocol": {
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "wire_version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "major",
+        "minor",
+        "schema_sha256",
+        "wire_version"
+      ],
+      "type": "object"
+    },
+    "runtime_libraries": {
+      "items": {
+        "$ref": "#/$defs/file_digest"
+      },
+      "maxItems": 128,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "sbom": {
+      "$ref": "#/$defs/file_digest"
+    },
+    "worker": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_version": {
+          "const": "0.1.0"
+        },
+        "backend_id": {
+          "const": "ortools-cp-sat"
+        },
+        "distribution": {
+          "const": "bundled-worker"
+        },
+        "executable": {
+          "$ref": "#/$defs/file_digest"
+        },
+        "identity": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "stability": {
+          "const": "beta"
+        },
+        "version": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_version",
+        "backend_id",
+        "distribution",
+        "executable",
+        "identity",
+        "stability",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "approval",
+    "backend_source",
+    "build",
+    "capabilities",
+    "licenses",
+    "manifest",
+    "protobuf",
+    "protocol",
+    "runtime_libraries",
+    "sbom",
+    "worker"
+  ],
+  "title": "Eutheto installed solver manifest v1",
+  "type": "object"
+}

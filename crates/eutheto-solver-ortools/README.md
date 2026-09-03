@@ -1,11 +1,19 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# `eutheto-solver-ortools` (reserved)
+# `eutheto-solver-ortools`
 
-This directory reserves the roadmap boundary for **future adapter from validated planning IR to the isolated OR-Tools worker protocol.** No `Cargo.toml` is present, so this is not a Cargo workspace member, implemented crate, or published API.
+This crate owns the manifest-authenticated bundled-worker artifact, exact
+matrix-backed compatibility report, deterministic planning-IR-to-CP-SAT
+translation, strict candidate decoding, truthful bounded progress conversion,
+exact adapter timing and quality evidence aggregation, isolated worker launch and
+single-session protocol supervision, and the production OR-Tools
+`SolverBackend` registry entry.
 
-## Boundary
-
-OR-Tools 9.15 is only a candidate until Phase 03 approves exact source, hash, matched protobuf, build, license, callback, assumption-core, and benchmark evidence.
-
-The owning roadmap phase must confirm that this boundary still warrants a separate crate, choose its dependencies, and add implementation and tests. The exact future crate inventory is an explicit architecture gate; the reserved name alone does not settle it.
+Translation currently covers scalar variable domains plus Boolean-or,
+conjunction, implication, equivalence, one-of, cardinality-range, integer linear
+comparison constraints, enforcement literals, and safely scalarizable bounded
+objective terms. It requests every scalar assignment required by the backend
+output contract plus domain projections, rejecting unsupported or multipass
+planning features rather than omitting them. Returned candidates remain
+non-authoritative and require the independent verification boundary owned by
+Phase 04.

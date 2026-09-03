@@ -342,7 +342,7 @@ struct AttemptConclusion {
 }
 
 enum BackendCompletion {
-    Returned(Result<BackendSolveOutcome, BackendError>),
+    Returned(Result<Box<BackendSolveOutcome>, BackendError>),
     TimedOut,
 }
 
@@ -698,7 +698,7 @@ async fn run_backend(
     )
     .await
     {
-        Ok(result) => BackendCompletion::Returned(result),
+        Ok(result) => BackendCompletion::Returned(result.map(Box::new)),
         Err(_) => BackendCompletion::TimedOut,
     };
     let rejection = output.contract_rejection().cloned();
@@ -759,7 +759,9 @@ fn finish_candidate_attempt(
                 parent_budget,
             ),
             BackendCompletion::Returned(Ok(outcome)) => {
-                if let Err(error) = validate_outcome(request, outcome, &run.candidates, limits) {
+                if let Err(error) =
+                    validate_outcome(request, outcome.as_ref(), &run.candidates, limits)
+                {
                     CandidateDisposition {
                         termination: AttemptTermination::OutcomeContractFailure {
                             code: outcome_error_code(error).to_owned(),
@@ -770,7 +772,7 @@ fn finish_candidate_attempt(
                         diagnostic: None,
                     }
                 } else {
-                    validated_outcome = Some(outcome.clone());
+                    validated_outcome = Some(outcome.as_ref().clone());
                     review_candidates(
                         &attempt.backend_id,
                         &run.candidates,
@@ -812,46 +814,48 @@ fn finish_empty_attempt(
         BackendCompletion::Returned(Err(error)) => Some(safe_backend_code(error)),
         BackendCompletion::Returned(Ok(_)) | BackendCompletion::TimedOut => None,
     };
-    let (termination, status, reason, fallback_eligible, validated_outcome) = if run.stop_reason
-        == Some(BackendStopReason::BackendLimitExceeded)
-    {
-        (
-            AttemptTermination::BackendOutcome(BackendTerminationReason::TimeLimit),
-            SolveStatus::NoSolutionWithinLimit,
-            ExecutionTerminalReason::BackendTerminated,
-            true,
-            None,
-        )
-    } else {
-        match run.completion {
-            BackendCompletion::Returned(Err(error)) => (
-                AttemptTermination::BackendError {
-                    code: safe_backend_code(&error),
-                },
-                SolveStatus::BackendFailed,
-                ExecutionTerminalReason::BackendFailure,
+    let (termination, status, reason, fallback_eligible, validated_outcome) =
+        if run.stop_reason == Some(BackendStopReason::BackendLimitExceeded) {
+            (
+                AttemptTermination::BackendOutcome(BackendTerminationReason::TimeLimit),
+                SolveStatus::NoSolutionWithinLimit,
+                ExecutionTerminalReason::BackendTerminated,
                 true,
                 None,
-            ),
-            BackendCompletion::Returned(Ok(outcome)) => {
-                if let Err(error) = validate_outcome(request, &outcome, &run.candidates, limits) {
-                    (
-                        AttemptTermination::OutcomeContractFailure {
-                            code: outcome_error_code(error).to_owned(),
-                        },
-                        SolveStatus::BackendFailed,
-                        ExecutionTerminalReason::BackendFailure,
-                        true,
-                        None,
-                    )
-                } else {
-                    let (termination, status, reason, fallback) = terminal_from_outcome(&outcome);
-                    (termination, status, reason, fallback, Some(outcome))
+            )
+        } else {
+            match run.completion {
+                BackendCompletion::Returned(Err(error)) => (
+                    AttemptTermination::BackendError {
+                        code: safe_backend_code(&error),
+                    },
+                    SolveStatus::BackendFailed,
+                    ExecutionTerminalReason::BackendFailure,
+                    true,
+                    None,
+                ),
+                BackendCompletion::Returned(Ok(outcome)) => {
+                    if let Err(error) =
+                        validate_outcome(request, outcome.as_ref(), &run.candidates, limits)
+                    {
+                        (
+                            AttemptTermination::OutcomeContractFailure {
+                                code: outcome_error_code(error).to_owned(),
+                            },
+                            SolveStatus::BackendFailed,
+                            ExecutionTerminalReason::BackendFailure,
+                            true,
+                            None,
+                        )
+                    } else {
+                        let (termination, status, reason, fallback) =
+                            terminal_from_outcome(outcome.as_ref());
+                        (termination, status, reason, fallback, Some(*outcome))
+                    }
                 }
+                BackendCompletion::TimedOut => unreachable!("timeout records backend cap expiry"),
             }
-            BackendCompletion::TimedOut => unreachable!("timeout records backend cap expiry"),
-        }
-    };
+        };
     let snapshot = inputs.parent_budget.phase_view().snapshot();
     let fallback_taken = fallback_eligible
         && state
@@ -1084,6 +1088,11 @@ fn outcome_error_code(error: OutcomeError) -> &'static str {
         OutcomeError::UnrequestedCancellation => "solver.outcome.unrequested_cancellation",
         OutcomeError::PrematureTimeLimit => "solver.outcome.premature_time_limit",
         OutcomeError::FirstIncumbentMismatch => "solver.outcome.first_incumbent_mismatch",
+        OutcomeError::ExecutionBackendVersionMismatch => "solver.outcome.execution_backend_version",
+        OutcomeError::ExecutionAdapterVersionMismatch => "solver.outcome.execution_adapter_version",
+        OutcomeError::ExecutionOptionsMismatch => "solver.outcome.execution_options",
+        OutcomeError::ExecutionModelCountMismatch => "solver.outcome.execution_model_counts",
+        OutcomeError::InvalidExecutionEvidence => "solver.outcome.execution_evidence",
     }
 }
 

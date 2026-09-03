@@ -1,0 +1,49 @@
+{
+  "dependencies": {
+    "abseil": {
+      "archive_name": "abseil-cpp-20250814.1.tar.gz",
+      "archive_root": "abseil-cpp-20250814.1",
+      "patch": "abseil-cpp-20250814.1.patch",
+      "sha256": "1692f77d1739bacf3f94337188b78583cf09bab7e420d2dc6c5605a4f86785a1",
+      "source_url": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20250814.1.tar.gz",
+      "version": "20250814.1"
+    },
+    "bzip2": {
+      "archive_name": "bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz",
+      "archive_root": "bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3",
+      "patch": "bzip2.patch",
+      "sha256": "3a4cff5f9d197e9e6c6138660afa6b1f9370df0bed135bd949243f6dfc83b3e1",
+      "source_url": "https://gitlab.com/bzip2/bzip2/-/archive/66c46b8c9436613fd81bc5d03f63a61933a4dcc3/bzip2-66c46b8c9436613fd81bc5d03f63a61933a4dcc3.tar.gz",
+      "version": "66c46b8c9436613fd81bc5d03f63a61933a4dcc3"
+    },
+    "eigen": {
+      "archive_name": "eigen-3.4.0.tar.gz",
+      "archive_root": "eigen-3.4.0",
+      "patch": "eigen3-3.4.0.patch",
+      "sha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "source_url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "version": "3.4.0"
+    },
+    "re2": {
+      "archive_name": "re2-2025-08-12.tar.gz",
+      "archive_root": "re2-2025-08-12",
+      "patch": "re2-2025-08-12.patch",
+      "sha256": "2f3bec634c3e51ea1faf0d441e0a8718b73ef758d7020175ed7e352df3f6ae12",
+      "source_url": "https://github.com/google/re2/archive/refs/tags/2025-08-12.tar.gz",
+      "version": "2025-08-12"
+    },
+    "zlib": {
+      "archive_name": "zlib-v1.3.1.tar.gz",
+      "archive_root": "zlib-1.3.1",
+      "patch": "ZLIB-v1.3.1.patch",
+      "sha256": "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
+      "source_url": "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+      "version": "1.3.1"
+    }
+  },
+  "ortools": {
+    "sha256": "6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026",
+    "version": "9.15.6755"
+  },
+  "schema_version": 1
+}

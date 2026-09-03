@@ -5,11 +5,15 @@ mod phase02_generate;
 mod protocol;
 mod protocol_generate;
 mod release;
+mod solver;
+mod solver_artifact;
+mod solver_manifest;
+mod source_contract;
 mod supply_chain;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -43,7 +47,7 @@ enum Command {
         #[command(subcommand)]
         command: ArchitectureCommand,
     },
-    /// Native solver-worker operations (deferred until the solver pin gate).
+    /// Native solver-worker build and deferred installation operations.
     Solver {
         #[command(subcommand)]
         command: SolverCommand,
@@ -85,9 +89,65 @@ enum FixturesCommand {
 
 #[derive(Debug, Subcommand)]
 enum SolverCommand {
+    /// Build, validate, publish, and stage the native Windows `x86_64` worker.
     BuildNative,
+    /// Build a desktop bundle from one trusted, manifest-bound sidecar handoff.
+    BuildDesktop,
+    /// Build the pinned Nix worker and atomically stage its Tauri sidecar.
     InstallFromNix,
-    Smoke,
+    /// Validate and handshake with one exact packaged worker/resource pair.
+    Smoke {
+        #[arg(long)]
+        executable: PathBuf,
+        #[arg(long)]
+        resource_root: PathBuf,
+        /// Trusted SHA-256 of the manifest embedded by the desktop build.
+        #[arg(long)]
+        manifest_sha256: String,
+    },
+    /// Finalize a pristine target artifact from reviewed repository and build authorities.
+    FinalizeArtifact {
+        #[arg(long)]
+        authority_root: PathBuf,
+        #[arg(long)]
+        work_root: PathBuf,
+        #[arg(long)]
+        artifact_root: PathBuf,
+        #[arg(long)]
+        target_triple: String,
+        #[arg(long)]
+        compiler_identity: String,
+        #[arg(long)]
+        compiler_version: String,
+        #[arg(long)]
+        source_date: String,
+    },
+    /// Assemble canonical installed solver evidence from explicit inputs.
+    AssembleManifest {
+        #[arg(long)]
+        source_contract: PathBuf,
+        #[arg(long)]
+        protocol_schema: PathBuf,
+        #[arg(long)]
+        protocol_policy: PathBuf,
+        #[arg(long)]
+        build_evidence: PathBuf,
+        #[arg(long)]
+        payload_evidence: PathBuf,
+        #[arg(long)]
+        artifact_root: PathBuf,
+    },
+    /// Validate canonical manifest bytes, authority, and every referenced artifact.
+    ValidateManifest {
+        #[arg(long)]
+        source_contract: PathBuf,
+        #[arg(long)]
+        protocol_schema: PathBuf,
+        #[arg(long)]
+        protocol_policy: PathBuf,
+        #[arg(long)]
+        artifact_root: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -102,35 +162,103 @@ enum ReleaseCommand {
 }
 
 fn main() -> Result<()> {
-    let root = repository_root()?;
-    match Cli::parse().command {
-        Command::Generate => generate::generate(&root),
-        Command::GenerateCheck => {
-            generate::check(&root)?;
-            supply_chain::check_licenses(&root)?;
-            supply_chain::check_sbom(&root)?;
-            Ok(())
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Solver { command } => run_solver(command),
+        command => {
+            let root = repository_root()?;
+            match command {
+                Command::Generate => generate::generate(&root),
+                Command::GenerateCheck => {
+                    generate::check(&root)?;
+                    supply_chain::check_licenses(&root)?;
+                    supply_chain::check_sbom(&root)?;
+                    Ok(())
+                }
+                Command::Protocol {
+                    command: ProtocolCommand::Verify,
+                } => protocol::verify(&root),
+                Command::Fixtures {
+                    command: FixturesCommand::Validate,
+                } => fixtures::validate(&root),
+                Command::Architecture {
+                    command: ArchitectureCommand::Verify,
+                } => architecture::verify(&root),
+                Command::Solver { .. } => {
+                    unreachable!("solver commands are handled before root lookup")
+                }
+                Command::Licenses {
+                    command: GenerateCommand::Generate,
+                } => supply_chain::generate_licenses(&root).map_err(anyhow::Error::from),
+                Command::Sbom {
+                    command: GenerateCommand::Generate,
+                } => supply_chain::generate_sbom(&root).map_err(anyhow::Error::from),
+                Command::Release { command } => match command {
+                    ReleaseCommand::VerifyClean => release::verify_clean(&root),
+                    ReleaseCommand::AssembleManifest => release::assemble_manifest(),
+                },
+            }
         }
-        Command::Protocol {
-            command: ProtocolCommand::Verify,
-        } => protocol::verify(&root),
-        Command::Fixtures {
-            command: FixturesCommand::Validate,
-        } => fixtures::validate(&root),
-        Command::Architecture {
-            command: ArchitectureCommand::Verify,
-        } => architecture::verify(&root),
-        Command::Solver { command } => unavailable_solver(&command),
-        Command::Licenses {
-            command: GenerateCommand::Generate,
-        } => supply_chain::generate_licenses(&root).map_err(anyhow::Error::from),
-        Command::Sbom {
-            command: GenerateCommand::Generate,
-        } => supply_chain::generate_sbom(&root).map_err(anyhow::Error::from),
-        Command::Release { command } => match command {
-            ReleaseCommand::VerifyClean => release::verify_clean(&root),
-            ReleaseCommand::AssembleManifest => release::assemble_manifest(),
-        },
+    }
+}
+fn run_solver(command: SolverCommand) -> Result<()> {
+    match command {
+        SolverCommand::FinalizeArtifact {
+            authority_root,
+            work_root,
+            artifact_root,
+            target_triple,
+            compiler_identity,
+            compiler_version,
+            source_date,
+        } => solver::finalize_artifact(
+            &authority_root,
+            &work_root,
+            &artifact_root,
+            &target_triple,
+            &compiler_identity,
+            &compiler_version,
+            &source_date,
+        ),
+        SolverCommand::AssembleManifest {
+            source_contract,
+            protocol_schema,
+            protocol_policy,
+            build_evidence,
+            payload_evidence,
+            artifact_root,
+        } => solver::assemble_manifest(
+            &source_contract,
+            &protocol_schema,
+            &protocol_policy,
+            &build_evidence,
+            &payload_evidence,
+            &artifact_root,
+        ),
+        SolverCommand::ValidateManifest {
+            source_contract,
+            protocol_schema,
+            protocol_policy,
+            artifact_root,
+        } => solver::validate_manifest(
+            &source_contract,
+            &protocol_schema,
+            &protocol_policy,
+            &artifact_root,
+        ),
+        SolverCommand::BuildNative => solver::build_native(&repository_root()?),
+        SolverCommand::BuildDesktop => solver::build_desktop(&repository_root()?),
+        SolverCommand::InstallFromNix => solver::install_from_nix(&repository_root()?),
+        SolverCommand::Smoke {
+            executable,
+            resource_root,
+            manifest_sha256,
+        } => solver::smoke(
+            &repository_root()?,
+            &executable,
+            &resource_root,
+            &manifest_sha256,
+        ),
     }
 }
 
@@ -139,15 +267,4 @@ fn repository_root() -> Result<PathBuf> {
         .parent()
         .map(Path::to_path_buf)
         .context("xtask manifest directory has no repository parent")
-}
-
-fn unavailable_solver(command: &SolverCommand) -> Result<()> {
-    let operation = match command {
-        SolverCommand::BuildNative => "build-native",
-        SolverCommand::InstallFromNix => "install-from-nix",
-        SolverCommand::Smoke => "smoke",
-    };
-    bail!(
-        "solver {operation} is unavailable until the Phase-03 OR-Tools source, hash, protobuf, and license gates are approved"
-    )
 }

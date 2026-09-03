@@ -31,6 +31,9 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+#[cfg(feature = "bundled-ortools")]
+mod bundled_solver;
+
 mod generated_command_catalog;
 
 use generated_command_catalog::REGISTERED_COMMANDS;
@@ -3078,7 +3081,7 @@ pub fn run() -> tauri::Result<()> {
             let app_data_dir = handle.path().app_data_dir()?;
             let cache_dir = app_data_dir.join("cache");
             let backup_dir = app_data_dir.join("backups");
-            let app = tauri::async_runtime::block_on(EuthetoApp::open(AppDependencies {
+            let dependencies = AppDependencies {
                 paths: AppPaths {
                     database: app_data_dir.join("library.sqlite3"),
                     safety_backups: backup_dir.clone(),
@@ -3086,8 +3089,23 @@ pub fn run() -> tauri::Result<()> {
                 clock: Arc::new(SystemClock),
                 ids: Arc::new(SystemIdGenerator),
                 cancellation: CancellationToken::default(),
-            }))
-            .map_err(|error| {
+            };
+            #[cfg(feature = "bundled-ortools")]
+            let open_result = {
+                let artifact =
+                    tauri::async_runtime::block_on(bundled_solver::load(handle.handle()))?;
+                let solvers =
+                    eutheto_solver_ortools::registry_with_ortools(artifact).map_err(|_| {
+                        std::io::Error::other("bundled OR-Tools registry metadata is invalid")
+                    })?;
+                tauri::async_runtime::block_on(EuthetoApp::open_with_solver_registry(
+                    dependencies,
+                    solvers,
+                ))
+            };
+            #[cfg(not(feature = "bundled-ortools"))]
+            let open_result = tauri::async_runtime::block_on(EuthetoApp::open(dependencies));
+            let app = open_result.map_err(|error| {
                 std::io::Error::other(format!("application startup failed: {error:?}"))
             })?;
             std::fs::create_dir_all(&cache_dir)?;
@@ -3772,8 +3790,24 @@ mod tests {
             "solver_get_support_matrix",
             &json!({ "requestId": RequestId::new(&ids)? }),
         )?;
-        assert_eq!(matrix.result["productionBackendIds"], json!([]));
-        assert_eq!(matrix.result["backendColumns"], json!([]));
+        assert_eq!(
+            matrix.result["productionBackendIds"],
+            json!(["solver.ortools-cp-sat"])
+        );
+        let backend_columns = matrix.result["backendColumns"]
+            .as_array()
+            .ok_or("support matrix omitted backend columns")?;
+        assert_eq!(backend_columns.len(), 1);
+        assert_eq!(backend_columns[0]["backendId"], "solver.ortools-cp-sat");
+        assert_eq!(backend_columns[0]["backendVersion"], "9.15.6755");
+        assert_eq!(backend_columns[0]["adapterVersion"], "0.1.0");
+        assert_eq!(
+            backend_columns[0]["cells"]
+                .as_array()
+                .ok_or("OR-Tools matrix column omitted cells")?
+                .len(),
+            35
+        );
         assert!(
             matrix.result["features"]
                 .as_array()
@@ -3788,11 +3822,6 @@ mod tests {
         assert_eq!(
             gates.result,
             json!([
-                {
-                    "backendId": "solver.ortools-cp-sat",
-                    "candidateVersion": "9.15",
-                    "owningPhase": 3
-                },
                 {
                     "backendId": "solver.pumpkin",
                     "candidateVersion": "0.5.0",

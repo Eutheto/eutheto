@@ -1,0 +1,474 @@
+name: OR-Tools Worker
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ortools-worker.yml"
+      - "workers/ortools/**"
+      - "apps/desktop/**"
+      - "crates/**"
+      - "protocol/**"
+      - "nix/ortools-worker.nix"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "Justfile"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ortools-worker.yml"
+      - "workers/ortools/**"
+      - "protocol/**"
+      - "apps/desktop/**"
+      - "crates/**"
+      - "nix/ortools-worker.nix"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Justfile"
+      - "flake.nix"
+      - "flake.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ortools-worker-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  TZ: UTC
+  CARGO_TERM_COLOR: never
+
+jobs:
+  unix-packaged-worker:
+    name: ${{ matrix.name }} / unsigned packaged worker and app
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            nix-system: x86_64-linux
+            native-arch: x86_64
+            nix-installer-tag: v3.22.2
+          - name: macOS x86_64
+            os: macos-15-intel
+            nix-system: x86_64-darwin
+            native-arch: x86_64
+            nix-installer-tag: v3.12.2
+          - name: macOS arm64
+            os: macos-15
+            nix-system: aarch64-darwin
+            native-arch: arm64
+            nix-installer-tag: v3.22.2
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          determinate: false
+          diagnostic-endpoint: ""
+          github-token: ""
+          source-tag: ${{ matrix.nix-installer-tag }}
+
+      - name: Select exact Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          check-latest: false
+
+      - name: Install native Linux desktop dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential libayatana-appindicator3-dev libssl-dev \
+            libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev patchelf pkg-config rpm xvfb
+
+      - name: Verify native host and expose pinned protoc
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "${{ matrix.native-arch }}"
+          nix_system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          test "$nix_system" = "${{ matrix.nix-system }}"
+          test "$(rustc --version | cut -d ' ' -f 2)" = "1.97.1"
+          corepack enable
+          corepack install
+          test "$(node --version)" = "v24.20.0"
+          test "$(pnpm --version)" = "11.24.0"
+          protoc="$(nix develop --no-update-lock-file --command sh -c 'test -x "$PROTOC"; printf "__EUTHETO_PROTOC__=%s\n" "$PROTOC"' | sed -n 's/^__EUTHETO_PROTOC__=//p')"
+          test "$("$protoc" --version)" = "libprotoc 33.1"
+          printf 'PROTOC=%s\n' "$protoc" >> "$GITHUB_ENV"
+
+      - name: Install locked application dependencies
+        shell: bash
+        run: |
+          cargo fetch --locked
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build exact worker and unsigned desktop package
+        shell: bash
+        run: cargo xtask solver build-desktop
+
+      - name: Retain trusted desktop-build manifest digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="apps/desktop/src-tauri/sidecar/resources/solver-manifest.json"
+          test -f "$manifest"
+          digest_line="$(shasum -a 256 "$manifest")"
+          digest="${digest_line%% *}"
+          case "$digest" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+              test "${#digest}" -eq 64
+              ;;
+            *)
+              echo "Invalid trusted solver manifest digest." >&2
+              exit 1
+              ;;
+          esac
+          printf 'MANIFEST_SHA256=%s\n' "$digest" >> "$GITHUB_ENV"
+
+      - name: Verify Linux deb launch and rpm inventory
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(target/release/bundle/deb/*.deb)
+          rpms=(target/release/bundle/rpm/*.rpm)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "Expected exactly one unsigned deb, found ${#debs[@]}." >&2
+            exit 1
+          fi
+          if [ "${#rpms[@]}" -ne 1 ]; then
+            echo "Expected exactly one unsigned rpm, found ${#rpms[@]}." >&2
+            exit 1
+          fi
+
+          deb_root="$RUNNER_TEMP/eutheto-deb-root"
+          mkdir -p "$deb_root"
+          if ! dpkg-deb --extract "${debs[0]}" "$deb_root"; then
+            echo "Failed to extract the unsigned deb payload." >&2
+            exit 1
+          fi
+
+          rpm_worker_count=0
+          rpm_manifest_count=0
+          rpm_application_count=0
+          while IFS= read -r entry; do
+            case "$entry" in
+              */ortools-worker)
+                rpm_worker_count=$((rpm_worker_count + 1))
+                ;;
+              */solver/ortools/solver-manifest.json)
+                rpm_manifest_count=$((rpm_manifest_count + 1))
+                ;;
+              */eutheto-desktop)
+                rpm_application_count=$((rpm_application_count + 1))
+                ;;
+            esac
+          done < <(rpm --query --package --list "${rpms[0]}")
+          if [ "$rpm_worker_count" -ne 1 ] ||
+            [ "$rpm_manifest_count" -ne 1 ] ||
+            [ "$rpm_application_count" -ne 1 ]; then
+            echo "RPM inventory must contain one desktop, worker, and trusted solver manifest; found $rpm_application_count, $rpm_worker_count, and $rpm_manifest_count." >&2
+            exit 1
+          fi
+
+          mapfile -t workers < <(find "$deb_root" -type f -name 'ortools-worker')
+          mapfile -t resources < <(find "$deb_root" -type d -path '*/solver/ortools')
+          if [ "${#workers[@]}" -ne 1 ] || [ "${#resources[@]}" -ne 1 ]; then
+            echo "Expected one deb-packaged worker and one solver resource root; found ${#workers[@]} worker(s) and ${#resources[@]} resource root(s)." >&2
+            exit 1
+          fi
+          cargo xtask solver smoke \
+            --executable "${workers[0]}" \
+            --resource-root "${resources[0]}" \
+            --manifest-sha256 "$MANIFEST_SHA256"
+
+          mapfile -t apps < <(find "$deb_root" -type f -name 'eutheto-desktop')
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "Expected one packaged Linux desktop executable; found ${#apps[@]}." >&2
+            exit 1
+          fi
+          app="${apps[0]}"
+          loader_metadata="$(patchelf --print-interpreter "$app"; patchelf --print-rpath "$app"; ldd "$app")"
+          case "$loader_metadata" in
+            *"/nix/store/"*|*"not found"*)
+              printf '%s\n' "$loader_metadata" >&2
+              exit 1
+              ;;
+          esac
+
+          mkdir -p \
+            "$RUNNER_TEMP/eutheto-home" \
+            "$RUNNER_TEMP/eutheto-config" \
+            "$RUNNER_TEMP/eutheto-data" \
+            "$RUNNER_TEMP/eutheto-cache"
+          set +e
+          timeout --signal=TERM 10s xvfb-run -a \
+            --server-args="-screen 0 1280x720x24" \
+            env \
+              HOME="$RUNNER_TEMP/eutheto-home" \
+              XDG_CONFIG_HOME="$RUNNER_TEMP/eutheto-config" \
+              XDG_DATA_HOME="$RUNNER_TEMP/eutheto-data" \
+              XDG_CACHE_HOME="$RUNNER_TEMP/eutheto-cache" \
+              "$app" > "$RUNNER_TEMP/eutheto-desktop.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 124 ]; then
+            cat "$RUNNER_TEMP/eutheto-desktop.log"
+            echo "Packaged Linux desktop exited before the launch-smoke interval (status $status)." >&2
+            exit 1
+          fi
+
+      - name: Verify and launch the macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apps=(target/release/bundle/macos/*.app)
+          test "${#apps[@]}" -eq 1
+          app="$(cd "${apps[0]}" && pwd)"
+          worker="$app/Contents/MacOS/ortools-worker"
+          resource_root="$app/Contents/Resources/solver/ortools"
+          cargo xtask solver smoke \
+            --executable "$worker" \
+            --resource-root "$resource_root" \
+            --manifest-sha256 "$MANIFEST_SHA256"
+
+          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          application="$app/Contents/MacOS/$executable_name"
+          loader_metadata="$(otool -L "$application"; otool -l "$application")"
+          case "$loader_metadata" in
+            *"/nix/store/"*)
+              printf '%s\n' "$loader_metadata" >&2
+              exit 1
+              ;;
+          esac
+
+          mkdir -p "$RUNNER_TEMP/eutheto-home"
+          HOME="$RUNNER_TEMP/eutheto-home" "$application" \
+            > "$RUNNER_TEMP/eutheto-desktop.log" 2>&1 &
+          desktop_pid=$!
+          sleep 10
+          if ! kill -0 "$desktop_pid" 2>/dev/null; then
+            wait "$desktop_pid" || status=$?
+            cat "$RUNNER_TEMP/eutheto-desktop.log"
+            echo "Packaged macOS desktop exited before the launch-smoke interval (status ${status:-0})." >&2
+            exit 1
+          fi
+          kill "$desktop_pid"
+          wait "$desktop_pid" || true
+
+      - name: Verify clean unsigned package evidence
+        shell: bash
+        run: |
+          test -z "$(git status --porcelain --untracked-files=all)"
+          {
+            echo "### ${{ matrix.name }} unsigned package smoke"
+            echo
+            echo "Built the pinned worker and native Tauri package without signing, validated the launchable package's exact worker/resource closure, completed a manifest-bound handshake and fixed trivial solve under sanitized runtime lookup, rejected Nix-store loader references in the packaged app, and kept the packaged application running for the launch-smoke interval. The Linux lane additionally verifies the independently generated RPM inventory contains exactly one desktop, worker, and trusted solver manifest."
+            echo
+            echo "No executable, installer, signature, or release artifact was uploaded or published."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  windows-native-worker:
+    name: Windows x86_64 / approved worker and unsigned package
+    runs-on: windows-2025
+    timeout-minutes: 180
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable the MSVC x64 command-line environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - name: Select exact Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          check-latest: false
+
+      - name: Verify the native build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
+            throw "Expected AMD64 runner, found $env:PROCESSOR_ARCHITECTURE."
+          }
+          $rustVersion = (rustc --version).Split(' ')[1]
+          if ($rustVersion -ne "1.97.1") {
+            throw "Expected Rust 1.97.1, found $rustVersion."
+          }
+          rustc --version --verbose
+          cmake --version
+          ninja --version
+          (Get-Command cl.exe).Source
+          (Get-Command dumpbin.exe).Source
+
+      - name: Install the fixed protoc tool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "protoc-33.1-win64.zip"
+          $root = Join-Path $env:RUNNER_TEMP "protoc-33.1-win64"
+          Invoke-WebRequest `
+            -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v33.1/protoc-33.1-win64.zip" `
+            -OutFile $archive
+          $actualHash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedHash = "d7a207fb6eec0e4b1b6613be3b7d11905375b6fd1147a071116eb8e9f24ac53b"
+          if ($actualHash -ne $expectedHash) {
+            throw "protoc 33.1 archive SHA-256 mismatch: $actualHash"
+          }
+          Expand-Archive -Path $archive -DestinationPath $root
+          $protoc = Join-Path $root "bin/protoc.exe"
+          $protocInclude = Join-Path $root "include"
+          if ((& $protoc --version) -ne "libprotoc 33.1") {
+            throw "The fixed protoc executable did not report libprotoc 33.1."
+          }
+          "PROTOC=$protoc" | Add-Content -Path $env:GITHUB_ENV
+          "PROTOC_INCLUDE=$protocInclude" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Install locked application dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          corepack enable
+          corepack install
+          if ((node --version) -ne "v24.20.0") {
+            throw "Unexpected Node.js version."
+          }
+          if ((pnpm --version) -ne "11.24.0") {
+            throw "Unexpected pnpm version."
+          }
+          cargo fetch --locked
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build approved native worker and unsigned desktop package
+        shell: pwsh
+        run: cargo xtask solver build-desktop
+
+      - name: Verify MSI payload, worker lifecycle, and application launch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $trustedManifest = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "apps/desktop/src-tauri/sidecar/resources/solver-manifest.json"
+          if (-not (Test-Path -Path $trustedManifest -PathType Leaf)) {
+            throw "Trusted desktop-build solver manifest is missing."
+          }
+          $manifestSha256 = (Get-FileHash `
+            -Path $trustedManifest `
+            -Algorithm SHA256).Hash.ToLowerInvariant()
+          $msiFiles = @(Get-ChildItem `
+            -Path "target/release/bundle/msi" `
+            -Filter "*.msi" `
+            -File)
+          if ($msiFiles.Count -ne 1) {
+            throw "Expected exactly one unsigned MSI, found $($msiFiles.Count)."
+          }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP "eutheto-msi-root"
+          New-Item -ItemType Directory -Path $extractRoot | Out-Null
+          $installer = Start-Process `
+            -FilePath "msiexec.exe" `
+            -ArgumentList @(
+              "/a",
+              "`"$($msiFiles[0].FullName)`"",
+              "/qn",
+              "TARGETDIR=`"$extractRoot`""
+            ) `
+            -Wait `
+            -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "MSI administrative extraction failed with $($installer.ExitCode)."
+          }
+
+          $workers = @(Get-ChildItem `
+            -Path $extractRoot `
+            -Filter "ortools-worker.exe" `
+            -File `
+            -Recurse)
+          if ($workers.Count -ne 1) {
+            throw "Expected exactly one packaged worker, found $($workers.Count)."
+          }
+          $resourceRoots = @(Get-ChildItem `
+            -Path $extractRoot `
+            -Directory `
+            -Recurse | Where-Object {
+              $_.Name -eq "ortools" -and $_.Parent.Name -eq "solver"
+            })
+          if ($resourceRoots.Count -ne 1) {
+            throw "Expected exactly one packaged solver resource root, found $($resourceRoots.Count)."
+          }
+          cargo xtask solver smoke `
+            --executable $workers[0].FullName `
+            --resource-root $resourceRoots[0].FullName `
+            --manifest-sha256 $manifestSha256
+
+          $application = Join-Path $workers[0].DirectoryName "eutheto-desktop.exe"
+          if (-not (Test-Path -Path $application -PathType Leaf)) {
+            throw "The packaged desktop executable is missing beside the worker."
+          }
+          # Tauri resolves Windows known folders through the native profile APIs;
+          # overriding profile environment variables makes those paths unavailable.
+          $stdout = Join-Path $env:RUNNER_TEMP "eutheto-desktop.stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "eutheto-desktop.stderr.log"
+          $desktop = Start-Process `
+            -FilePath $application `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+          Start-Sleep -Seconds 10
+          if ($desktop.HasExited) {
+            Get-Content -Path $stdout, $stderr -ErrorAction SilentlyContinue
+            throw "Packaged Windows desktop exited before the launch-smoke interval with $($desktop.ExitCode)."
+          }
+          Stop-Process -Id $desktop.Id -Force
+          $desktop.WaitForExit()
+
+          $worker = ".cache/ortools-native/windows-x86_64/current/bin/ortools-worker.exe"
+          if (-not (Test-Path -Path $worker -PathType Leaf)) {
+            throw "The verified native worker is missing: $worker"
+          }
+          $dirty = git status --porcelain --untracked-files=all
+          if ($dirty) {
+            throw "The worker/package build modified tracked or unignored repository files:`n$dirty"
+          }
+          @"
+          ### Windows x86_64 approved worker and unsigned package
+
+          This job verifies the fixed-hash OR-Tools 9.15.6755/protobuf 33.1 source build, native tests, recursive x64 DLL closure and import policy, manifest/license/NOTICE/SPDX evidence, unsigned MSI assembly, administrative package extraction, exact packaged worker validation, manifest-bound handshake and fixed trivial solve, and a ten-second packaged desktop launch.
+
+          It does not sign, upload, publish, or establish Phase-04 candidate acceptance. No executable or installer leaves the runner.
+          "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY

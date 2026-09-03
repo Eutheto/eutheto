@@ -23,7 +23,7 @@ Phase 06 entry does not depend on Phase 07. Eligibility, shift, availability/tim
 
 ## Current compatible frontend baseline
 
-Registry/API evidence was verified **2026-08-29**. Exact lockfile pins are a Phase 00 repository action; implementation must use this coherent set unless a newer stable set is re-verified together:
+Registry/API evidence was verified **2026-08-29**. Exact non-UI lockfile pins remain Phase 00 repository actions. Phase 04 owns the minimum Tailwind/shadcn-vue/Reka/Lucide foundation needed by its explanation components; Phase 06 consumes and extends that same foundation. Implementation must use this coherent set unless a newer stable set is re-verified together:
 
 | Role | Version | Compatibility and major-version implication |
 |---|---:|---|
@@ -60,6 +60,8 @@ Registry/API evidence was verified **2026-08-29**. Exact lockfile pins are a Pha
 | `@wdio/tauri-service` | 1.3.0 | Tauri-supported WebDriverIO service for packaged application flows. |
 
 `@pinia/colada` **1.4.2**, `@vue/compiler-sfc` **3.5.42**, `@vue/devtools-api` **8.2.1**, and `@lucide/vue` **1.37.0** are mandatory direct dependencies at these exact versions, not undeclared transitive dependencies.
+
+Tailwind CSS, `@tailwindcss/vite`, shadcn-vue, Reka UI, `@lucide/vue`, `tw-animate-css`, `tailwind-merge`, `class-variance-authority`, and `clsx` are locked and minimally configured by Phase 04. Phase 06 must consume and extend those exact pins, application-owned wrappers, and mapped semantic tokens rather than re-locking dependencies or introducing a parallel design convention.
 
 Tauri remains major **2**. The Rust crate patch/version set is pinned alongside npm packages after checking current compatible releases. Breaking-major adoption is clean-cut: no compatibility aliases or mixed old/new APIs in examples, generated code, configuration, or tests.
 

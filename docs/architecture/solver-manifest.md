@@ -4,7 +4,7 @@
 
 A native solver is accepted only when its reviewed build input and its installed evidence agree. [ADR-004](../adr/004-ortools-worker.md) requires process isolation and a matched OR-Tools/protobuf contract; [ADR-016](../adr/016-release-evidence.md) requires exact source, build, protocol, capability, linkage, target, and license evidence. These records do not make a solver trusted: every future candidate remains untrusted until independently projected and verified.
 
-Phase 00 defines the record boundaries but ships no solver manifest or worker artifact. In particular, OR-Tools 9.15 remains an unapproved candidate. It is not fetched, hashed, bundled, or represented as available. Protobuf, CMake flags, linkage, target support, and licenses remain open Phase-03 gates.
+Phase 03 has approved the OR-Tools 9.15.6755 source-stage input and matched protobuf 33.1 source/toolchain in the generated [`workers/ortools/source-contract.json`](../../workers/ortools/source-contract.json). The Nix and native Windows builders now turn those authorities plus measured target-build facts into a finalized worker/runtime artifact with exact licenses, NOTICE, SPDX SBOM, and installed manifest. This build artifact is not yet an application package or available backend.
 
 ## Two distinct records
 
@@ -13,7 +13,7 @@ Phase 00 defines the record boundaries but ships no solver manifest or worker ar
 [`workers/ortools/source-contract.schema.json`](../../workers/ortools/source-contract.schema.json) is the machine schema for the Phase-03 build input. An approved record must bind all of the following before configuration can reach a real target:
 
 - schema version and a non-placeholder Phase-03 approval record;
-- exact OR-Tools version, HTTPS source URL, and lowercase SHA-256;
+- exact OR-Tools version, HTTPS source URL, lowercase SHA-256, and repository patch path/SHA-256;
 - exact protobuf source version/URL/SHA-256, `protoc` version, and C++ runtime version tested as one contract;
 - solver-worker wire version and SHA-256 of the authoritative `solver-worker.proto` bytes;
 - official worker identity and project worker version; and
@@ -21,28 +21,34 @@ Phase 00 defines the record boundaries but ships no solver manifest or worker ar
 
 [`workers/ortools/source-contract.example.json`](../../workers/ortools/source-contract.example.json) demonstrates shape only. Its status is `unapproved-example` and unresolved values are the literal string `UNRESOLVED`. The example must remain rejected by the CMake approval gate. It is not copied into a lockfile, given synthetic zero hashes, used as a network source, or transformed into release evidence.
 
-An approved contract is produced from reviewed locked inputs, validated against the schema before CMake, and committed through the repository generation workflow. Changing OR-Tools, protobuf source/runtime/generator, protocol bytes, worker version, or any CMake cache entry creates a new review input and invalidates dependent generated evidence. A digest is measured from fetched bytes; maintainers never infer or type a plausible digest.
+An approved contract is produced from reviewed locked inputs, validated against the schema before CMake, and committed through the repository generation workflow. Its approval record names a full immutable repository revision; that tree binds the candidate probe, repository-owned `9.15-candidate-fixes.patch`, and the patch's exact bzip2 revision. Generation rehashes the patch and protocol schema, while CMake requires the supplied contract to be byte-identical to the generated approval and independently verifies both repository file digests. Later build logic must still apply the exact patch. Changing OR-Tools, protobuf source/runtime/generator, protocol bytes, worker version, patch, or any CMake cache entry creates a new review input and invalidates dependent generated evidence. A digest is measured from fetched bytes; maintainers never infer or type a plausible digest.
 
 ### Installed solver manifest
 
-Phase 03 generates one installed manifest from the approved source contract plus measured build outputs. It is carried beside the worker and license material; the worker handshake returns the SHA-256 of its exact canonical bytes. The supervisor compares that digest with the manifest selected from the application bundle before accepting health or any later capability. Neither process resolves the worker or its manifest from ambient `PATH`.
+Phase 03 defines one installed manifest from the approved source contract plus measured build and payload evidence. The strict v1 schemas are [`workers/ortools/solver-manifest.schema.json`](../../workers/ortools/solver-manifest.schema.json), [`workers/ortools/solver-build-evidence.schema.json`](../../workers/ortools/solver-build-evidence.schema.json), and [`workers/ortools/solver-payload-evidence.schema.json`](../../workers/ortools/solver-payload-evidence.schema.json). These schemas and the Rust assembler/validator are reusable tooling; installed manifests remain target build outputs rather than checked-in files.
 
-The generated installed record must contain these semantic groups; Phase 03 supplies the concrete schema together with the real builder rather than publishing a fabricated Phase-00 instance:
+After a target builder has produced and postprocessed its executable and runtime closure, it invokes `cargo xtask solver finalize-artifact` with explicit authority, work, artifact, target, compiler, and source-date arguments. The finalizer derives the measured build and payload evidence from the retained CMake caches and fixed source roots; installs the exact reviewed license texts and deterministic NOTICE; creates an artifact-specific SPDX 2.3 document; assembles `<artifact-root>/solver-manifest.json`; and validates the complete nonsymlink inventory and all hashes. The lower-level `assemble-manifest` command remains available for explicit build/payload evidence inputs. `cargo xtask solver validate-manifest` independently requires the source contract, protocol schema, protocol policy, and artifact root and validates their agreement, canonical bytes, exact inventory, and every referenced file.
+
+The manifest contains these semantic groups:
 
 | Group | Required evidence |
 |---|---|
-| manifest | manifest schema version and generation contract version |
-| worker | identity, project worker version, executable filename, executable SHA-256 |
-| backend source | backend kind, exact upstream version, source URL, source SHA-256 |
-| protobuf contract | source version/URL/SHA-256, exact generator and linked runtime versions |
-| protocol | wire version and authoritative schema SHA-256 |
-| build | target triple, linkage mode, compiler identity/version, and sorted effective CMake cache entries |
-| capabilities | sorted unique capability identifiers actually exercised by worker tests |
-| runtime | sorted runtime library filenames and SHA-256 values when dynamically linked |
-| licenses | sorted relative license paths, SHA-256 values, and reviewed SPDX expressions |
-| approval | immutable reference to the source-contract approval evidence |
+| manifest | schema version 1 and generation-contract version 1 |
+| approval | Phase-03 source-contract approval record and SHA-256 of the exact canonical source-contract bytes |
+| backend source | `ortools` kind, exact upstream version, HTTPS source URL, and source archive SHA-256 |
+| build | supported target triple, exactly derived architecture, compiler identity/version, `static-ortools` linkage, and separate lexically keyed normalized OR-Tools and worker CMake maps |
+| capabilities | the exact sorted tested set: `cp-sat`, `deterministic-time`, `intermediate-solutions`, `objective-bounds`, `progress`, `solution-projection`, `solution-stats` |
+| protobuf | source version/URL/SHA-256, exact `protoc` and linked C++ runtime versions, and approved `cp_model.proto`/`sat_parameters.proto` checksums |
+| protocol | policy major/minor, source-contract wire version, and SHA-256 of the authoritative protocol schema bytes |
+| worker | source-contract identity/version, `ortools-cp-sat` backend ID, adapter `0.1.0`, `bundled-worker` distribution, `beta` stability, and executable relative path/SHA-256 |
+| runtime libraries | sorted relative path/SHA-256 records; empty for a completely static runtime inventory |
+| licenses | sorted relative path/SHA-256 records whose SPDX identifier is one of the dependency licenses already reviewed in the Phase-03 gate: `Apache-2.0`, `BSD-3-Clause`, `MIT`, `Zlib`, or `bzip2-1.0.6` |
+| SBOM | relative path and SHA-256 of the artifact-specific SBOM |
 
-The installed manifest does not contain its own digest; that would be self-referential. Its SHA-256 is computed over the complete canonical file and is carried by the handshake and release evidence. Paths are bundle-relative forward-slash paths only: absolute paths, empty segments, `.`/`..`, drive prefixes, home-directory expansion, and symlink escapes are forbidden. Secrets, usernames, build-host paths, wall-clock timestamps, network credentials, and signing material are forbidden.
+Build evidence repeats the tested backend ID, adapter version, and capability set; a mismatch is rejected rather than conflated with later descriptor registration. Both measured CMake scopes must repeat all 26 approved typed source-contract entries exactly and may add only the reviewed target-specific keys used by the Nix and native Windows builders. Fixed booleans, `Ninja`, policy mode, and the `EIGEN_MPL2_ONLY` compiler flag retain their reviewed typed/value forms. Windows additionally requires and records `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`: the pinned OR-Tools build intentionally crosses shared-Protobuf DLL boundaries, so using separate static CRT instances is invalid. Recursive PE inspection copies only transitively imported app-local DLLs from the verified OR-Tools stage and active x64 MSVC redistributable, and rejects every unresolved non-system import. Compiler identity is normalized to `clang`, `gcc`, or `msvc`, with a bounded ASCII version rather than a raw compiler banner. Host paths never enter the manifest: exact reviewed path prefixes are replaced with `@source-root@`, `@build-root@`, `@target-root@`, `@artifact-root@`, `@toolchain-root@`, and target loader tokens before serialization, and any other absolute or home path fails finalization.
+
+The installed manifest is carried beside the worker and payload. The later worker handshake returns the SHA-256 of its exact canonical bytes, and the supervisor compares that digest with the manifest selected from the application bundle before accepting health or any later capability. Neither process resolves the worker or its manifest from ambient `PATH`. Paths are bundle-relative forward-slash paths only: absolute paths, empty segments, `.`/`..`, drive prefixes, home-directory expansion, and duplicate canonical aliases are forbidden. The artifact root, manifest, and every payload path component must be a regular nonsymlink path; target builders dereference selected runtime-library links into loader-name files before finalization. Canonical containment under the artifact root is rechecked before hashing.
+Every selected solver-dependency license source is checked against a reviewed SHA-256 before its bytes are copied or assigned an SPDX identifier. Repository-owned `LICENSE` and `NOTICE` files are pinned to LF checkout semantics; the generated artifact NOTICE preserves the project copyright attribution and records the fixed upstream source/version/hash facts. On Windows, app-local MSVC runtime binaries remain `NOASSERTION` at file/package license level rather than receiving a false open-source identifier; the SBOM identifies them as a separate Microsoft Visual C++ Runtime package, and the NOTICE points to the applicable Microsoft Visual Studio license terms.
 
 ## Canonical encoding and bounds
 
@@ -53,6 +59,7 @@ Parsing is bounded before the record is trusted:
 | Item | Maximum |
 |---|---:|
 | complete manifest | 65,536 bytes |
+| artifact-specific SPDX SBOM | 1,048,576 bytes |
 | JSON nesting depth | 8 |
 | members in one object | 128 |
 | entries in one array | 256 |
@@ -66,13 +73,13 @@ Checked arithmetic is required for lengths and counts. Unknown `schema_version` 
 
 ## Phase-03 closure
 
-The current [`workers/ortools/VERSION`](../../workers/ortools/VERSION) value, `UNRESOLVED-PHASE-03`, is deliberately not a semantic version and cannot enter an approved contract or installed manifest. The Phase-03 implementation must atomically:
+The current [`workers/ortools/VERSION`](../../workers/ortools/VERSION) value is the reviewed project worker version `0.1.0`. The Nix and native Windows builders now consume the approved OR-Tools/protobuf sources and repository patch, retain exact target-specific CMake/compiler evidence, build and smoke-test the worker, copy only its recursive runtime closure, and finalize the exact license/NOTICE/SBOM/manifest payload after binary postprocessing.
 
-1. close the source, digest, matched protobuf, callback, assumption-core, target, linkage, license, and benchmark gates;
-2. replace the sentinel with the reviewed project worker version;
-3. validate an approved source contract and use only its exact source and CMake cache entries;
-4. build a real worker, run executable/manifest/protocol checks where the target permits, and install only the required runtime and license files;
-5. generate and validate the canonical installed manifest and bind its digest into handshake tests; and
-6. prove clean regeneration yields byte-identical contracts, manifests, protocol products, and release evidence.
+Phase-03 completion must still:
 
-Until all six occur, CMake intentionally stops configuration and no command may claim a worker build or bundle.
+1. bind the installed manifest digest into the worker handshake and supervisor checks;
+2. prove manifest-validated installation and smoke behavior without ambient `PATH`;
+3. prove clean cross-target regeneration yields byte-identical contracts, manifests, protocol products, and release evidence; and
+4. assemble and validate the unsigned sidecar before backend registration.
+
+The source builders are available only on their documented targets. Build-level installed-manifest generation is available, while `xtask` installation/smoke, production packaging, backend registration, signing, and release readiness remain unavailable until their later gates close; no current worker artifact may be represented as bundled or release-ready.

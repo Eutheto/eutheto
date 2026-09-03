@@ -20,8 +20,8 @@ let
   );
   linuxRuntimePackages = lib.unique (
     [
-      pkgs.stdenv.cc.cc.lib
       pkgs.openssl
+      pkgs.stdenv.cc.cc.lib
       pkgs.sqlite
       llvm.libclang
     ]

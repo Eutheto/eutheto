@@ -1204,6 +1204,8 @@ fn all_generated_files(repo_root: &Path) -> Result<Vec<crate::protocol_generate:
             .into_iter()
             .map(|(path, contents)| (path.to_owned(), contents.into_bytes())),
     );
+    files.push(crate::source_contract::generated_file(repo_root)?);
+    files.push(crate::source_contract::dependency_sources_generated_file()?);
     files.extend(crate::protocol_generate::generated_files(repo_root)?);
     files.sort_by(|left, right| left.0.cmp(&right.0));
     ensure_unique_generated_paths(&files)?;

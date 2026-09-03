@@ -62,6 +62,13 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-phase03-benchmark",
+      "version": "0.1.0",
+      "path": "benchmarks/runner",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-planning-ir",
       "version": "0.1.0",
       "path": "crates/eutheto-planning-ir",
@@ -79,6 +86,13 @@
       "name": "eutheto-solver-api",
       "version": "0.1.0",
       "path": "crates/eutheto-solver-api",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-solver-ortools",
+      "version": "0.1.0",
+      "path": "crates/eutheto-solver-ortools",
       "license": "Apache-2.0"
     },
     {

@@ -1,0 +1,458 @@
+{
+  "format": "eutheto/planning-ir-benchmark-corpus",
+  "schemaVersion": 1,
+  "corpusVersion": 1,
+  "planningIrSchemaVersion": 1,
+  "provenance": {
+    "source": "benchmarks/corpus/solver/phase03-primitives.json",
+    "method": "checked-in-hand-authored-planning-ir"
+  },
+  "license": {
+    "spdxExpression": "Apache-2.0"
+  },
+  "cases": [
+    {
+      "id": "phase03.boolean-cardinality-sat",
+      "problem": {
+        "schemaVersion": 1,
+        "variables": [
+          {
+            "type": "boolean",
+            "value": {
+              "id": "phase03.boolean.a",
+              "provenance": "phase03.boolean.variables"
+            }
+          },
+          {
+            "type": "boolean",
+            "value": {
+              "id": "phase03.boolean.b",
+              "provenance": "phase03.boolean.variables"
+            }
+          },
+          {
+            "type": "boolean",
+            "value": {
+              "id": "phase03.boolean.c",
+              "provenance": "phase03.boolean.variables"
+            }
+          }
+        ],
+        "constraints": [
+          {
+            "id": "phase03.boolean.cardinality",
+            "body": {
+              "type": "cardinalityRange",
+              "value": {
+                "literals": [
+                  {
+                    "variable": "phase03.boolean.a",
+                    "positive": true
+                  },
+                  {
+                    "variable": "phase03.boolean.b",
+                    "positive": true
+                  },
+                  {
+                    "variable": "phase03.boolean.c",
+                    "positive": true
+                  }
+                ],
+                "min": 2,
+                "max": 2
+              }
+            },
+            "enforcement": [],
+            "provenance": "phase03.boolean.constraint",
+            "tags": []
+          }
+        ],
+        "objectives": {
+          "levels": []
+        },
+        "assumptions": [],
+        "projections": [
+          {
+            "id": "phase03.boolean.projection",
+            "assignmentId": "phase03.boolean.assignment",
+            "entity": {
+              "kind": "benchmark.decision",
+              "id": "phase03.boolean-result"
+            },
+            "required": true,
+            "expression": {
+              "type": "boolean",
+              "value": "phase03.boolean.a"
+            },
+            "provenance": "phase03.boolean.projection"
+          }
+        ],
+        "provenance": [
+          {
+            "id": "phase03.boolean.constraint",
+            "sourceKind": "requiredRule",
+            "sourceId": "phase03.boolean.cardinality",
+            "entityRefs": [],
+            "messageKey": "phase03.boolean.cardinality",
+            "parameters": {},
+            "parent": null
+          },
+          {
+            "id": "phase03.boolean.projection",
+            "sourceKind": "projection",
+            "sourceId": "phase03.boolean.projection",
+            "entityRefs": [
+              {
+                "kind": "benchmark.decision",
+                "id": "phase03.boolean-result"
+              }
+            ],
+            "messageKey": "phase03.boolean.projection",
+            "parameters": {},
+            "parent": null
+          },
+          {
+            "id": "phase03.boolean.variables",
+            "sourceKind": "fact",
+            "sourceId": "phase03.boolean.variables",
+            "entityRefs": [],
+            "messageKey": "phase03.boolean.variables",
+            "parameters": {},
+            "parent": null
+          }
+        ],
+        "metadata": {
+          "packId": "benchmark.phase03",
+          "scenarioId": "01890a5d-ac96-7b64-9f74-bbfcf30f9f80",
+          "scenarioRevision": 1,
+          "projectionVersion": 1,
+          "compilerId": "benchmark.phase03-compiler",
+          "compilerVersion": "1.0.0",
+          "compileMetadata": {},
+          "displayText": {}
+        },
+        "declaredCapabilities": [
+          "cardinalityRange",
+          "booleanProjection"
+        ],
+        "splitAuthorization": null
+      },
+      "expected": {
+        "rawTermination": "optimalityClaimed",
+        "rawCandidateCount": 1,
+        "rawObjectiveValues": null,
+        "rawBestBoundValues": null,
+        "modelCounts": {
+          "planningVariableCount": 3,
+          "planningConstraintCount": 1,
+          "translatedVariableCount": 3,
+          "translatedConstraintCount": 1
+        }
+      }
+    },
+    {
+      "id": "phase03.integer-linear-optimal",
+      "problem": {
+        "schemaVersion": 1,
+        "variables": [
+          {
+            "type": "integer",
+            "value": {
+              "id": "phase03.integer.x",
+              "domain": {
+                "inclusiveRanges": [
+                  {
+                    "start": 0,
+                    "end": 10
+                  }
+                ]
+              },
+              "provenance": "phase03.integer.variable"
+            }
+          }
+        ],
+        "constraints": [
+          {
+            "id": "phase03.integer.minimum",
+            "body": {
+              "type": "linearComparison",
+              "value": {
+                "expression": {
+                  "terms": [
+                    {
+                      "variable": "phase03.integer.x",
+                      "coefficient": 1
+                    }
+                  ],
+                  "constant": 0
+                },
+                "op": "greaterOrEqual",
+                "rhs": 3
+              }
+            },
+            "enforcement": [],
+            "provenance": "phase03.integer.constraint",
+            "tags": []
+          }
+        ],
+        "objectives": {
+          "levels": [
+            {
+              "id": "phase03.integer.objective-level",
+              "direction": "minimize",
+              "lowerBound": 0,
+              "upperBound": 10,
+              "terms": [
+                {
+                  "id": "phase03.integer.objective-term",
+                  "expression": {
+                    "terms": [
+                      {
+                        "variable": "phase03.integer.x",
+                        "coefficient": 1
+                      }
+                    ],
+                    "constant": 0
+                  },
+                  "kind": "penalty",
+                  "category": "phase03.integer-score",
+                  "provenance": "phase03.integer.objective"
+                }
+              ],
+              "provenance": "phase03.integer.objective"
+            }
+          ]
+        },
+        "assumptions": [],
+        "projections": [
+          {
+            "id": "phase03.integer.projection",
+            "assignmentId": "phase03.integer.assignment",
+            "entity": {
+              "kind": "benchmark.decision",
+              "id": "phase03.integer-result"
+            },
+            "required": true,
+            "expression": {
+              "type": "integer",
+              "value": "phase03.integer.x"
+            },
+            "provenance": "phase03.integer.projection"
+          }
+        ],
+        "provenance": [
+          {
+            "id": "phase03.integer.constraint",
+            "sourceKind": "requiredRule",
+            "sourceId": "phase03.integer.minimum",
+            "entityRefs": [],
+            "messageKey": "phase03.integer.minimum",
+            "parameters": {},
+            "parent": null
+          },
+          {
+            "id": "phase03.integer.objective",
+            "sourceKind": "preference",
+            "sourceId": "phase03.integer.objective",
+            "entityRefs": [
+              {
+                "kind": "benchmark.decision",
+                "id": "phase03.integer-result"
+              }
+            ],
+            "messageKey": "phase03.integer.objective",
+            "parameters": {},
+            "parent": null
+          },
+          {
+            "id": "phase03.integer.projection",
+            "sourceKind": "projection",
+            "sourceId": "phase03.integer.projection",
+            "entityRefs": [
+              {
+                "kind": "benchmark.decision",
+                "id": "phase03.integer-result"
+              }
+            ],
+            "messageKey": "phase03.integer.projection",
+            "parameters": {},
+            "parent": null
+          },
+          {
+            "id": "phase03.integer.variable",
+            "sourceKind": "fact",
+            "sourceId": "phase03.integer.variable",
+            "entityRefs": [],
+            "messageKey": "phase03.integer.variable",
+            "parameters": {},
+            "parent": null
+          }
+        ],
+        "metadata": {
+          "packId": "benchmark.phase03",
+          "scenarioId": "01890a5d-ac96-7b64-9f74-bbfcf30f9f81",
+          "scenarioRevision": 1,
+          "projectionVersion": 1,
+          "compilerId": "benchmark.phase03-compiler",
+          "compilerVersion": "1.0.0",
+          "compileMetadata": {},
+          "displayText": {}
+        },
+        "declaredCapabilities": [
+          "linearComparison",
+          "objectivePenalty",
+          "integerProjection"
+        ],
+        "splitAuthorization": null
+      },
+      "expected": {
+        "rawTermination": "optimalityClaimed",
+        "rawCandidateCount": 1,
+        "rawObjectiveValues": [
+          3
+        ],
+        "rawBestBoundValues": [
+          3
+        ],
+        "modelCounts": {
+          "planningVariableCount": 1,
+          "planningConstraintCount": 1,
+          "translatedVariableCount": 1,
+          "translatedConstraintCount": 1
+        }
+      }
+    },
+    {
+      "id": "phase03.primitive-infeasible",
+      "problem": {
+        "schemaVersion": 1,
+        "variables": [
+          {
+            "type": "boolean",
+            "value": {
+              "id": "phase03.infeasible.x",
+              "provenance": "phase03.infeasible.variable"
+            }
+          }
+        ],
+        "constraints": [
+          {
+            "id": "phase03.infeasible.require-false",
+            "body": {
+              "type": "boolAnd",
+              "value": {
+                "literals": [
+                  {
+                    "variable": "phase03.infeasible.x",
+                    "positive": false
+                  }
+                ]
+              }
+            },
+            "enforcement": [],
+            "provenance": "phase03.infeasible.constraints",
+            "tags": []
+          },
+          {
+            "id": "phase03.infeasible.require-true",
+            "body": {
+              "type": "boolAnd",
+              "value": {
+                "literals": [
+                  {
+                    "variable": "phase03.infeasible.x",
+                    "positive": true
+                  }
+                ]
+              }
+            },
+            "enforcement": [],
+            "provenance": "phase03.infeasible.constraints",
+            "tags": []
+          }
+        ],
+        "objectives": {
+          "levels": []
+        },
+        "assumptions": [],
+        "projections": [
+          {
+            "id": "phase03.infeasible.projection",
+            "assignmentId": "phase03.infeasible.assignment",
+            "entity": {
+              "kind": "benchmark.decision",
+              "id": "phase03.infeasible-result"
+            },
+            "required": true,
+            "expression": {
+              "type": "boolean",
+              "value": "phase03.infeasible.x"
+            },
+            "provenance": "phase03.infeasible.projection"
+          }
+        ],
+        "provenance": [
+          {
+            "id": "phase03.infeasible.constraints",
+            "sourceKind": "requiredRule",
+            "sourceId": "phase03.infeasible.contradiction",
+            "entityRefs": [],
+            "messageKey": "phase03.infeasible.contradiction",
+            "parameters": {},
+            "parent": null
+          },
+          {
+            "id": "phase03.infeasible.projection",
+            "sourceKind": "projection",
+            "sourceId": "phase03.infeasible.projection",
+            "entityRefs": [
+              {
+                "kind": "benchmark.decision",
+                "id": "phase03.infeasible-result"
+              }
+            ],
+            "messageKey": "phase03.infeasible.projection",
+            "parameters": {},
+            "parent": null
+          },
+          {
+            "id": "phase03.infeasible.variable",
+            "sourceKind": "fact",
+            "sourceId": "phase03.infeasible.variable",
+            "entityRefs": [],
+            "messageKey": "phase03.infeasible.variable",
+            "parameters": {},
+            "parent": null
+          }
+        ],
+        "metadata": {
+          "packId": "benchmark.phase03",
+          "scenarioId": "01890a5d-ac96-7b64-9f74-bbfcf30f9f82",
+          "scenarioRevision": 1,
+          "projectionVersion": 1,
+          "compilerId": "benchmark.phase03-compiler",
+          "compilerVersion": "1.0.0",
+          "compileMetadata": {},
+          "displayText": {}
+        },
+        "declaredCapabilities": [
+          "boolAnd",
+          "booleanProjection"
+        ],
+        "splitAuthorization": null
+      },
+      "expected": {
+        "rawTermination": "infeasibilityClaimed",
+        "rawCandidateCount": 0,
+        "rawObjectiveValues": null,
+        "rawBestBoundValues": null,
+        "modelCounts": {
+          "planningVariableCount": 1,
+          "planningConstraintCount": 2,
+          "translatedVariableCount": 1,
+          "translatedConstraintCount": 2
+        }
+      }
+    }
+  ]
+}

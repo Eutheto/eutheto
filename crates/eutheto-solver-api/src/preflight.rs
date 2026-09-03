@@ -1,7 +1,7 @@
 use crate::{
-    BackendCandidate, BackendSolveOutcome, BackendTerminationReason, CapabilityMatrix,
-    CompatibilityReport, ModelCostEstimate, RequiredFeature, SolverApiLimits, SolverDescriptor,
-    SupportFeatureId,
+    BACKEND_STATISTIC_MAX_V1, BackendCandidate, BackendSolveOutcome, BackendTerminationReason,
+    CapabilityMatrix, CompatibilityReport, ModelCostEstimate, RequiredFeature, SolverApiLimits,
+    SolverDescriptor, SupportFeatureId,
 };
 use eutheto_planning_ir::{
     Capability, LexicographicStrategy, PlanningIrLimitsV1, PlanningProblemSummary, summarize,
@@ -253,6 +253,7 @@ pub fn validate_outcome(
     {
         return Err(OutcomeError::InvalidFirstIncumbentTime);
     }
+    validate_execution_evidence(request, outcome)?;
     if outcome.evidence.evidence_refs.len() > limits.max_evidence_refs_per_candidate as usize {
         return Err(OutcomeError::OutputLimitExceeded);
     }
@@ -312,6 +313,109 @@ pub fn validate_outcome(
         return Err(OutcomeError::FirstIncumbentMismatch);
     }
     Ok(())
+}
+
+fn validate_execution_evidence(
+    request: &crate::SolveRequest,
+    outcome: &BackendSolveOutcome,
+) -> Result<(), OutcomeError> {
+    let Some(execution) = &outcome.evidence.execution else {
+        return Ok(());
+    };
+    let reproducibility = &execution.reproducibility;
+    if reproducibility.backend_version != request.backend_version() {
+        return Err(OutcomeError::ExecutionBackendVersionMismatch);
+    }
+    if reproducibility.adapter_version != request.adapter_version() {
+        return Err(OutcomeError::ExecutionAdapterVersionMismatch);
+    }
+    if &reproducibility.applied_options != request.options() {
+        return Err(OutcomeError::ExecutionOptionsMismatch);
+    }
+    let expected_seed = i32::try_from(request.options().random_seed)
+        .map_err(|_| OutcomeError::InvalidExecutionEvidence)?;
+    let applied = &reproducibility.applied_parameters;
+    if applied.random_seed != expected_seed
+        || applied.worker_threads == 0
+        || applied.stop_after_first_feasible != request.options().stop_after_first_feasible
+        || (applied.emit_intermediate_solutions
+            && !request.options().collect_intermediate_solutions)
+        || applied.deterministic_test_profile
+            != matches!(
+                request.options().reproducibility,
+                ReproducibilityMode::Deterministic
+            )
+        || matches!(
+            request.options().worker_threads,
+            WorkerThreadPolicy::Exact(count)
+                if applied.worker_threads != u32::from(count)
+        )
+    {
+        return Err(OutcomeError::InvalidExecutionEvidence);
+    }
+    if execution.model_counts.planning_variable_count != request.summary().variable_count
+        || execution.model_counts.planning_constraint_count != request.summary().constraint_count
+    {
+        return Err(OutcomeError::ExecutionModelCountMismatch);
+    }
+    let timings = &execution.timings;
+    if [
+        timings.translation_serialization_milliseconds,
+        timings.worker_startup_milliseconds.unwrap_or_default(),
+        timings.handshake_milliseconds.unwrap_or_default(),
+        timings.solver_milliseconds.unwrap_or_default(),
+        timings.protocol_decode_milliseconds.unwrap_or_default(),
+    ]
+    .into_iter()
+    .any(|value| value > outcome.evidence.elapsed_milliseconds)
+        || applied.wall_time_milliseconds.is_some_and(|value| {
+            value == eutheto_types::DurationMillis::ZERO
+                || value > outcome.evidence.backend_limit_milliseconds
+        })
+    {
+        return Err(OutcomeError::InvalidExecutionEvidence);
+    }
+    if reproducibility.protocol_major == 0
+        || !valid_version_field(&reproducibility.worker_version)
+        || !valid_version_field(&reproducibility.engine_version)
+        || !valid_sha256(&reproducibility.model_fingerprint_sha256)
+        || reproducibility
+            .applied_parameters_sha256
+            .as_deref()
+            .is_some_and(|value| !valid_sha256(value))
+        || execution
+            .worker_statistics
+            .as_ref()
+            .is_some_and(|statistics| {
+                [
+                    statistics.conflicts,
+                    statistics.branches,
+                    statistics.binary_propagations,
+                    statistics.integer_propagations,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|value| value > BACKEND_STATISTIC_MAX_V1)
+            })
+    {
+        return Err(OutcomeError::InvalidExecutionEvidence);
+    }
+    Ok(())
+}
+
+fn valid_version_field(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && !byte.is_ascii_whitespace())
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_candidates(
@@ -420,6 +524,11 @@ pub enum OutcomeError {
     UnrequestedCancellation,
     PrematureTimeLimit,
     FirstIncumbentMismatch,
+    ExecutionBackendVersionMismatch,
+    ExecutionAdapterVersionMismatch,
+    ExecutionOptionsMismatch,
+    ExecutionModelCountMismatch,
+    InvalidExecutionEvidence,
 }
 
 impl fmt::Display for OutcomeError {

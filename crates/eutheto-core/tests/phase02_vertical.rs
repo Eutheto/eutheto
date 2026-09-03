@@ -106,6 +106,7 @@ impl SolverBackend for ExactTestBackend {
                     first_incumbent_milliseconds: Some(duration(1)?),
                     objective: Some(raw_objective),
                     evidence_refs: Vec::new(),
+                    execution: None,
                 },
             })
         })

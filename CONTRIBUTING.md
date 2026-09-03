@@ -6,9 +6,9 @@ Thank you for helping build `eutheto`.
 
 ## Current project state and authority
 
-`eutheto` has completed the Phase 02 domain-pack and planning-IR contracts and is entering Phase 03's isolated OR-Tools worker vertical slice. It does not yet provide production domain behavior, a verified product result, an AI provider, an updater, or a shippable desktop application. Contributions must not imply that deferred behavior exists.
+`eutheto` has completed the Phase 03 isolated OR-Tools worker vertical slice and is entering Phase 04's independent verifier and explanation foundation. It does not yet provide production domain behavior, an accepted product result, an AI provider, an updater, or a shippable desktop application. Contributions must not imply that deferred behavior exists.
 
-Work is dependency-gated rather than date-gated. The [roadmap index](docs/roadmap/README.md) defines phase order and repository-wide authority; the [active Phase 03 document](docs/roadmap/03-ortools-worker-vertical-slice.md) defines the current scope, acceptance evidence, non-goals, and exit gate. A later phase may inform a contract, but its production feature cannot be implemented early. When sources conflict, use the authority order in [AGENTS.md](AGENTS.md):
+Work is dependency-gated rather than date-gated. The [roadmap index](docs/roadmap/README.md) defines phase order and repository-wide authority; the [active Phase 04 document](docs/roadmap/04-independent-verifier-and-explanations.md) defines the current scope, acceptance evidence, non-goals, and exit gate. A later phase may inform a contract, but its production feature cannot be implemented early. When sources conflict, use the authority order in [AGENTS.md](AGENTS.md):
 
 1. approved security and data-integrity ADRs;
 2. current schemas and conformance tests;

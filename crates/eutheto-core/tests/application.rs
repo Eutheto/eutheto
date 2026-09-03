@@ -3514,7 +3514,22 @@ async fn registries_expose_only_validated_static_metadata_in_stable_order()
         AppQueryResult::SolverSupportMatrix(matrix) => matrix,
         other => return Err(format!("unexpected matrix result: {other:?}").into()),
     };
-    assert!(matrix.production_backend_ids.is_empty());
+    assert_eq!(
+        matrix
+            .production_backend_ids
+            .iter()
+            .map(eutheto_types::BackendId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["solver.ortools-cp-sat"]
+    );
+    assert_eq!(matrix.backend_columns.len(), 1);
+    assert_eq!(
+        matrix.backend_columns[0].backend_id.as_str(),
+        "solver.ortools-cp-sat"
+    );
+    assert_eq!(matrix.backend_columns[0].backend_version, "9.15.6755");
+    assert_eq!(matrix.backend_columns[0].adapter_version, "0.1.0");
+    assert_eq!(matrix.backend_columns[0].cells.len(), matrix.features.len());
     assert!(!matrix.features.is_empty());
     assert!(
         matrix
@@ -3531,7 +3546,7 @@ async fn registries_expose_only_validated_static_metadata_in_stable_order()
             .iter()
             .map(|gate| (gate.backend_id.as_str(), gate.owning_phase))
             .collect::<Vec<_>>(),
-        vec![("solver.ortools-cp-sat", 3), ("solver.pumpkin", 8)]
+        vec![("solver.pumpkin", 8)]
     );
     Ok(())
 }

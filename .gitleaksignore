@@ -7,3 +7,9 @@ a652ebed984c38be75620cfaf056ae49a33fdc77:crates/eutheto-types/src/portable.rs:pr
 # Typed UUID map key; not an API credential.
 70023a486de8825abb6e2983697e3ee106cc6c73:crates/eutheto-export/src/lib.rs:generic-api-key:2868
 a652ebed984c38be75620cfaf056ae49a33fdc77:crates/eutheto-export/src/lib.rs:generic-api-key:2868
+
+# Benchmark diagnostic message keys; not credentials.
+bbef195d7b765d9c57b68028fc973c577a73085a:benchmarks/corpus/solver/phase03-primitives.json:generic-api-key:119
+bbef195d7b765d9c57b68028fc973c577a73085a:benchmarks/corpus/solver/phase03-primitives.json:generic-api-key:286
+bbef195d7b765d9c57b68028fc973c577a73085a:benchmarks/corpus/solver/phase03-primitives.json:generic-api-key:400
+bbef195d7b765d9c57b68028fc973c577a73085a:benchmarks/corpus/solver/phase03-primitives.json:generic-api-key:423
