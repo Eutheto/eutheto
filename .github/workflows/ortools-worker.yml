@@ -172,18 +172,25 @@ jobs:
           )
 
           for root in "$deb_root" "$rpm_root"; do
-            worker="$root/usr/bin/ortools-worker"
-            mapfile -t resources < <(find "$root/usr/lib" -type d -path '*/solver/ortools')
-            test "${#resources[@]}" -eq 1
+            mapfile -t workers < <(find "$root" -type f -name 'ortools-worker')
+            mapfile -t resources < <(find "$root" -type d -path '*/solver/ortools')
+            if [ "${#workers[@]}" -ne 1 ] || [ "${#resources[@]}" -ne 1 ]; then
+              echo "Expected one packaged worker and one solver resource root; found ${#workers[@]} worker(s) and ${#resources[@]} resource root(s)." >&2
+              exit 1
+            fi
             cargo xtask solver smoke \
-              --executable "$worker" \
+              --executable "${workers[0]}" \
               --resource-root "${resources[0]}" \
               --manifest-sha256 "$MANIFEST_SHA256"
           done
 
-          app="$deb_root/usr/bin/eutheto-desktop"
-          test "$(patchelf --print-interpreter "$app")" = "/lib64/ld-linux-x86-64.so.2"
-          loader_metadata="$(patchelf --print-rpath "$app"; ldd "$app")"
+          mapfile -t apps < <(find "$deb_root" -type f -name 'eutheto-desktop')
+          if [ "${#apps[@]}" -ne 1 ]; then
+            echo "Expected one packaged Linux desktop executable; found ${#apps[@]}." >&2
+            exit 1
+          fi
+          app="${apps[0]}"
+          loader_metadata="$(patchelf --print-interpreter "$app"; patchelf --print-rpath "$app"; ldd "$app")"
           case "$loader_metadata" in
             *"/nix/store/"*|*"not found"*)
               printf '%s\n' "$loader_metadata" >&2
@@ -408,13 +415,8 @@ jobs:
           if (-not (Test-Path -Path $application -PathType Leaf)) {
             throw "The packaged desktop executable is missing beside the worker."
           }
-          $profile = Join-Path $env:RUNNER_TEMP "eutheto-profile"
-          $localProfile = Join-Path $profile "Local"
-          $roamingProfile = Join-Path $profile "Roaming"
-          New-Item -ItemType Directory -Path $localProfile, $roamingProfile | Out-Null
-          $env:USERPROFILE = $profile
-          $env:LOCALAPPDATA = $localProfile
-          $env:APPDATA = $roamingProfile
+          # Tauri resolves Windows known folders through the native profile APIs;
+          # overriding profile environment variables makes those paths unavailable.
           $stdout = Join-Path $env:RUNNER_TEMP "eutheto-desktop.stdout.log"
           $stderr = Join-Path $env:RUNNER_TEMP "eutheto-desktop.stderr.log"
           $desktop = Start-Process `

@@ -34,6 +34,7 @@ const SIDECAR_ROOT: &str = "apps/desktop/src-tauri/sidecar";
 const SIDECAR_STAGING: &str = "sidecar.staging";
 const SIDECAR_PREVIOUS: &str = "sidecar.previous";
 const SIDECAR_LOCK: &str = "sidecar.lock";
+#[cfg(not(windows))]
 const SIDECAR_BUILD_INSTRUCTION: &str = "cargo xtask solver build-desktop";
 const SOLVER_MANIFEST_DIGEST_ENV: &str = "EUTHETO_ORTOOLS_MANIFEST_SHA256";
 const MAX_SIDECAR_TREE_ENTRIES: usize = 256;
