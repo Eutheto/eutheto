@@ -3,6 +3,7 @@ mod fixtures;
 mod generate;
 mod phase02_generate;
 mod protocol;
+mod protocol_generate;
 mod release;
 mod supply_chain;
 
@@ -72,7 +73,7 @@ enum ArchitectureCommand {
 
 #[derive(Debug, Subcommand)]
 enum ProtocolCommand {
-    /// Verify every checked-in JSON/protobuf golden pair and declared limit.
+    /// Verify every checked-in semantic-JSON/framed-protobuf fixture pair and declared limit.
     Verify,
 }
 

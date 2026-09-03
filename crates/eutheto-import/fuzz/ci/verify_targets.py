@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail unless the complete, exact Phase-01/02 fuzz harness is present."""
+"""Fail unless the complete, exact Phase-01/02/03 fuzz harness is present."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ REQUIRED_TARGETS = (
     "integer_expression",
     "projection",
     "component_graph",
+    "worker_frame",
 )
 REQUIRED_SEEDS = {
     "migration_chain": {"historical-to-current"},
@@ -30,6 +31,7 @@ REQUIRED_SEEDS = {
     "integer_expression": {"duplicate-terms-and-bounds"},
     "projection": {"complete-candidate"},
     "component_graph": {"projection-joined"},
+    "worker_frame": {"empty-body-frame", "started-frame", "truncated-prefix"},
 }
 
 

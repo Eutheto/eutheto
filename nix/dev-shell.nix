@@ -14,12 +14,13 @@ let
     [
       pkgs.openssl
       pkgs.sqlite
-      pkgs.protobuf
+      tooling.protobuf
     ]
     ++ tooling.platformLibraries
   );
   linuxRuntimePackages = lib.unique (
     [
+      pkgs.stdenv.cc.cc.lib
       pkgs.openssl
       pkgs.sqlite
       llvm.libclang
@@ -38,13 +39,13 @@ pkgs.mkShell {
   RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
   LIBCLANG_PATH = "${llvm.libclang.lib}/lib";
   CLANG_PATH = "${llvm.clang}/bin/clang";
-  PROTOC = "${pkgs.protobuf}/bin/protoc";
-  PROTOC_INCLUDE = "${pkgs.protobuf}/include";
+  PROTOC = "${tooling.protobuf}/bin/protoc";
+  PROTOC_INCLUDE = "${tooling.protobuf}/include";
   CMAKE_GENERATOR = "Ninja";
   CMAKE_PREFIX_PATH = lib.concatStringsSep ":" [
     "${pkgs.openssl.dev}"
     "${pkgs.sqlite.dev}"
-    "${pkgs.protobuf}"
+    "${tooling.protobuf}"
   ];
   PKG_CONFIG_PATH = lib.concatStringsSep ":" [
     (lib.makeSearchPath "lib/pkgconfig" pkgConfigPackages)

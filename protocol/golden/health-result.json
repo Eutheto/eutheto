@@ -1,9 +1,0 @@
-{
-  "protocolVersion": 1,
-  "requestId": "phase00-2",
-  "result": {
-    "health": {
-      "state": "HEALTH_STATE_READY"
-    }
-  }
-}

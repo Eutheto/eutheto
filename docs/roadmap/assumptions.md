@@ -58,7 +58,7 @@ Related delivery files: [Performance and Solver UX Targets](performance-and-solv
 | Node.js | 26.8.1 Current | **24.20.0 LTS** | Production uses current LTS; re-evaluate Node 26 when it becomes LTS. Phase 0 owns engines/Nix. [Node distributions](https://nodejs.org/dist/). |
 | pnpm | 11.24.0 | **11.24.0** | Direct registry current stable supports Node `>=22.13`; replaces blueprint/report pnpm-10 guidance. Phase 0 owns lock/integrity and Nix availability. [npm](https://www.npmjs.com/package/pnpm). |
 | TypeScript | 7.0.2 | **6.0.3** | `typescript-eslint` 8.68.0 declares TypeScript `>=4.8.4 <6.1.0`; newest supported stable is 6.0.3. Phase 0 owns exact lock. [npm TypeScript](https://www.npmjs.com/package/typescript), [typescript-eslint](https://www.npmjs.com/package/typescript-eslint). |
-| protobuf/protoc | 36.0 | **Match pinned OR-Tools 9.15 protobuf/proto contract** | Do not blindly use newest protoc; Phase 3 closes generation and handshake compatibility. [protobuf v36.0](https://github.com/protocolbuffers/protobuf/releases/tag/v36.0). |
+| protobuf/protoc | 36.0 | **33.1, matched to OR-Tools 9.15** | OR-Tools tag `v9.15` pins protobuf `v33.1`; the locked four-system Nix toolchain exposes `protobuf_33` 33.1 and `libprotoc 33.1`. Do not blindly use newest protoc. Phase 3 owns generated-binding and C++ runtime conformance. [protobuf v33.1](https://github.com/protocolbuffers/protobuf/releases/tag/v33.1), [OR-Tools v9.15 dependency declaration](https://github.com/google/or-tools/blob/v9.15/cmake/dependencies/CMakeLists.txt). |
 | OR-Tools | 9.15 | **9.15 after K.3 gates** | Platform build, benchmark, CMake, linkage, protocol, SBOM/license, callback, and assumption-core gates remain. Phase 3 owns pin; Phase 11/12 owns exact artifacts. [release](https://github.com/google/or-tools/releases/tag/v9.15). |
 | Pumpkin | 0.5.0 | **0.5.0 after K.4 gates** | Actual support matrix, dedicated-thread ownership, cooperative cancellation/time limits, verifier/contracts, and benchmarks precede auto-routing. Phase 8 owns. [crates.io](https://crates.io/crates/pumpkin-solver). |
 
@@ -314,13 +314,14 @@ Every K item is represented below. “Version selected” does not mean the buil
 
 | Gate | Status | Owner/closure evidence |
 |---|---|---|
-| Exact release/commit | **Candidate 9.15; not closed until builds/benchmarks** | Phase 3 pin and target matrix |
-| Source hash and proto checksums | **Open** | Phase 3 derivation/proto-generation record |
-| Exact CMake disable flags | **Open against pinned source** | Disable language wrappers, examples, GLPK, proprietary/unrelated backends; build log/manifest |
+| Exact release/commit | **Pinned candidate: v9.15 at `551ad10d94835c99e5e1e684500d3db398c0e345`; target builds and benchmarks still gate adoption** | Phase 3 target matrix; official release assets identify semantic build version `9.15.6755` |
+| Source hash and proto checksums | **Recorded:** raw GitHub archive SHA-256 `6395a00a97ff30af878ee8d7fd5ad0ab1c7844f7219182c6d71acbee1b5f3026`; unpacked Nix hash `sha256-9+tvgP/+/VY6wu7lzTdP4xfiJIgPSLVR9lEdZjQCZkE=`; `cp_model.proto` SHA-256 `c967180600fab5db4fc8b7477fef56c3c6d3c0714b1f0355697f96d147f77d96`; `sat_parameters.proto` SHA-256 `9a5e08486a63414191870bd9953f9e561af221e165654913a33662bf1b674308`** | Phase 3 derivation, generated-proto, and manifest checks |
+| Exact CMake disable flags | **Confirmed against the pinned source on x86_64-linux; all required target probes remain open** | Static C++/CP-SAT build succeeded with language wrappers, examples/samples/tests/docs, GLPK, proprietary solvers, and unrelated solver components disabled; manifest must preserve the exact flags |
+| CP-SAT worker-thread ceiling | **Confirmed: 10,000** | Pinned OR-Tools 9.15 [`parameters_validation.cc`](https://github.com/google/or-tools/blob/v9.15/ortools/sat/parameters_validation.cc) rejects `num_search_workers` above 10,000; `protocol/version.json` is the runtime authority and may impose a lower product limit later |
 | Static/dynamic linkage per target | **Open** | Phase 3/11 package-size, notices, reliability decision |
 | Target dependent-library loading | **Open** | Packaged clean-machine worker tests |
 | Worker SBOM/license manifest | **Open** | Phase 3 generation, Phase 11/12 exact-artifact inspection |
-| Assumption/core APIs and callbacks | **Open/known issue** | Characterize #5141, single-worker diagnostic behavior, callback/cancellation contract tests |
+| Assumption/core APIs and callbacks | **Sufficient-assumption capability disabled:** issue #5141 remains open and the upstream keep-all workaround still reproduces; callback behavior remains to be tested | Canonical handshake omits the capability; reject any returned assumption evidence unless a later exact-build gate enables it |
 
 ### K.4 — Pumpkin
 

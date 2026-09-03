@@ -1,0 +1,24 @@
+{
+  "solveRequest": {
+    "cpModelProto": "120412020000",
+    "modelFingerprint": "94176f9b2ce2f9af8432215d877f1503132385a4b10ffd3f22d9851db218ac27",
+    "parameters": {
+      "deterministicTestProfile": true,
+      "emitIntermediateSolutions": true,
+      "logSearchProgress": false,
+      "randomSeed": 1,
+      "stopAfterFirstFeasible": false
+    },
+    "projections": [
+      {
+        "cpSatVariableIndex": 0,
+        "projectionId": 1
+      }
+    ],
+    "requestId": "solve-0001",
+    "resourceLimits": {
+      "wallTimeMillis": 100,
+      "workerThreads": 1
+    }
+  }
+}

@@ -13,6 +13,7 @@ let
   };
 
   rust = pkgs.rust-bin.fromRustupToolchainFile ../rust-toolchain.toml;
+  protobuf = pkgs.protobuf_33;
   nodeVersion = "24.20.0";
   nodeDistributions = {
     x86_64-linux = {
@@ -177,7 +178,7 @@ let
 
   commonLibraries = [
     llvm.libclang
-    pkgs.protobuf
+    protobuf
     pkgs.openssl
     pkgs.sqlite
   ];
@@ -250,12 +251,14 @@ let
     pkgs.cargo-audit
   ];
 in
+assert lib.assertMsg (protobuf.version == "33.1") "eutheto requires exact protobuf/protoc 33.1";
 assert lib.assertMsg (node.version == nodeVersion) "eutheto requires exact Node.js ${nodeVersion}";
 {
   inherit
     commonLibraries
     desktopRuntime
     executableTools
+    protobuf
     qualityTools
     rust
     ;

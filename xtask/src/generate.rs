@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 
 const GENERATED_DESKTOP_API_PATH: &str = "apps/desktop/src/api/generated.ts";
 const GENERATED_RUST_COMMAND_CATALOG_PATH: &str =
@@ -1140,7 +1140,8 @@ fn generated_rust_command_catalog() -> String {
 }
 
 pub fn generate(repo_root: &Path) -> Result<()> {
-    let generated_files = all_generated_files()?;
+    let generated_files = all_generated_files(repo_root)?;
+    crate::protocol_generate::remove_obsolete(repo_root, &generated_files)?;
     for (relative_path, contents) in &generated_files {
         let path = repo_root.join(relative_path);
         let parent = path
@@ -1149,7 +1150,7 @@ pub fn generate(repo_root: &Path) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
 
-        if fs::read_to_string(&path).ok().as_deref() != Some(contents.as_str()) {
+        if fs::read(&path).ok().as_deref() != Some(contents.as_slice()) {
             fs::write(&path, contents)
                 .with_context(|| format!("failed to write {}", path.display()))?;
         }
@@ -1160,14 +1161,15 @@ pub fn generate(repo_root: &Path) -> Result<()> {
 }
 
 pub fn check(repo_root: &Path) -> Result<()> {
-    let generated_files = all_generated_files()?;
+    let generated_files = all_generated_files(repo_root)?;
+    crate::protocol_generate::reject_unexpected(repo_root, &generated_files)?;
     let mut drifted = Vec::new();
 
     for (relative_path, expected) in &generated_files {
         let path = repo_root.join(relative_path);
-        match fs::read_to_string(&path) {
-            Ok(actual) if actual == expected.as_str() => {}
-            Ok(_) | Err(_) => drifted.push(*relative_path),
+        match fs::read(&path) {
+            Ok(actual) if actual == expected.as_slice() => {}
+            Ok(_) | Err(_) => drifted.push(relative_path.as_str()),
         }
     }
 
@@ -1192,10 +1194,33 @@ fn generated_files() -> Vec<(&'static str, String)> {
     ]
 }
 
-fn all_generated_files() -> Result<Vec<(&'static str, String)>> {
-    let mut files = generated_files();
-    files.extend(crate::phase02_generate::generated_files()?);
+fn all_generated_files(repo_root: &Path) -> Result<Vec<crate::protocol_generate::GeneratedOutput>> {
+    let mut files = generated_files()
+        .into_iter()
+        .map(|(path, contents)| (path.to_owned(), contents.into_bytes()))
+        .collect::<Vec<_>>();
+    files.extend(
+        crate::phase02_generate::generated_files()?
+            .into_iter()
+            .map(|(path, contents)| (path.to_owned(), contents.into_bytes())),
+    );
+    files.extend(crate::protocol_generate::generated_files(repo_root)?);
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    ensure_unique_generated_paths(&files)?;
     Ok(files)
+}
+
+fn ensure_unique_generated_paths(
+    files: &[crate::protocol_generate::GeneratedOutput],
+) -> Result<()> {
+    for pair in files.windows(2) {
+        ensure!(
+            pair[0].0 != pair[1].0,
+            "generated path is owned by more than one generator: {}",
+            pair[0].0
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

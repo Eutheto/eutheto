@@ -293,9 +293,15 @@ jobs:
               after = toml_at('rust-toolchain.toml').get('toolchain', {}).get('channel')
               if major(before) != major(after):
                   families.add('rust-toolchain-major')
-          if any(path == 'flake.lock' or path.startswith('nix/') for path in changed):
+          if 'flake.lock' in changed_set:
               families.add('nix-input-migration')
-          if any(path.startswith('workers/ortools/') for path in changed):
+          if any(path.startswith('nix/') for path in changed):
+              families.add('nix-definition-migration')
+          if any(
+              path.startswith('workers/ortools/')
+              and not path.startswith('workers/ortools/proto/')
+              for path in changed
+          ):
               families.add('ortools-migration')
           if any(
               path.endswith('.proto')
@@ -307,27 +313,49 @@ jobs:
               for path in changed
           ):
               families.add('schema-migration')
-          def collapse_supporting_nix(changed_families):
-              toolchain = changed_families & {
-                  'rust-toolchain-major', 'node-toolchain-major'
+
+          def collapse_supporting_nix_definitions(changed_families):
+              primary = changed_families & {
+                  'rust-toolchain-major',
+                  'node-toolchain-major',
+                  'schema-migration',
+                  'ortools-migration',
               }
               if (
-                  'nix-input-migration' in changed_families
-                  and toolchain
-                  and changed_families <= toolchain | {'nix-input-migration'}
+                  'nix-definition-migration' in changed_families
+                  and len(primary) == 1
+                  and changed_families <= primary | {'nix-definition-migration'}
               ):
-                  return changed_families - {'nix-input-migration'}
+                  return changed_families - {'nix-definition-migration'}
               return changed_families
 
-          if collapse_supporting_nix(
-              {'rust-toolchain-major', 'nix-input-migration'}
-          ) != {'rust-toolchain-major'}:
-              raise SystemExit('migration classifier cannot pair one toolchain with supporting Nix changes')
-          if len(collapse_supporting_nix({
-              'rust-toolchain-major', 'node-toolchain-major', 'nix-input-migration'
+          for primary in (
+              'rust-toolchain-major',
+              'schema-migration',
+              'ortools-migration',
+          ):
+              if collapse_supporting_nix_definitions({
+                  primary, 'nix-definition-migration'
+              }) != {primary}:
+                  raise SystemExit(
+                      'migration classifier cannot pair one migration with supporting Nix definitions'
+                  )
+          if len(collapse_supporting_nix_definitions({
+              'rust-toolchain-major',
+              'node-toolchain-major',
+              'nix-definition-migration',
+          })) != 3:
+              raise SystemExit(
+                  'migration classifier collapsed unrelated toolchain majors'
+              )
+          if len(collapse_supporting_nix_definitions({
+              'ortools-migration',
+              'nix-input-migration',
           })) != 2:
-              raise SystemExit('migration classifier collapsed unrelated toolchain majors')
-          families = collapse_supporting_nix(families)
+              raise SystemExit(
+                  'migration classifier collapsed an independently reviewed Nix input'
+              )
+          families = collapse_supporting_nix_definitions(families)
           bootstrap_change = old_bytes('.github/workflows/dependency-update.yml') is None
           if len(families) > 1 and not bootstrap_change:
               raise SystemExit(

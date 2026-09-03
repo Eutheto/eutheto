@@ -7,6 +7,7 @@ members = [
   "crates/eutheto-domain-api",
   "crates/eutheto-solver-api",
   "crates/eutheto-solver-router",
+  "crates/eutheto-protocol",
   "crates/eutheto-core",
   "crates/eutheto-store",
   "crates/eutheto-command",

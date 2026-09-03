@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "documentName": "eutheto Phase-02 workspace dependency inventory",
-  "documentNamespace": "urn:eutheto:spdx:phase-02-workspace:0.1.0",
+  "documentName": "eutheto workspace dependency inventory",
+  "documentNamespace": "urn:eutheto:spdx:workspace:0.1.0",
   "created": "2026-08-30T00:00:00Z",
   "workspacePackages": [
     {
@@ -65,6 +65,13 @@
       "name": "eutheto-planning-ir",
       "version": "0.1.0",
       "path": "crates/eutheto-planning-ir",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "eutheto-protocol",
+      "version": "0.1.0",
+      "path": "crates/eutheto-protocol",
       "license": "Apache-2.0"
     },
     {
