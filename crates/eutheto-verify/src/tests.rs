@@ -44,6 +44,7 @@ enum ScoreMutation {
     WrongLevelId,
     WrongDirection,
     OutOfBounds,
+    UndeclaredCategory,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -293,7 +294,10 @@ impl DomainPack for TestPack {
                 level_id: ScoreLevelId::new("objective.primary").map_err(contract)?,
                 value,
                 direction: OptimizationDirection::Minimize,
-                category_breakdown: BTreeMap::new(),
+                category_breakdown: BTreeMap::from([(
+                    ScoreCategoryId::new("score.value").map_err(contract)?,
+                    -7,
+                )]),
             }],
         };
         match self.score_mutation {
@@ -308,6 +312,12 @@ impl DomainPack for TestPack {
                 score.levels[0].direction = OptimizationDirection::Maximize;
             }
             ScoreMutation::OutOfBounds => score.levels[0].value = 11,
+            ScoreMutation::UndeclaredCategory => {
+                score.levels[0].category_breakdown.insert(
+                    ScoreCategoryId::new("score.undeclared").map_err(contract)?,
+                    1,
+                );
+            }
         }
         Ok(score)
     }
@@ -616,7 +626,8 @@ fn valid_candidate_uses_authoritative_score_and_parent_stage_timings() -> Result
 }
 
 #[test]
-fn backend_objective_evidence_is_reconciled_without_gating() -> Result<(), Box<dyn Error>> {
+fn backend_objective_evidence_is_reconciled_without_gating_or_persistence()
+-> Result<(), Box<dyn Error>> {
     for (objective, expected) in [
         (None, BackendObjectiveReconciliation::Missing),
         (Some(vec![99]), BackendObjectiveReconciliation::Mismatch),
@@ -627,6 +638,17 @@ fn backend_objective_evidence_is_reconciled_without_gating() -> Result<(), Box<d
         assert_eq!(
             result.verification.score.levels[0].value,
             AUTHORITATIVE_SCORE
+        );
+        assert_eq!(
+            result.verification.score.levels[0]
+                .category_breakdown
+                .get(&ScoreCategoryId::new("score.value")?),
+            Some(&-7)
+        );
+        let persisted = serde_json::to_value(&result)?;
+        assert!(
+            !persisted.to_string().contains("objectiveValues"),
+            "accepted results must not persist raw backend objective evidence"
         );
     }
     Ok(())
@@ -796,6 +818,7 @@ fn score_shape_and_feasibility_mutations_are_quarantined() -> Result<(), Box<dyn
         ScoreMutation::WrongLevelId,
         ScoreMutation::WrongDirection,
         ScoreMutation::OutOfBounds,
+        ScoreMutation::UndeclaredCategory,
     ] {
         let pack = TestPack {
             score_mutation,

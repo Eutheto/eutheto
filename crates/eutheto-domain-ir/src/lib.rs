@@ -23,6 +23,10 @@ pub const VERIFICATION_CONTEXT_SCHEMA_VERSION: u32 = 1;
 pub const VERIFICATION_REPORT_SCHEMA_VERSION: u32 = 2;
 /// Current accepted-result wire schema.
 pub const ACCEPTED_RESULT_SCHEMA_VERSION: u32 = 2;
+/// Maximum ordered levels in one authoritative score vector.
+pub const MAX_SCORE_LEVELS: usize = 16;
+/// Maximum explanatory category totals in one score level.
+pub const MAX_SCORE_CATEGORIES_PER_LEVEL: usize = 1_024;
 /// Maximum required rules or evaluations in one verification contract.
 pub const MAX_VERIFICATION_RULES: usize = 100_000;
 /// Maximum warnings in one verification report.
@@ -418,7 +422,9 @@ pub struct ScoreLevelValue {
     pub value: i64,
     /// Comparison direction.
     pub direction: OptimizationDirection,
-    /// Deterministic explanatory breakdown. It need not sum to `value` unless the pack says so.
+    /// Deterministic optional explanatory totals. Every present category must belong to this
+    /// planning objective level, but categories may be omitted and totals need not sum to
+    /// `value` unless the pack's own contract requires that relationship.
     pub category_breakdown: BTreeMap<ScoreCategoryId, i64>,
 }
 
@@ -443,10 +449,10 @@ impl ScoreVector {
     /// follows its declared direction.
     ///
     /// # Errors
-    /// Rejects negative feasibility or level identity/direction mismatch.
+    /// Rejects an invalid current shape or level identity/direction mismatch.
     pub fn compare(&self, other: &Self) -> Result<Ordering, DomainContractError> {
-        self.validate_shape()?;
-        other.validate_shape()?;
+        self.validate_current_shape()?;
+        other.validate_current_shape()?;
         if self.levels.len() != other.levels.len() {
             return Err(DomainContractError::ScoreShapeMismatch);
         }
@@ -469,7 +475,7 @@ impl ScoreVector {
         Ok(Ordering::Equal)
     }
 
-    /// Validates feasibility and unique ordered level identities.
+    /// Validates the released score identity and feasibility shape.
     ///
     /// # Errors
     /// Rejects negative feasibility or duplicate level IDs.
@@ -480,6 +486,25 @@ impl ScoreVector {
         let mut ids = BTreeSet::new();
         if self.levels.iter().any(|level| !ids.insert(&level.level_id)) {
             return Err(DomainContractError::DuplicateScoreLevel);
+        }
+        Ok(())
+    }
+
+    /// Validates the bounded current score shape.
+    ///
+    /// # Errors
+    /// Rejects an invalid released shape or too many levels or category totals.
+    pub fn validate_current_shape(&self) -> Result<(), DomainContractError> {
+        self.validate_shape()?;
+        if self.levels.len() > MAX_SCORE_LEVELS {
+            return Err(DomainContractError::LimitExceeded("score levels"));
+        }
+        if self
+            .levels
+            .iter()
+            .any(|level| level.category_breakdown.len() > MAX_SCORE_CATEGORIES_PER_LEVEL)
+        {
+            return Err(DomainContractError::LimitExceeded("score categories"));
         }
         Ok(())
     }
@@ -907,7 +932,7 @@ impl VerificationReport {
                 return Err(DomainContractError::DuplicateVerificationWarning);
             }
         }
-        score.validate_shape()?;
+        score.validate_current_shape()?;
         validate_metrics(&metrics)?;
         let accepted = required_rule_results.iter().all(|result| result.satisfied);
         let mut report = Self {
@@ -967,7 +992,7 @@ impl VerificationReport {
         for evaluation in &self.required_rule_results {
             evaluation.validate()?;
         }
-        self.score.validate_shape()?;
+        self.score.validate_current_shape()?;
         if self.warnings.len() > MAX_VERIFICATION_WARNINGS {
             return Err(DomainContractError::LimitExceeded("verification warnings"));
         }

@@ -101,6 +101,15 @@ Recommended workforce lexicographic order is: preserve hard locks/required rules
 
 Backend adapters may use safely bounded scalarization or multiple passes, but Phase 04 compares verified score vectors. Scalarization requires finite bound proof and rejection of overflow-prone formulations; exact multi-pass solving is preferred when weights cannot prove priority preservation. The UI displays verified category breakdowns, never an unexplained scalar backend objective.
 
+For the current contract, a category breakdown is optional explanatory data: a pack may omit
+categories whose totals it does not expose. Every category it does expose must belong to the
+corresponding Planning IR objective level. Category totals are signed `i64` values and do not
+implicitly sum to the level value; a pack that needs that relationship owns and verifies it from
+domain meaning. Score vectors are bounded to 16 ordered levels and 1,024 exposed categories per
+level. Accepted results persist only the verifier-recomputed vector. Raw backend objective and bound
+evidence remains a non-gating reconciliation diagnostic and cannot establish acceptance,
+optimality, or user-visible score authority.
+
 ### Provenance chain
 
 Every user-relevant generated artifact follows this chain:

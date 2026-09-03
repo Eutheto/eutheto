@@ -514,6 +514,51 @@ fn legacy_v1_decodes_but_cannot_validate_as_current() -> Result<(), Box<dyn Erro
         VerificationReport::from_json(&legacy_report_bytes),
         Err(DomainContractError::MalformedJson(_))
     ));
+    let mut wide_legacy = legacy.clone();
+    let wide_score = wide_legacy
+        .verification
+        .score
+        .as_mut()
+        .ok_or_else(|| std::io::Error::other("legacy fixture score missing"))?;
+    wide_score.levels.clear();
+    for index in 0..=MAX_SCORE_LEVELS {
+        wide_score.levels.push(ScoreLevelValue {
+            level_id: ScoreLevelId::new(format!("legacy.score.level.{index}"))?,
+            value: i64::try_from(index)?,
+            direction: OptimizationDirection::Minimize,
+            category_breakdown: BTreeMap::new(),
+        });
+    }
+    assert!(wide_score.validate_shape().is_ok());
+    assert_eq!(
+        wide_score.validate_current_shape(),
+        Err(DomainContractError::LimitExceeded("score levels"))
+    );
+    assert_eq!(
+        LegacyAcceptedResultV1::from_json(&serde_json::to_vec(&wide_legacy)?)?,
+        wide_legacy
+    );
+    let mut category_legacy = legacy.clone();
+    let category_score = category_legacy
+        .verification
+        .score
+        .as_mut()
+        .ok_or_else(|| std::io::Error::other("legacy fixture score missing"))?;
+    for index in 0..=MAX_SCORE_CATEGORIES_PER_LEVEL {
+        category_score.levels[0].category_breakdown.insert(
+            ScoreCategoryId::new(format!("legacy.score.category.{index}"))?,
+            i64::try_from(index)?,
+        );
+    }
+    assert!(category_score.validate_shape().is_ok());
+    assert_eq!(
+        category_score.validate_current_shape(),
+        Err(DomainContractError::LimitExceeded("score categories"))
+    );
+    assert_eq!(
+        LegacyAcceptedResultV1::from_json(&serde_json::to_vec(&category_legacy)?)?,
+        category_legacy
+    );
     let mut newer = legacy;
     newer.schema_version = 9;
     assert_eq!(
@@ -523,36 +568,166 @@ fn legacy_v1_decodes_but_cannot_validate_as_current() -> Result<(), Box<dyn Erro
     Ok(())
 }
 
+fn mixed_score(
+    feasibility: i64,
+    minimized: i64,
+    maximized: i64,
+) -> Result<ScoreVector, Box<dyn Error>> {
+    Ok(ScoreVector {
+        feasibility,
+        levels: vec![
+            ScoreLevelValue {
+                level_id: ScoreLevelId::new("score.primary")?,
+                value: minimized,
+                direction: OptimizationDirection::Minimize,
+                category_breakdown: BTreeMap::new(),
+            },
+            ScoreLevelValue {
+                level_id: ScoreLevelId::new("score.secondary")?,
+                value: maximized,
+                direction: OptimizationDirection::Maximize,
+                category_breakdown: BTreeMap::new(),
+            },
+        ],
+    })
+}
+
 #[test]
-fn score_uses_feasibility_then_stable_lexicographic_direction() -> Result<(), Box<dyn Error>> {
-    assert_eq!(score(2)?.compare(&score(3)?)?, Ordering::Less);
-    let mut maximized = score(2)?;
-    maximized.levels[0].direction = OptimizationDirection::Maximize;
-    let mut other = score(3)?;
-    other.levels[0].direction = OptimizationDirection::Maximize;
-    assert_eq!(maximized.compare(&other)?, Ordering::Greater);
-    let mut infeasible = score(0)?;
-    infeasible.feasibility = 1;
-    assert_eq!(infeasible.compare(&score(i64::MAX)?)?, Ordering::Greater);
-    let mut mismatch = score(2)?;
-    mismatch.levels[0].level_id = ScoreLevelId::new("score.other")?;
+fn score_shape_is_bounded_and_category_breakdowns_are_optional() -> Result<(), Box<dyn Error>> {
+    let mut invalid = score(0)?;
+    invalid.feasibility = -1;
     assert_eq!(
-        score(2)?.compare(&mismatch),
+        invalid.validate_shape(),
+        Err(DomainContractError::NegativeFeasibility)
+    );
+
+    let level = score(0)?.levels.remove(0);
+    let mut too_many_levels = ScoreVector {
+        feasibility: 0,
+        levels: vec![level.clone(); MAX_SCORE_LEVELS + 1],
+    };
+    for (index, score_level) in too_many_levels.levels.iter_mut().enumerate() {
+        score_level.level_id = ScoreLevelId::new(format!("score.level.{index}"))?;
+    }
+    assert_eq!(
+        too_many_levels.validate_current_shape(),
+        Err(DomainContractError::LimitExceeded("score levels"))
+    );
+    assert_eq!(
+        too_many_levels.compare(&too_many_levels),
+        Err(DomainContractError::LimitExceeded("score levels"))
+    );
+
+    let mut categories = BTreeMap::new();
+    for index in 0..MAX_SCORE_CATEGORIES_PER_LEVEL {
+        categories.insert(
+            ScoreCategoryId::new(format!("score.category.{index}"))?,
+            i64::try_from(index)?,
+        );
+    }
+    let mut bounded = score(7)?;
+    bounded.levels[0].category_breakdown = categories;
+    assert!(bounded.validate_current_shape().is_ok());
+    bounded.levels[0]
+        .category_breakdown
+        .insert(ScoreCategoryId::new("score.category.overflow")?, -1);
+    assert_eq!(
+        bounded.validate_current_shape(),
+        Err(DomainContractError::LimitExceeded("score categories"))
+    );
+    assert_eq!(
+        bounded.compare(&bounded),
+        Err(DomainContractError::LimitExceeded("score categories"))
+    );
+
+    let mut duplicate = mixed_score(0, 1, 2)?;
+    duplicate.levels[1].level_id = duplicate.levels[0].level_id.clone();
+    assert_eq!(
+        duplicate.validate_shape(),
+        Err(DomainContractError::DuplicateScoreLevel)
+    );
+    assert!(score(7)?.validate_shape().is_ok());
+    Ok(())
+}
+
+#[test]
+fn score_uses_feasibility_then_mixed_lexicographic_direction() -> Result<(), Box<dyn Error>> {
+    assert_eq!(
+        mixed_score(0, 2, i64::MIN)?.compare(&mixed_score(0, 3, i64::MAX)?)?,
+        Ordering::Less
+    );
+    assert_eq!(
+        mixed_score(0, 2, 5)?.compare(&mixed_score(0, 2, 4)?)?,
+        Ordering::Less
+    );
+    assert_eq!(
+        mixed_score(1, i64::MIN, i64::MAX)?.compare(&mixed_score(0, i64::MAX, i64::MIN)?)?,
+        Ordering::Greater
+    );
+
+    let mut mismatch = mixed_score(0, 2, 5)?;
+    mismatch.levels[1].direction = OptimizationDirection::Minimize;
+    assert_eq!(
+        mixed_score(0, 2, 5)?.compare(&mismatch),
         Err(DomainContractError::ScoreShapeMismatch)
     );
     Ok(())
 }
 
+#[test]
+fn score_serialization_is_deterministic_and_breakdowns_need_not_sum() -> Result<(), Box<dyn Error>>
+{
+    let first = ScoreCategoryId::new("score.category.first")?;
+    let second = ScoreCategoryId::new("score.category.second")?;
+    let mut left = score(42)?;
+    left.levels[0].category_breakdown = BTreeMap::from([(second.clone(), -7), (first.clone(), 99)]);
+    let mut right = score(42)?;
+    right.levels[0].category_breakdown = BTreeMap::from([(first, 99), (second, -7)]);
+
+    assert!(left.validate_shape().is_ok());
+    assert_eq!(left.compare(&right)?, Ordering::Equal);
+    assert_eq!(serde_json::to_vec(&left)?, serde_json::to_vec(&right)?);
+    Ok(())
+}
+
 proptest! {
     #[test]
-    fn score_comparison_is_transitive(left in any::<i64>(), middle in any::<i64>(), right in any::<i64>()) {
-        let Ok(left_score) = score(left) else { return Ok(()); };
-        let Ok(middle_score) = score(middle) else { return Ok(()); };
-        let Ok(right_score) = score(right) else { return Ok(()); };
-        let Ok(left_middle) = left_score.compare(&middle_score) else { return Ok(()); };
-        let Ok(middle_right) = middle_score.compare(&right_score) else { return Ok(()); };
+    fn mixed_direction_score_comparison_is_a_total_preorder(
+        left in (0_i64..100, any::<i64>(), any::<i64>()),
+        middle in (0_i64..100, any::<i64>(), any::<i64>()),
+        right in (0_i64..100, any::<i64>(), any::<i64>()),
+    ) {
+        let Ok(left) = mixed_score(left.0, left.1, left.2) else {
+            return Ok(());
+        };
+        let Ok(middle) = mixed_score(middle.0, middle.1, middle.2) else {
+            return Ok(());
+        };
+        let Ok(right) = mixed_score(right.0, right.1, right.2) else {
+            return Ok(());
+        };
+
+        prop_assert_eq!(left.compare(&left), Ok(Ordering::Equal));
+        let Ok(left_middle) = left.compare(&middle) else {
+            return Ok(());
+        };
+        let Ok(middle_left) = middle.compare(&left) else {
+            return Ok(());
+        };
+        let Ok(middle_right) = middle.compare(&right) else {
+            return Ok(());
+        };
+        prop_assert_eq!(left_middle, middle_left.reverse());
         if left_middle != Ordering::Greater && middle_right != Ordering::Greater {
-            prop_assert_ne!(left_score.compare(&right_score), Ok(Ordering::Greater));
+            prop_assert_ne!(left.compare(&right), Ok(Ordering::Greater));
+        }
+        if left_middle == Ordering::Equal {
+            prop_assert_eq!(left.feasibility, middle.feasibility);
+            prop_assert!(left
+                .levels
+                .iter()
+                .zip(&middle.levels)
+                .all(|(left, right)| left.value == right.value));
         }
     }
 }

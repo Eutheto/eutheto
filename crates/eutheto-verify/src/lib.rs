@@ -16,7 +16,7 @@ use eutheto_planning_ir::{
 use eutheto_solver_api::{BackendCandidate, BackendObjectiveEvidence};
 use eutheto_types::{DurationMillis, REVISION_MAX_V1, ScenarioDocument, SolutionId};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 /// Stable category for a candidate that cannot cross the acceptance boundary.
@@ -569,16 +569,25 @@ fn validate_score(
     score: &ScoreVector,
 ) -> Result<(), CorrectnessAlarmCategory> {
     score
-        .validate_shape()
+        .validate_current_shape()
         .map_err(|_| CorrectnessAlarmCategory::ScoreIntegrityFailed)?;
     if problem.objectives.levels.len() != score.levels.len() {
         return Err(CorrectnessAlarmCategory::ScoreIntegrityFailed);
     }
     for (objective, verified) in problem.objectives.levels.iter().zip(&score.levels) {
+        let declared_categories = objective
+            .terms
+            .iter()
+            .map(|term| term.category.as_str())
+            .collect::<BTreeSet<_>>();
         if objective.id.as_str() != verified.level_id.as_str()
             || objective.direction != verified.direction
             || verified.value < objective.lower_bound
             || verified.value > objective.upper_bound
+            || verified
+                .category_breakdown
+                .keys()
+                .any(|category| !declared_categories.contains(category.as_str()))
         {
             return Err(CorrectnessAlarmCategory::ScoreIntegrityFailed);
         }

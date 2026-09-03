@@ -6,7 +6,7 @@ use crate::model::{
     Constraint, IntDomain, LinearComparison, LinearExpression, Literal, PLANNING_IR_SCHEMA_VERSION,
     PlanningMetadata, PlanningProblem, ProjectionExpression, ProvenanceParameter, Variable,
 };
-use eutheto_domain_ir::AssignmentValue;
+use eutheto_domain_ir::{AssignmentValue, MAX_SCORE_LEVELS};
 use eutheto_types::ResourceLimits;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -51,7 +51,7 @@ impl PlanningIrLimitsV1 {
         max_variables: 100_000,
         max_constraints: 500_000,
         max_assumptions: 100_000,
-        max_objective_levels: 16,
+        max_objective_levels: MAX_SCORE_LEVELS as u64,
         max_objective_terms: 100_000,
         max_provenance_records: 500_000,
         max_provenance_depth: 32,
