@@ -1,0 +1,31 @@
+{
+  "finished": {
+    "appliedParametersSha256": "58a02d86a3b57c8a132865ae6fb5260c4cbef5ab243bcb937d16764bfa9ec4f1",
+    "bestBoundValues": [
+      0.0
+    ],
+    "binaryPropagations": 0,
+    "branches": 0,
+    "conflicts": 0,
+    "deterministicTime": 0.003,
+    "finalCandidate": {
+      "values": [
+        {
+          "projectionId": 1,
+          "value": 0
+        }
+      ]
+    },
+    "integerPropagations": 0,
+    "modelFingerprint": "94176f9b2ce2f9af8432215d877f1503132385a4b10ffd3f22d9851db218ac27",
+    "objectiveValues": [
+      0.0
+    ],
+    "rawCpSatStatus": 4,
+    "requestId": "solve-0001",
+    "status": "WORKER_SOLVE_STATUS_OPTIMAL",
+    "terminationReason": "TERMINATION_REASON_OPTIMAL",
+    "userTimeSeconds": 0.02,
+    "wallTimeSeconds": 0.03
+  }
+}

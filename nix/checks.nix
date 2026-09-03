@@ -11,6 +11,7 @@
       AGENTS.md \
       Cargo.lock \
       Cargo.toml \
+      crates/eutheto-protocol/src/generated/eutheto.worker.v1.rs \
       CODE_OF_CONDUCT.md \
       CONTRIBUTING.md \
       DCO.md \
@@ -30,6 +31,10 @@
       pnpm-workspace.yaml \
       protocol/solver-worker.proto \
       protocol/version.json \
+      protocol/generated/cpp/protocol-policy.h \
+      protocol/generated/cpp/solver-worker.pb.cc \
+      protocol/generated/cpp/solver-worker.pb.h \
+      protocol/generated/eutheto.worker.v1.descriptor.pb \
       rust-toolchain.toml \
       nix/checks.nix \
       nix/dev-shell.nix \
@@ -52,6 +57,7 @@
 
   exact-pins-and-json = pkgs.runCommand "eutheto-exact-pins-and-json" { } ''
     set -eu
+    test "$("${tooling.protobuf}/bin/protoc" --version)" = "libprotoc 33.1"
     ${pkgs.python3}/bin/python3 - "${src}" <<'PY'
     import json
     import pathlib
@@ -88,6 +94,7 @@
         "crates/eutheto-domain-api",
         "crates/eutheto-solver-api",
         "crates/eutheto-solver-router",
+        "crates/eutheto-protocol",
         "crates/eutheto-core",
         "crates/eutheto-store",
         "crates/eutheto-command",
@@ -167,39 +174,84 @@
     with (protocol / "version.json").open(encoding="utf-8") as stream:
         manifest = json.load(stream)
     assert manifest["protocol"] == "eutheto.solver-worker"
-    assert manifest["wire_version"] == 1
-    assert manifest["compatibility"]["accepted_wire_versions"] == [1]
-    assert manifest["compatibility"]["unknown_version_action"] == "bounded_error_then_close"
+    assert manifest["package"] == "eutheto.worker.v1"
+    assert manifest["version"] == {"major": 1, "minor": 1}
+    assert manifest["applied_parameters_hash"] == {
+        "algorithm": "sha256",
+        "domain_separator": "eutheto.applied-solve-parameters.v1\0",
+    }
+    assert manifest["compatibility"]["accepted_protocol_majors"] == [1]
+    assert manifest["compatibility"]["unknown_major_action"] == "typed_handshake_error_then_close"
     framing = manifest["framing"]
-    assert framing["length_prefix_bytes"] == 4
-    assert framing["length_prefix_order"] == "big-endian"
-    assert 0 < framing["min_payload_bytes"] <= framing["max_payload_bytes"]
+    assert framing == {
+        "length_prefix_bytes": 4,
+        "length_prefix_order": "big-endian",
+        "min_payload_bytes": 1,
+    }
+    assert manifest["frame_classes"]["handshake"]["max_payload_bytes"] == 1024 * 1024
+    assert manifest["frame_classes"]["solve_request"]["max_payload_bytes"] == 256 * 1024 * 1024
+    assert manifest["frame_classes"]["worker_event"]["max_payload_bytes"] == 16 * 1024 * 1024
+    assert manifest["limits"]["max_stderr_bytes"] == 4 * 1024 * 1024
+    assert manifest["limits"] == {
+        "events_per_second": 64,
+        "events_per_session": 4096,
+        "frames_per_session": 4099,
+        "max_nesting_depth": 8,
+        "max_repeated_field_items": 100000,
+        "max_stderr_bytes": 4 * 1024 * 1024,
+        "max_string_bytes": 4096,
+        "max_worker_threads": 10000,
+        "total_session_bytes": 512 * 1024 * 1024,
+    }
+    assert manifest["field_limits"]["eutheto.worker.v1.HandshakeRequest.expected_manifest_sha256"] == {
+        "max_bytes": 32,
+    }
 
     schema = (protocol / "solver-worker.proto").read_text(encoding="utf-8")
-    if 'syntax = "proto3";' not in schema or "package eutheto.solver.worker.v1;" not in schema:
-        raise SystemExit("solver-worker.proto does not declare the approved Phase-00 protocol package")
+    if 'syntax = "proto3";' not in schema or "package eutheto.worker.v1;" not in schema:
+        raise SystemExit("solver-worker.proto does not declare the authoritative v1 protocol package")
+    for message in ("ParentFrame", "WorkerFrame", "HandshakeRequest", "SolveRequest", "Finished"):
+        if f"message {message} " not in schema:
+            raise SystemExit(f"solver-worker.proto is missing {message}")
+    generated = protocol / "generated"
+    expected_generated = {
+        "generated/cpp/protocol-policy.h",
+        "generated/cpp/solver-worker.pb.cc",
+        "generated/cpp/solver-worker.pb.h",
+        "generated/eutheto.worker.v1.descriptor.pb",
+    }
+    actual_generated = {
+        path.relative_to(protocol).as_posix()
+        for path in generated.rglob("*")
+        if path.is_file()
+    }
+    if actual_generated != expected_generated:
+        raise SystemExit("generated protocol file inventory does not match the authoritative set")
+    rust_binding = root / "crates/eutheto-protocol/src/generated/eutheto.worker.v1.rs"
+    if not rust_binding.is_file():
+        raise SystemExit("generated Rust protocol binding is missing")
 
     golden = protocol / "golden"
     required = {
+        "finished",
+        "handshake-error",
         "handshake-request",
-        "handshake-result",
-        "health-request",
-        "health-result",
-        "unsupported-version-request",
-        "unsupported-version-error",
+        "handshake-response",
+        "incumbent",
+        "progress",
+        "solve-request",
+        "started",
+        "worker-error",
     }
     json_stems = {path.stem for path in golden.glob("*.json")}
     frame_stems = {
         path.name.removesuffix(".frame.hex")
         for path in golden.glob("*.frame.hex")
     }
-    if not required.issubset(json_stems & frame_stems):
-        missing = sorted(required - (json_stems & frame_stems))
-        raise SystemExit(f"protocol golden pairs are missing: {missing}")
-    if json_stems != frame_stems:
-        raise SystemExit("every protocol golden JSON file must have exactly one frame hex peer")
+    if json_stems != required or frame_stems != required:
+        raise SystemExit("protocol golden pair inventory does not match the authoritative v1 sequence")
 
-    for stem in sorted(json_stems):
+    for stem in sorted(required):
         with (golden / f"{stem}.json").open(encoding="utf-8") as stream:
             json.load(stream)
         encoded = "".join((golden / f"{stem}.frame.hex").read_text(encoding="ascii").split())
@@ -227,7 +279,7 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 14 and
+      (.workspace_members | length) == 15 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
@@ -238,6 +290,7 @@
         "eutheto-export",
         "eutheto-import",
         "eutheto-planning-ir",
+        "eutheto-protocol",
         "eutheto-solver-api",
         "eutheto-solver-router",
         "eutheto-store",

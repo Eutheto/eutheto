@@ -1,0 +1,8 @@
+{
+  "progress": {
+    "deterministicTime": 0.001,
+    "kind": "PROGRESS_KIND_SEARCH",
+    "requestId": "solve-0001",
+    "wallTimeSeconds": 0.01
+  }
+}

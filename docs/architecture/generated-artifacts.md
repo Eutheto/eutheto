@@ -6,7 +6,7 @@
 
 [Phase 00](../roadmap/00-repository-and-reproducible-tooling.md#human-command-and-generation-contract) establishes generation ownership and reproducibility policy. The `Justfile` is the human command authority; `xtask` owns cross-platform generation, stable serialization, hashing, target handling, protocol verification, solver assembly metadata, fixtures, license notices/inventories, smoke SBOMs, and release manifests. [ADR-012](../adr/012-tauri-api-and-generated-dtos.md) applies this rule to desktop DTOs, [ADR-016](../adr/016-release-evidence.md) applies it to release evidence, and the contributor procedure is in [generated code and contracts](../contributors/generated-code-and-contracts.md).
 
-This policy does not imply that a future schema, solver binding, worker, artifact-specific release SBOM, or release manifest already exists. Exact OR-Tools/protobuf inputs, source hashes, and build flags remain unapproved until the [Phase-03 gate](../roadmap/03-ortools-worker-vertical-slice.md); no generator may fill those fields with guessed or placeholder values.
+The Phase-03 worker protocol now has approved project-owned schema and protobuf/protoc 33.1 generation inputs. The OR-Tools source hash, native build flags, worker executable, and solver manifest remain separately gated; generators must not fill those solver-build fields with guessed or placeholder values.
 
 ## Ownership model
 
@@ -16,7 +16,7 @@ A generated artifact is evidence derived from authoritative inputs. It is never 
 |---|---|---|---|
 | TypeScript desktop DTOs and applicable schemas | Reviewed Rust application contract types and schema/version declarations | `xtask generate`, exposed by the repository generation command | Phase-00 shell contract; expanded by the phase introducing each API/schema |
 | Tauri ACL manifests and JSON schemas under `apps/desktop/src-tauri/gen/` | Tauri configuration, capabilities, permissions, command/plugin metadata, and the pinned Tauri dependency/CLI set | The Tauri CLI/build invoked by `just desktop-dev` or `just desktop-build`; not `xtask` | Phase 00 native desktop shell |
-| Worker protocol bindings, descriptors, and protocol fixtures | Project-owned protocol source, version/compatibility declaration, and the approved matched generator/runtime/protobuf inputs | `xtask generate` and `xtask protocol verify` | Protocol shape may be reserved in Phase 00; usable peer and exact matched set are Phase 03 |
+| Worker protocol bindings, descriptor, and protocol fixtures | `protocol/solver-worker.proto`, `protocol/version.json`, exact protobuf/protoc 33.1, and prost/prost-build 0.14.4 | `cargo xtask generate`; `cargo xtask generate-check` and `cargo xtask protocol verify` reject drift | Phase 03 authoritative protocol contract; no native worker or runtime behavior implied |
 | Worker source/hash and solver manifests | Exact reviewed worker source, approved fetched solver/protobuf inputs, target/build/linkage facts, and produced artifact bytes | `xtask` solver/hash/manifest logic | Phase 03; exact packaged-bundle evidence is Phase 11 |
 | Third-party notices and license inventories | Committed `Cargo.lock`, committed `pnpm-lock.yaml`, and reviewed `xtask/supply-chain-inputs.json` workspace identities/license conclusions | `cargo xtask licenses generate` writes `THIRD_PARTY_NOTICES.md` and `xtask/generated/license-inventory.json` | Phase-00 locked-workspace inventory; exact assembled-artifact notices are Phase 11 |
 | SBOM inputs and SBOM products | The same committed locks and reviewed static input used by the license inventory | `cargo xtask sbom generate` writes `xtask/generated/sbom.spdx.json` | Deterministic SPDX-2.3 JSON locked-workspace smoke in Phase 00; artifact-specific release SBOMs are Phase 11 and verified in Phase 12 |
@@ -34,6 +34,17 @@ A generated artifact is evidence derived from authoritative inputs. It is never 
 
 The generator parses both inputs with unknown-field rejection, validates sorted unique identities and complete metadata, and emits stable pretty JSON or deterministic source/document tables. Generated source and Markdown headers record a BLAKE3 digest of the exact authoritative input bytes. JSON products cannot carry ownership comments without changing their public schema, so this inventory records their authority and generator instead.
 
+### Phase-03 worker protocol products
+
+`cargo xtask generate` invokes exactly `libprotoc 33.1` and fails before generation on any other reported version. Two isolated generation runs must produce the same complete byte inventory before files are written.
+
+| Authoritative inputs | Checked-in outputs |
+|---|---|
+| `protocol/solver-worker.proto`, `protocol/version.json`, protobuf/protoc 33.1, and prost/prost-build 0.14.4 configured with `.bytes(["."])` | `crates/eutheto-protocol/src/generated/eutheto.worker.v1.rs` with `prost::bytes::Bytes` byte fields, `protocol/generated/cpp/solver-worker.pb.h`, `protocol/generated/cpp/solver-worker.pb.cc`, `protocol/generated/cpp/protocol-policy.h` with namespace-scoped typed constants projected from the JSON policy, and binary `protocol/generated/eutheto.worker.v1.descriptor.pb` |
+| The same schema and policy plus the typed fixture frames in `xtask/src/protocol_generate.rs` | The generator encodes framed protobuf and exhaustively renders deterministic semantic JSON companions from each single typed fixture value under `protocol/golden/`; protocol-1.1 fixtures cover handshake request/success/error, including the request's exact 32-byte manifest digest and matching untrusted success echo, the executable fixed-variable solve with started/progress/incumbent/finished events, and a solve-terminal worker error |
+
+Rust and C++ sources carry generated/do-not-edit headers naming their authoritative inputs and pinned tool. The C++ policy header is the sole native projection of protocol version, framing and frame caps, global resource ceilings, every descriptor-keyed byte/count cap, and the applied-parameter hash algorithm/domain separator; native worker source must not hand-copy those values. The binary descriptor and JSON/hex fixtures cannot carry source comments, so this inventory and `xtask`'s exact output list record their ownership. `cargo xtask protocol verify` checks package and message inventory, stable field tags, reserved ranges, enum-zero semantics, descriptor-keyed field policies, frame-route policies, caps, fixture bounds, deterministic regeneration, and checked-in drift.
+
 The command names above are the required repository contract, not a claim that a successful release artifact has been generated. Ad hoc shell scripts, IDE generators, post-processors, and manually copied tool output do not own any artifact family.
 
 ### Desktop generator boundaries
@@ -49,7 +60,7 @@ Checked-in Tauri schemas and ACL manifests must match fresh output from the pinn
 
 The Phase-00 license inventory and smoke SBOM deliberately describe both Cargo and pnpm workspace packages and every dependency package recorded in their committed locks. Their bytes depend only on `Cargo.lock`, `pnpm-lock.yaml`, `xtask/supply-chain-inputs.json`, and repository-owned generator code. The reviewed static input supplies first-party workspace identity, a fixed SPDX document namespace/time, and exact component-specific license conclusions. A dependency without such a conclusion is emitted as `NOASSERTION`; generation remains factual and deterministic, while release assembly remains blocked rather than guessing a license.
 
-Missing locks, unsupported lock versions, malformed package records, stale workspace identities, and stale reviewed conclusions are typed generator failures. `cargo xtask generate-check` compares the desktop source, notice, license inventory, and smoke SBOM with their authoritative inputs without rewriting them. `cargo xtask release verify-clean` additionally requires a clean tracked Git tree and tracked supply-chain inputs/outputs, then performs generated drift checks and worker-protocol verification. `cargo xtask release assemble-manifest` is a real gate failure until Phase 11 provides final product identity, target artifacts, digests, and protected build/sign evidence.
+Missing locks, unsupported lock versions, malformed package records, stale workspace identities, and stale reviewed conclusions are typed generator failures. `cargo xtask generate-check` compares every declared desktop, Phase-02, worker-protocol, notice, license-inventory, and smoke-SBOM product with its authoritative inputs without rewriting it. `cargo xtask release verify-clean` additionally requires a clean tracked Git tree and tracked supply-chain inputs/outputs, then performs generated drift checks and worker-protocol verification. `cargo xtask release assemble-manifest` is a real gate failure until Phase 11 provides final product identity, target artifacts, digests, and protected build/sign evidence.
 
 
 ## Checked-in outputs

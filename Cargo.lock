@@ -1044,6 +1044,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "eutheto-protocol"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-types",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "eutheto-solver-api"
 version = "0.1.0"
 dependencies = [
@@ -5345,9 +5359,12 @@ dependencies = [
  "eutheto-types",
  "prost",
  "prost-build",
+ "prost-types",
  "semver",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

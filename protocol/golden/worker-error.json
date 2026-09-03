@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "WORKER_ERROR_CODE_RESOURCE_LIMIT",
+    "message": "worker resource limit reached",
+    "requestId": "solve-0001",
+    "retryable": true
+  }
+}

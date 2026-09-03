@@ -420,7 +420,7 @@ Evidence date: **2026-08-29**.
 
 - Candidate solver is OR-Tools **9.15**, the current stable release. Adopt it only after exact tag/commit, fixed source hash, proto checksums, all MVP platform builds, primitive benchmarks, callback behavior, CMake flags, linked-dependency/license inspection, static/dynamic linkage, runtime-library loading, manifest/SBOM, and assumption-core gates pass.
 - OR-Tools 9.15 has a known P-critical-for-this-feature assumption-core concern (`google/or-tools#5141`): presolve may report a literal outside the submitted set. The capability remains gated as specified above; a sufficient core is never assumed safe merely because solving succeeded.
-- Protobuf/protoc is matched to the pinned 9.15 source/proto contract, not blindly updated to protobuf 36.0.
+- Protobuf/protoc is pinned to **33.1**, matching the OR-Tools 9.15 source dependency. Generated Rust and C++ worker-protocol bindings and the linked C++ runtime must use that recorded toolchain; do not blindly update to protobuf 36.0.
 - Rust remains **1.97.1** until a stable newer than 1.98.0 fixes the known P-critical vtable miscompilation; native worker tooling must be recorded from the committed Nix/toolchain pins.
 - Exact archive hash, proto checksums, target linkage choice, and target runtime-library set are implementation outputs, not choices this roadmap fabricates.
 - The project name `eutheto` is final. The working CLI name `optimizer`, reverse-domain application ID, portable file extension, hosting organization/governance contacts, and release-signing choices remain explicit repository/release gates.

@@ -1257,6 +1257,14 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-protocol",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-protocol"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-solver-api",
       "version": "0.1.0",
       "kind": "workspace",
