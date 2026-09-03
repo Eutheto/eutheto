@@ -103,6 +103,7 @@
         "crates/eutheto-import",
         "crates/eutheto-cli",
         "apps/desktop/src-tauri",
+        "benchmarks/runner",
         "xtask",
     ]
     assert cargo["workspace"]["package"]["rust-version"] == "1.97.1"
