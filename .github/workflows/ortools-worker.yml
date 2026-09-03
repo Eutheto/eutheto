@@ -159,17 +159,26 @@ jobs:
           shopt -s nullglob
           debs=(target/release/bundle/deb/*.deb)
           rpms=(target/release/bundle/rpm/*.rpm)
-          test "${#debs[@]}" -eq 1
-          test "${#rpms[@]}" -eq 1
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "Expected exactly one unsigned deb, found ${#debs[@]}." >&2
+            exit 1
+          fi
+          if [ "${#rpms[@]}" -ne 1 ]; then
+            echo "Expected exactly one unsigned rpm, found ${#rpms[@]}." >&2
+            exit 1
+          fi
 
           deb_root="$RUNNER_TEMP/eutheto-deb-root"
           rpm_root="$RUNNER_TEMP/eutheto-rpm-root"
           mkdir -p "$deb_root" "$rpm_root"
-          dpkg-deb --extract "${debs[0]}" "$deb_root"
-          (
-            cd "$rpm_root"
-            rpm2cpio "$GITHUB_WORKSPACE/${rpms[0]}" | cpio -idmu --quiet
-          )
+          if ! dpkg-deb --extract "${debs[0]}" "$deb_root"; then
+            echo "Failed to extract the unsigned deb payload." >&2
+            exit 1
+          fi
+          if ! rpm2cpio "${rpms[0]}" | cpio -D "$rpm_root" -idmu --quiet; then
+            echo "Failed to extract the unsigned rpm payload." >&2
+            exit 1
+          fi
 
           for root in "$deb_root" "$rpm_root"; do
             mapfile -t workers < <(find "$root" -type f -name 'ortools-worker')
