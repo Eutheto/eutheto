@@ -111,13 +111,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = "${{ matrix.native-arch }}"
-          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "${{ matrix.nix-system }}"
+          nix_system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          test "$nix_system" = "${{ matrix.nix-system }}"
           test "$(rustc --version | cut -d ' ' -f 2)" = "1.97.1"
           corepack enable
           corepack install
           test "$(node --version)" = "v24.20.0"
           test "$(pnpm --version)" = "11.24.0"
-          protoc="$(nix develop --no-update-lock-file --command sh -c 'command -v protoc')"
+          protoc="$(nix eval --no-update-lock-file --raw ".#devShells.${nix_system}.default.PROTOC")"
           test "$("$protoc" --version)" = "libprotoc 33.1"
           printf 'PROTOC=%s\n' "$protoc" >> "$GITHUB_ENV"
 
