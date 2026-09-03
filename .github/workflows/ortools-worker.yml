@@ -103,8 +103,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            build-essential cpio libayatana-appindicator3-dev libssl-dev \
-            libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev patchelf pkg-config rpm rpm2cpio xvfb
+            build-essential libayatana-appindicator3-dev libssl-dev \
+            libwebkit2gtk-4.1-dev libxdo-dev librsvg2-dev patchelf pkg-config rpm xvfb
 
       - name: Verify native host and expose pinned protoc
         shell: bash
@@ -151,7 +151,7 @@ jobs:
           esac
           printf 'MANIFEST_SHA256=%s\n' "$digest" >> "$GITHUB_ENV"
 
-      - name: Verify Linux deb and rpm package payloads
+      - name: Verify Linux deb launch and rpm inventory
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -169,29 +169,45 @@ jobs:
           fi
 
           deb_root="$RUNNER_TEMP/eutheto-deb-root"
-          rpm_root="$RUNNER_TEMP/eutheto-rpm-root"
-          mkdir -p "$deb_root" "$rpm_root"
+          mkdir -p "$deb_root"
           if ! dpkg-deb --extract "${debs[0]}" "$deb_root"; then
             echo "Failed to extract the unsigned deb payload." >&2
             exit 1
           fi
-          if ! rpm2cpio "${rpms[0]}" | cpio -D "$rpm_root" -idmu --quiet; then
-            echo "Failed to extract the unsigned rpm payload." >&2
+
+          rpm_worker_count=0
+          rpm_manifest_count=0
+          rpm_application_count=0
+          while IFS= read -r entry; do
+            case "$entry" in
+              */ortools-worker)
+                rpm_worker_count=$((rpm_worker_count + 1))
+                ;;
+              */solver/ortools/solver-manifest.json)
+                rpm_manifest_count=$((rpm_manifest_count + 1))
+                ;;
+              */eutheto-desktop)
+                rpm_application_count=$((rpm_application_count + 1))
+                ;;
+            esac
+          done < <(rpm --query --package --list "${rpms[0]}")
+          if [ "$rpm_worker_count" -ne 1 ] ||
+            [ "$rpm_manifest_count" -ne 1 ] ||
+            [ "$rpm_application_count" -ne 1 ]; then
+            echo "RPM inventory must contain one desktop, worker, and trusted solver manifest; found $rpm_application_count, $rpm_worker_count, and $rpm_manifest_count." >&2
             exit 1
           fi
 
-          for root in "$deb_root" "$rpm_root"; do
-            mapfile -t workers < <(find "$root" -type f -name 'ortools-worker')
-            mapfile -t resources < <(find "$root" -type d -path '*/solver/ortools')
-            if [ "${#workers[@]}" -ne 1 ] || [ "${#resources[@]}" -ne 1 ]; then
-              echo "Expected one packaged worker and one solver resource root; found ${#workers[@]} worker(s) and ${#resources[@]} resource root(s)." >&2
-              exit 1
-            fi
-            cargo xtask solver smoke \
-              --executable "${workers[0]}" \
-              --resource-root "${resources[0]}" \
-              --manifest-sha256 "$MANIFEST_SHA256"
-          done
+          mapfile -t workers < <(find "$deb_root" -type f -name 'ortools-worker')
+          mapfile -t resources < <(find "$deb_root" -type d -path '*/solver/ortools')
+          if [ "${#workers[@]}" -ne 1 ] || [ "${#resources[@]}" -ne 1 ]; then
+            echo "Expected one deb-packaged worker and one solver resource root; found ${#workers[@]} worker(s) and ${#resources[@]} resource root(s)." >&2
+            exit 1
+          fi
+          cargo xtask solver smoke \
+            --executable "${workers[0]}" \
+            --resource-root "${resources[0]}" \
+            --manifest-sha256 "$MANIFEST_SHA256"
 
           mapfile -t apps < <(find "$deb_root" -type f -name 'eutheto-desktop')
           if [ "${#apps[@]}" -ne 1 ]; then
@@ -276,7 +292,7 @@ jobs:
           {
             echo "### ${{ matrix.name }} unsigned package smoke"
             echo
-            echo "Built the pinned worker and native Tauri package without signing, validated the exact packaged worker/resource closure, completed a manifest-bound handshake and fixed trivial solve under sanitized runtime lookup, rejected Nix-store loader references in the packaged app, and kept the packaged application running for the launch-smoke interval."
+            echo "Built the pinned worker and native Tauri package without signing, validated the launchable package's exact worker/resource closure, completed a manifest-bound handshake and fixed trivial solve under sanitized runtime lookup, rejected Nix-store loader references in the packaged app, and kept the packaged application running for the launch-smoke interval. The Linux lane additionally verifies the independently generated RPM inventory contains exactly one desktop, worker, and trusted solver manifest."
             echo
             echo "No executable, installer, signature, or release artifact was uploaded or published."
           } >> "$GITHUB_STEP_SUMMARY"
