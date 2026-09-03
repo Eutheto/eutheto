@@ -1,4 +1,10 @@
 #![forbid(unsafe_code)]
+#![cfg(any(
+    all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"),
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+))]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
