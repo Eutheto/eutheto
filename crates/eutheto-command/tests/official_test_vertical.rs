@@ -7,9 +7,9 @@ use eutheto_domain_api::{
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
-    DomainEntityRef, NormalizedSolution, OptimizationDirection, RequiredRuleBinding,
-    RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue, ScoreVector,
-    VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
+    DomainEntityRef, DomainEvidenceId, NormalizedSolution, OptimizationDirection,
+    RequiredRuleBinding, RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue,
+    ScoreVector, VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
     VerificationValue, blake3_hex,
 };
 use eutheto_planning_ir::{
@@ -391,18 +391,21 @@ fn build_interval_problem(
                 ProvenanceSourceKind::Fact,
                 format!("official.test.fixture.option.{}", option.key),
                 entity.clone(),
+                None,
             ),
             provenance_record(
                 eligibility_rule.clone(),
                 ProvenanceSourceKind::RequiredRule,
                 format!("official.test.fixture.eligibility.{}", option.key),
                 entity.clone(),
+                Some(fact.clone()),
             ),
             provenance_record(
                 projection.clone(),
                 ProvenanceSourceKind::Projection,
                 format!("official.test.fixture.projection.{}", option.key),
                 entity.clone(),
+                Some(eligibility_rule.clone()),
             ),
         ]);
 
@@ -828,7 +831,10 @@ fn evaluate_interval_rules(
                 (end_fact.clone(), VerificationValue::Integer(option.end())),
             ]),
             observed,
-            evidence: Vec::new(),
+            evidence: vec![
+                DomainEvidenceId::new(fixture_provenance("eligibility", option)?.as_str())
+                    .map_err(contract)?,
+            ],
         });
     }
 
@@ -848,7 +854,9 @@ fn evaluate_interval_rules(
         message_key: "official.test.fixture.verify.no_overlap".to_owned(),
         expected: BTreeMap::from([(no_overlap_fact.clone(), VerificationValue::Boolean(true))]),
         observed: BTreeMap::from([(no_overlap_fact, VerificationValue::Boolean(!has_overlap))]),
-        evidence: Vec::new(),
+        evidence: vec![
+            DomainEvidenceId::new("official_test.fixture.rule.global").map_err(contract)?,
+        ],
     });
 
     let max_demand = (0..5)
@@ -874,7 +882,9 @@ fn evaluate_interval_rules(
             demand_fact,
             VerificationValue::Integer(i64::try_from(max_demand).map_err(contract)?),
         )]),
-        evidence: Vec::new(),
+        evidence: vec![
+            DomainEvidenceId::new("official_test.fixture.rule.global").map_err(contract)?,
+        ],
     });
     Ok(evaluations)
 }
@@ -1041,6 +1051,7 @@ fn provenance_record(
     source_kind: ProvenanceSourceKind,
     source_id: String,
     entity: DomainEntityRef,
+    parent: Option<ProvenanceId>,
 ) -> ProvenanceRecord {
     ProvenanceRecord {
         id,
@@ -1049,7 +1060,7 @@ fn provenance_record(
         entity_refs: vec![entity],
         message_key: "official.test.fixture.provenance.option".to_owned(),
         parameters: BTreeMap::new(),
-        parent: None,
+        parent,
     }
 }
 

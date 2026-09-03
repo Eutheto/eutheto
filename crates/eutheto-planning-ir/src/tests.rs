@@ -2,7 +2,7 @@ use crate::test_evaluator::evaluate_record;
 use crate::*;
 use eutheto_domain_ir::{
     AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef,
-    OptimizationDirection, ScoreCategoryId,
+    DomainEvidenceId, OptimizationDirection, ScoreCategoryId,
 };
 use eutheto_types::{PackId, ScenarioId, SolutionId};
 use proptest::prelude::*;
@@ -691,6 +691,10 @@ fn projection_rejects_unknown_missing_type_domain_and_handles_absence() -> Resul
     let projected = project_candidate(&problem, &values, solution_id, PlanningIrLimitsV1::DEFAULT)?;
     assert_eq!(projected.assignments[0].value, AssignmentValue::Absent);
     assert_eq!(projected.assignments[1].value, AssignmentValue::Absent);
+    let projection_evidence = DomainEvidenceId::new(provenance_id()?.as_str())?;
+    assert!(projected.assignments.iter().all(|assignment| {
+        assignment.evidence.as_slice() == std::slice::from_ref(&projection_evidence)
+    }));
     let mut unknown = values.clone();
     unknown.booleans.insert(bool_id("unknown")?, true);
     let solution_id = "01890a5d-ac96-7b64-9f74-bbfcf30f9f82".parse::<SolutionId>()?;
@@ -740,6 +744,43 @@ fn provenance_graph_missing_references_and_capability_mismatch_reject() -> Resul
         validate(&problem, PlanningIrLimitsV1::DEFAULT),
         Err(ValidationError {
             code: ValidationCode::UndeclaredCapability,
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn provenance_rejects_orphans_but_retains_referenced_ancestors() -> Result<(), Box<dyn Error>> {
+    let mut problem = base_problem()?;
+    let parent_id = ProvenanceId::new("provenance.parent")?;
+    problem.provenance[0].parent = Some(parent_id.clone());
+    problem.provenance.push(ProvenanceRecord {
+        id: parent_id,
+        source_kind: ProvenanceSourceKind::Derived,
+        source_id: "school.parent".to_owned(),
+        entity_refs: Vec::new(),
+        message_key: "school.parent".to_owned(),
+        parameters: BTreeMap::new(),
+        parent: None,
+    });
+    problem.canonicalize()?;
+    assert!(validate(&problem, PlanningIrLimitsV1::DEFAULT).is_ok());
+
+    problem.provenance.push(ProvenanceRecord {
+        id: ProvenanceId::new("provenance.orphan")?,
+        source_kind: ProvenanceSourceKind::Fact,
+        source_id: "school.orphan".to_owned(),
+        entity_refs: Vec::new(),
+        message_key: "school.orphan".to_owned(),
+        parameters: BTreeMap::new(),
+        parent: None,
+    });
+    problem.canonicalize()?;
+    assert!(matches!(
+        validate(&problem, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::OrphanProvenance,
             ..
         })
     ));

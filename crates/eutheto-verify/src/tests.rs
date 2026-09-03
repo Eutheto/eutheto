@@ -692,7 +692,10 @@ fn non_authoritative_projection_evidence_does_not_block_acceptance() -> Result<(
     )?)?;
     assert_eq!(
         result.solution.assignments[0].evidence,
-        vec![DomainEvidenceId::new("evidence.pack.detail")?]
+        vec![
+            DomainEvidenceId::new("evidence.pack.detail")?,
+            DomainEvidenceId::new("provenance.fixture")?,
+        ]
     );
     Ok(())
 }

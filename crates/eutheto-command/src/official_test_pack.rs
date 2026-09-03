@@ -13,9 +13,9 @@ use eutheto_domain_api::{
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
-    DomainEntityRef, NormalizedSolution, OptimizationDirection, RequiredRuleBinding,
-    RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue, ScoreVector,
-    VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
+    DomainEntityRef, DomainEvidenceId, NormalizedSolution, OptimizationDirection,
+    RequiredRuleBinding, RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue,
+    ScoreVector, VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
     VerificationValue, blake3_hex,
 };
 use eutheto_planning_ir::{
@@ -1138,7 +1138,7 @@ fn entity_provenance(symbols: EntityProblemSymbols) -> [ProvenanceRecord; 3] {
         provenance_record(
             symbols.rule,
             ProvenanceSourceKind::RequiredRule,
-            "official.test.required-target".to_owned(),
+            symbols.suffix.clone(),
             symbols.entity_ref.clone(),
         ),
         provenance_record(
@@ -1362,7 +1362,9 @@ fn evaluate_required_rules(
             ]
             .into_iter()
             .collect(),
-            evidence: Vec::new(),
+            evidence: vec![
+                DomainEvidenceId::new(format!("official_test.rule.{suffix}")).map_err(contract)?,
+            ],
         });
     }
     Ok(evaluations)

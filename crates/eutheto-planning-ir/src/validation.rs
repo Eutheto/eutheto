@@ -4,7 +4,8 @@ use crate::analysis::{analyze_components, constraint_nodes, feature_usage, proje
 use crate::ids::{BoolVariableId, IntVariableId, IntervalVariableId, ProvenanceId};
 use crate::model::{
     Constraint, IntDomain, LinearComparison, LinearExpression, Literal, PLANNING_IR_SCHEMA_VERSION,
-    PlanningMetadata, PlanningProblem, ProjectionExpression, ProvenanceParameter, Variable,
+    PlanningMetadata, PlanningProblem, ProjectionExpression, ProvenanceParameter, ProvenanceRecord,
+    Variable,
 };
 use eutheto_domain_ir::{AssignmentValue, MAX_SCORE_LEVELS};
 use eutheto_types::ResourceLimits;
@@ -107,6 +108,7 @@ pub enum ValidationCode {
     InvalidObjectiveBounds,
     InvalidProjection,
     ProvenanceCycle,
+    OrphanProvenance,
     UndeclaredCapability,
     InvalidSplitAuthorization,
 }
@@ -900,6 +902,53 @@ fn validate_provenance(
             };
             current = found.parent.as_ref();
         }
+    }
+    validate_provenance_coverage(problem, &records)?;
+    Ok(())
+}
+
+fn validate_provenance_coverage(
+    problem: &PlanningProblem,
+    records: &BTreeMap<&ProvenanceId, &ProvenanceRecord>,
+) -> Result<(), ValidationError> {
+    let mut used = BTreeSet::new();
+    for variable in &problem.variables {
+        used.insert(variable.provenance());
+    }
+    for constraint in &problem.constraints {
+        used.insert(&constraint.provenance);
+    }
+    for level in &problem.objectives.levels {
+        used.insert(&level.provenance);
+        for term in &level.terms {
+            used.insert(&term.provenance);
+        }
+    }
+    for assumption in &problem.assumptions {
+        used.insert(&assumption.provenance);
+    }
+    for projection in &problem.projections {
+        used.insert(&projection.provenance);
+    }
+    let mut pending = used.iter().copied().collect::<Vec<_>>();
+    while let Some(id) = pending.pop() {
+        let Some(record) = records.get(id) else {
+            return Err(ValidationError::new(
+                ValidationCode::MissingProvenance,
+                "provenance",
+            ));
+        };
+        if let Some(parent) = &record.parent
+            && used.insert(parent)
+        {
+            pending.push(parent);
+        }
+    }
+    if used.len() != records.len() {
+        return Err(ValidationError::new(
+            ValidationCode::OrphanProvenance,
+            "provenance",
+        ));
     }
     Ok(())
 }

@@ -9,8 +9,8 @@ use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, NormalizedSolution, VerificationContextV1, blake3_hex,
 };
 use eutheto_planning_ir::{
-    CandidateValues, PlanningIrLimitsV1, PlanningProblem, Variable, canonical_ir_hash, summarize,
-    validate,
+    CandidateValues, PlanningIrLimitsV1, PlanningProblem, ProvenanceSourceKind, Variable,
+    canonical_ir_hash, summarize, validate,
 };
 use eutheto_types::{
     CancellationToken, DomainCommandEnvelope, PackId, PersonId, RuleId, ScenarioDocument,
@@ -453,6 +453,15 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     assert_eq!(first_summary.objective_term_count, 1);
     assert_eq!(first_summary.projection_count, 2);
     assert_eq!(first_summary.provenance_count, 4);
+    let required_provenance = first
+        .provenance
+        .iter()
+        .find(|record| record.source_kind == ProvenanceSourceKind::RequiredRule)
+        .ok_or("required-rule provenance missing")?;
+    assert_eq!(
+        required_provenance.source_id,
+        verification_scope.required_rules[0].rule_id.to_string()
+    );
     assert_eq!(
         first.declared_capabilities,
         first_summary.manifest.required_capabilities()
@@ -480,6 +489,10 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
 
     let candidate = satisfying_candidate(&first);
     let solution = pack.project(&first, &candidate, SolutionId::from_str(SOLUTION_ID)?)?;
+    let projection_evidence = format!("official_test.projection.{ENTITY_ID}");
+    assert!(solution.assignments.iter().all(|assignment| {
+        assignment.evidence.len() == 1 && assignment.evidence[0].as_str() == projection_evidence
+    }));
     let authoritative_score = pack.score(&source, &solution)?;
     let context_for_solution = verification_context(&pack, &source, &first, &solution)?;
     let mut unsatisfied = solution.clone();
@@ -515,6 +528,15 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     assert_eq!(
         report.required_rule_results[0].rule_id,
         verification_scope.required_rules[0].rule_id
+    );
+    assert_eq!(report.required_rule_results[0].evidence.len(), 1);
+    assert_eq!(
+        report.required_rule_results[0].evidence[0].as_str(),
+        format!("official_test.rule.{ENTITY_ID}")
+    );
+    assert_eq!(
+        report.required_rule_results[0].evidence[0].as_str(),
+        required_provenance.id.as_str()
     );
     assert_eq!(
         report,

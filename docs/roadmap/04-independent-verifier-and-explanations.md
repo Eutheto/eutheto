@@ -136,6 +136,20 @@ pub struct ProvenanceRecord {
 
 The provenance index must cover every user-relevant variable, constraint, objective contribution, assumption, and projection. Display strings are not identity. Message keys and typed parameters make evidence stable, reviewable, and localization-ready. Missing provenance is a compiler defect and prevents explanation-dependent output.
 
+The schema-v1 planning provenance index is closed: every planning variable, constraint, objective
+level and term, assumption, and projection references a declared record, and every declared record
+must be reachable from one of those artifacts either directly or through its bounded parent chain.
+An unused record is a compiler defect, not harmless metadata. Generic projection carries the
+projection record's canonical ID into `DomainAssignment.evidence`; packs may append further
+non-authoritative evidence without changing projected value identity. Backend adapters retain the
+validated IR-to-native maps outside native payloads under the planning model hash and exact adapter
+version. Native payloads contain neither planning IDs nor domain/display text.
+
+Missing source/IR/projection provenance is acceptance-critical because it invalidates the planning
+problem before solving or projection. Missing optional rendering evidence discovered only after an
+accepted result remains an evidence-availability defect: it disables the affected explanation but
+does not revoke or delay the already verified result.
+
 Canonical evidence ties together scenario revision, scenario/document hash, planning model hash, solution hash, pack/compiler/backend/adapter/protocol versions, and verification checksum. Cached candidates are accepted only after current verification against the current scenario revision.
 
 ## Explanation taxonomy and certainty rules
