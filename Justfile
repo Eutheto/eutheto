@@ -151,9 +151,9 @@ worker-install-from-nix:
 worker-build-desktop:
     cargo xtask solver build-desktop
 
-# Smoke-test the OR-Tools worker once manifest-validated installation exists.
-worker-smoke:
-    cargo xtask solver smoke
+# Validate one manifest-bound packaged OR-Tools worker/resource pair through a trivial solve.
+worker-smoke executable resource_root manifest_sha256:
+    cargo xtask solver smoke --executable "{{ executable }}" --resource-root "{{ resource_root }}" --manifest-sha256 "{{ manifest_sha256 }}"
 
 # Run the real Phase-01 CLI status command.
 cli:

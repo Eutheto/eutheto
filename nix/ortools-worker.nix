@@ -330,7 +330,7 @@ stdenv.mkDerivation {
         libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|\
         libresolv.so.*|libutil.so.*|libstdc++.so.*|libgcc_s.so.*|\
         libatomic.so.*|libgomp.so.*|libquadmath.so.*|ld-linux*.so.*|\
-        linux-vdso.so.*|/usr/lib/*|/System/Library/*|/nix/store/*)
+        linux-vdso.so.*|/usr/lib/*|/System/Library/*)
           return 0
           ;;
       esac
@@ -426,6 +426,28 @@ stdenv.mkDerivation {
         patchelf --set-rpath '$ORIGIN' "$binary"
       done
     ''}
+    ${lib.optionalString stdenv.hostPlatform.isDarwin ''
+      rewrite_rpaths() {
+        artifact="$1"
+        relativeRpath="$2"
+        while IFS= read -r rpath; do
+          test -n "$rpath" || continue
+          install_name_tool -delete_rpath "$rpath" "$artifact"
+        done < <(otool -l "$artifact" | awk '
+          $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+          in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+        ')
+        install_name_tool -add_rpath "$relativeRpath" "$artifact"
+      }
+
+      rewrite_rpaths "$out/bin/ortools-worker" '@loader_path/../lib'
+      for binary in "$out"/lib/*.dylib; do
+        test -e "$binary" || continue
+        test -L "$binary" && exit 1
+        install_name_tool -id "@rpath/$(basename "$binary")" "$binary"
+        rewrite_rpaths "$binary" '@loader_path'
+      done
+    ''}
     if find "$out" -type l -print -quit | grep -q .; then
       echo "solver artifact contains a forbidden symlink before finalization" >&2
       exit 1
@@ -504,7 +526,7 @@ stdenv.mkDerivation {
         libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|\
         libresolv.so.*|libutil.so.*|libstdc++.so.*|libgcc_s.so.*|\
         libatomic.so.*|libgomp.so.*|libquadmath.so.*|ld-linux*.so.*|\
-        linux-vdso.so.*|/usr/lib/*|/System/Library/*|/nix/store/*)
+        linux-vdso.so.*|/usr/lib/*|/System/Library/*)
           return 0
           ;;
       esac
@@ -532,15 +554,13 @@ stdenv.mkDerivation {
           exit 1
           ;;
       esac
-      ${lib.optionalString stdenv.hostPlatform.isLinux ''
-        case "$linkage:$runtimePaths" in
-          *"/nix/store/"*)
-            echo "installed solver payload retains a Nix-store loader reference: $artifact" >&2
-            printf '%s\n%s\n' "$linkage" "$runtimePaths" >&2
-            exit 1
-            ;;
-        esac
-      ''}
+      case "$linkage:$runtimePaths" in
+        *"/nix/store/"*)
+          echo "installed solver payload retains a Nix-store loader reference: $artifact" >&2
+          printf '%s\n%s\n' "$linkage" "$runtimePaths" >&2
+          exit 1
+          ;;
+      esac
 
       while IFS= read -r dependency; do
         test -n "$dependency" || continue
@@ -562,14 +582,20 @@ stdenv.mkDerivation {
       fi
     ''}
     ${lib.optionalString stdenv.hostPlatform.isDarwin ''
-      case "$workerRuntimePaths" in
-        *"$out/lib"*) ;;
-        *)
-          echo "installed worker does not search the packaged runtime directory" >&2
-          printf '%s\n' "$workerRuntimePaths" >&2
+      if test "$workerRuntimePaths" != '@loader_path/../lib'; then
+        echo "installed worker does not use only the packaged relative runtime directory" >&2
+        printf '%s\n' "$workerRuntimePaths" >&2
+        exit 1
+      fi
+      for binary in "$out"/lib/*.dylib; do
+        test -e "$binary" || continue
+        libraryRuntimePaths="$(runtime_paths "$binary")"
+        if test "$libraryRuntimePaths" != '@loader_path'; then
+          echo "installed runtime library does not use only its packaged directory" >&2
+          printf '%s\n' "$libraryRuntimePaths" >&2
           exit 1
-          ;;
-      esac
+        fi
+      done
     ''}
 
     ${lib.optionalString stdenv.hostPlatform.isLinux ''

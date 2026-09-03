@@ -1,11 +1,25 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-
+use eutheto_protocol::frame::{decode_worker_frame, encode_frame, write_solve_request_frame};
+use eutheto_protocol::wire::{
+    Capability, ParentFrame, ResourceLimits, SolveParameters, SolveRequest, TerminationReason,
+    WorkerSolveStatus, parent_frame, worker_frame,
+};
+use eutheto_protocol::{
+    CompletedSession, FrameClass, HandshakeExpectations, ParentProtocol, ProtocolPolicy,
+    WorkerObservation, checked_in_policy,
+};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 const NATIVE_BUILD_SCRIPT: &str = "workers/ortools/cmake/native_windows_build.cmake";
 const NATIVE_BUILD_ROOT: &str = ".cache/ortools-native/windows-x86_64";
 const NATIVE_WORK: &str = ".cache/ortools-native/windows-x86_64/work";
@@ -25,7 +39,874 @@ const SOLVER_MANIFEST_DIGEST_ENV: &str = "EUTHETO_ORTOOLS_MANIFEST_SHA256";
 const MAX_SIDECAR_TREE_ENTRIES: usize = 256;
 const MAX_SIDECAR_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SIDECAR_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 65_536;
+const SMOKE_TIMEOUT: Duration = Duration::from_secs(30);
+const SMOKE_REQUEST_ID: &str = "packaged-worker-smoke";
+const SMOKE_MODEL: &[u8] = &[0x12, 0x04, 0x12, 0x02, 0x00, 0x00];
+#[derive(Debug, Deserialize)]
+struct SmokeManifest {
+    backend_source: SmokeBackendSource,
+    build: SmokeBuild,
+    capabilities: Vec<String>,
+    protocol: SmokeProtocol,
+    runtime_libraries: Vec<SmokeFileDigest>,
+    worker: SmokeWorker,
+}
 
+#[derive(Debug, Deserialize)]
+struct SmokeBackendSource {
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SmokeBuild {
+    architecture: String,
+    target_triple: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SmokeProtocol {
+    major: u32,
+    minor: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct SmokeFileDigest {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SmokeWorker {
+    adapter_version: String,
+    backend_id: String,
+    executable: SmokeFileDigest,
+    identity: String,
+    version: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SmokeTransportLimits {
+    handshake_bytes: usize,
+    worker_event_bytes: usize,
+    frames: usize,
+    stderr_bytes: usize,
+    session_bytes: usize,
+}
+
+enum WorkerOutput {
+    Frame(Vec<u8>),
+    Eof,
+    Fault(String),
+}
+
+pub(crate) fn smoke(
+    repository: &Path,
+    executable: &Path,
+    resource_root: &Path,
+    expected_manifest_sha256: &str,
+) -> Result<()> {
+    ensure_repository_root(repository)?;
+    let expected_manifest_sha256 = decode_sha256(expected_manifest_sha256)
+        .context("trusted packaged solver manifest digest is invalid")?;
+    let executable = canonical_packaged_executable(executable)?;
+    let resource_root = canonical_packaged_resource_root(resource_root)?;
+    let (manifest, manifest_digest, validation_view) = validate_packaged_layout(
+        repository,
+        &executable,
+        &resource_root,
+        &expected_manifest_sha256,
+    )?;
+    validate_packaged_target(&manifest, &executable)?;
+    validate_executable_architecture(&executable, &manifest.build.target_triple)?;
+    ensure!(
+        sha256_file(&executable)? == manifest.worker.executable.sha256,
+        "packaged worker executable changed after manifest validation"
+    );
+
+    let policy = checked_in_policy().context("checked-in worker protocol policy is invalid")?;
+    ensure!(
+        manifest.protocol.major == policy.protocol_major()
+            && manifest.protocol.minor == policy.protocol_minor(),
+        "packaged worker protocol version differs from repository policy"
+    );
+    let limits = transport_limits(policy);
+    let target = sidecar_target(&manifest.build.target_triple)?;
+    let validated_executable = validation_view.path().join(target.artifact_worker);
+    run_smoke_session(
+        &validated_executable,
+        validation_view.path(),
+        &manifest,
+        &decode_sha256(&manifest_digest)?,
+        policy,
+        limits,
+    )?;
+    println!(
+        "packaged OR-Tools worker smoke passed for {}",
+        manifest.build.target_triple
+    );
+    Ok(())
+}
+
+fn canonical_packaged_executable(path: &Path) -> Result<PathBuf> {
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "packaged worker is missing or inaccessible: {}",
+            path.display()
+        )
+    })?;
+    ensure!(
+        metadata.is_file() && !is_link_like(&metadata),
+        "packaged worker must be a direct regular file: {}",
+        path.display()
+    );
+    ensure!(
+        metadata.len() <= MAX_SIDECAR_FILE_BYTES,
+        "packaged worker exceeds the file-size limit"
+    );
+    let canonical = fs::canonicalize(path)
+        .with_context(|| format!("failed to resolve packaged worker {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        ensure!(
+            metadata.permissions().mode() & 0o111 != 0,
+            "packaged worker is not executable"
+        );
+    }
+    Ok(canonical)
+}
+
+fn canonical_packaged_resource_root(path: &Path) -> Result<PathBuf> {
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "packaged OR-Tools resource root is missing or inaccessible: {}",
+            path.display()
+        )
+    })?;
+    ensure!(
+        metadata.is_dir() && !is_link_like(&metadata),
+        "packaged OR-Tools resource root must be a direct directory: {}",
+        path.display()
+    );
+    fs::canonicalize(path).with_context(|| {
+        format!(
+            "failed to resolve packaged OR-Tools resource root {}",
+            path.display()
+        )
+    })
+}
+
+fn validate_packaged_layout(
+    repository: &Path,
+    executable: &Path,
+    resource_root: &Path,
+    expected_manifest_sha256: &[u8; 32],
+) -> Result<(SmokeManifest, String, tempfile::TempDir)> {
+    let target = sidecar_target(&read_manifest_target(resource_root)?)?;
+    let view = tempfile::Builder::new()
+        .prefix("eutheto-packaged-worker-smoke-")
+        .tempdir()
+        .context("failed to create private packaged-worker validation directory")?;
+    materialize_resource_tree(resource_root, view.path())?;
+    let worker = view.path().join(target.artifact_worker);
+    copy_snapshot_regular_file(executable, view.path(), &worker, true)?;
+
+    let digest = crate::solver_manifest::validate(crate::solver_manifest::ValidateOptions {
+        source_contract: &repository.join("workers/ortools/source-contract.json"),
+        protocol_schema: &repository.join("protocol/solver-worker.proto"),
+        protocol_policy: &repository.join("protocol/version.json"),
+        artifact_root: view.path(),
+    })?;
+    ensure!(
+        decode_sha256(&digest)? == *expected_manifest_sha256,
+        "packaged solver manifest does not match the trusted desktop-build digest"
+    );
+    let manifest_bytes = read_bounded_file(
+        &view.path().join("solver-manifest.json"),
+        MAX_MANIFEST_BYTES,
+        "packaged solver manifest",
+    )?;
+    let manifest =
+        serde_json::from_slice(&manifest_bytes).context("packaged solver manifest is malformed")?;
+    Ok((manifest, digest, view))
+}
+
+fn materialize_resource_tree(source_root: &Path, destination_root: &Path) -> Result<()> {
+    let mut entries = 0usize;
+    let mut bytes = 0u64;
+    materialize_resource_directory(
+        source_root,
+        destination_root,
+        Path::new(""),
+        &mut entries,
+        &mut bytes,
+    )
+}
+
+fn materialize_resource_directory(
+    source_root: &Path,
+    destination_root: &Path,
+    relative: &Path,
+    entries: &mut usize,
+    bytes: &mut u64,
+) -> Result<()> {
+    let source_directory = source_root.join(relative);
+    let mut children = fs::read_dir(&source_directory)
+        .with_context(|| {
+            format!(
+                "failed to read packaged resource directory {}",
+                source_directory.display()
+            )
+        })?
+        .collect::<io::Result<Vec<_>>>()
+        .with_context(|| {
+            format!(
+                "failed to enumerate packaged resource directory {}",
+                source_directory.display()
+            )
+        })?;
+    children.sort_by_key(fs::DirEntry::file_name);
+    for child in children {
+        *entries = entries
+            .checked_add(1)
+            .context("packaged resource entry count overflow")?;
+        ensure!(
+            *entries <= MAX_SIDECAR_TREE_ENTRIES,
+            "packaged resource tree exceeds {MAX_SIDECAR_TREE_ENTRIES} entries"
+        );
+        let child_relative = relative.join(child.file_name());
+        ensure_safe_relative_path(&child_relative)?;
+        let source = source_root.join(&child_relative);
+        let metadata = fs::symlink_metadata(&source)
+            .with_context(|| format!("failed to inspect packaged resource {}", source.display()))?;
+        ensure!(
+            !is_link_like(&metadata),
+            "packaged resource tree contains a link or reparse point: {}",
+            child_relative.display()
+        );
+        let destination = destination_root.join(&child_relative);
+        if metadata.is_dir() {
+            fs::create_dir(&destination).with_context(|| {
+                format!(
+                    "failed to create private validation directory {}",
+                    destination.display()
+                )
+            })?;
+            materialize_resource_directory(
+                source_root,
+                destination_root,
+                &child_relative,
+                entries,
+                bytes,
+            )?;
+        } else {
+            ensure!(
+                metadata.is_file(),
+                "packaged resource tree contains a special file: {}",
+                child_relative.display()
+            );
+            ensure!(
+                metadata.len() <= MAX_SIDECAR_FILE_BYTES,
+                "packaged resource exceeds the file-size limit: {}",
+                child_relative.display()
+            );
+            *bytes = bytes
+                .checked_add(metadata.len())
+                .context("packaged resource byte count overflow")?;
+            ensure!(
+                *bytes <= MAX_SIDECAR_TOTAL_BYTES,
+                "packaged resource tree exceeds the total byte limit"
+            );
+            copy_snapshot_regular_file(&source, destination_root, &destination, false)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_snapshot_regular_file(
+    source: &Path,
+    destination_root: &Path,
+    destination: &Path,
+    executable: bool,
+) -> Result<()> {
+    ensure_destination_parent(destination_root, destination)?;
+    let metadata = fs::symlink_metadata(source)
+        .with_context(|| format!("failed to inspect packaged file {}", source.display()))?;
+    ensure!(
+        metadata.is_file() && !is_link_like(&metadata),
+        "packaged file must be a direct regular file: {}",
+        source.display()
+    );
+    copy_regular_file(source, destination_root, destination, &metadata, executable)
+}
+
+fn validate_packaged_target(manifest: &SmokeManifest, executable: &Path) -> Result<()> {
+    let target = sidecar_target(&manifest.build.target_triple)?;
+    let (host_target, host_architecture) = host_solver_target()?;
+    ensure!(
+        manifest.build.target_triple == host_target,
+        "packaged worker target does not match this host"
+    );
+    ensure!(
+        manifest.build.architecture == host_architecture,
+        "packaged worker architecture does not match this host"
+    );
+    let packaged_name = Path::new(target.artifact_worker)
+        .file_name()
+        .context("packaged worker target has no executable filename")?;
+    ensure!(
+        executable.file_name() == Some(packaged_name),
+        "packaged worker filename does not match its target triple"
+    );
+    Ok(())
+}
+fn host_solver_target() -> Result<(&'static str, &'static str)> {
+    match (env::consts::OS, env::consts::ARCH) {
+        ("windows", "x86_64") => Ok(("x86_64-pc-windows-msvc", "x86_64")),
+        ("macos", "x86_64") => Ok(("x86_64-apple-darwin", "x86_64")),
+        ("macos", "aarch64") => Ok(("aarch64-apple-darwin", "aarch64")),
+        ("linux", "x86_64") => Ok(("x86_64-unknown-linux-gnu", "x86_64")),
+        (os, architecture) => {
+            bail!("packaged OR-Tools smoke is unsupported on {os}/{architecture}")
+        }
+    }
+}
+
+fn validate_executable_architecture(executable: &Path, target: &str) -> Result<()> {
+    let mut file = open_regular_file_no_follow(executable)?;
+    let mut header = [0u8; 64];
+    file.read_exact(&mut header)
+        .context("packaged worker has a truncated executable header")?;
+    match target {
+        "x86_64-unknown-linux-gnu" => ensure!(
+            header[..4] == [0x7f, b'E', b'L', b'F']
+                && header[4] == 2
+                && header[5] == 1
+                && u16::from_le_bytes([header[18], header[19]]) == 0x3e,
+            "packaged worker is not an x86_64 little-endian ELF executable"
+        ),
+        "x86_64-apple-darwin" => ensure!(
+            header[..4] == [0xcf, 0xfa, 0xed, 0xfe]
+                && u32::from_le_bytes([header[4], header[5], header[6], header[7]]) == 0x0100_0007,
+            "packaged worker is not a thin x86_64 Mach-O executable"
+        ),
+        "aarch64-apple-darwin" => ensure!(
+            header[..4] == [0xcf, 0xfa, 0xed, 0xfe]
+                && u32::from_le_bytes([header[4], header[5], header[6], header[7]]) == 0x0100_000c,
+            "packaged worker is not a thin arm64 Mach-O executable"
+        ),
+        "x86_64-pc-windows-msvc" => {
+            ensure!(
+                header[..2] == *b"MZ",
+                "packaged worker is not a PE executable"
+            );
+            let pe_offset = u64::from(u32::from_le_bytes([
+                header[60], header[61], header[62], header[63],
+            ]));
+            ensure!(
+                pe_offset <= 1024 * 1024,
+                "packaged worker has an unsafe PE header offset"
+            );
+            file.seek(SeekFrom::Start(pe_offset))
+                .context("failed to seek to packaged worker PE header")?;
+            let mut pe = [0u8; 6];
+            file.read_exact(&mut pe)
+                .context("packaged worker has a truncated PE header")?;
+            ensure!(
+                pe[..4] == *b"PE\0\0" && u16::from_le_bytes([pe[4], pe[5]]) == 0x8664,
+                "packaged worker is not an x86_64 PE executable"
+            );
+        }
+        _ => bail!("unsupported packaged worker target: {target}"),
+    }
+    Ok(())
+}
+
+fn transport_limits(policy: &ProtocolPolicy) -> SmokeTransportLimits {
+    SmokeTransportLimits {
+        handshake_bytes: policy.frame_cap(FrameClass::Handshake),
+        worker_event_bytes: policy.frame_cap(FrameClass::WorkerEvent),
+        frames: policy.frames_per_session(),
+        stderr_bytes: policy.max_stderr_bytes(),
+        session_bytes: policy.total_session_bytes(),
+    }
+}
+
+fn run_smoke_session(
+    executable: &Path,
+    resource_root: &Path,
+    manifest: &SmokeManifest,
+    manifest_digest: &[u8; 32],
+    policy: &ProtocolPolicy,
+    limits: SmokeTransportLimits,
+) -> Result<()> {
+    let working_directory = tempfile::Builder::new()
+        .prefix("eutheto-packaged-worker-run-")
+        .tempdir()
+        .context("failed to create private packaged-worker working directory")?;
+    let mut command = Command::new(executable);
+    command
+        .env_clear()
+        .current_dir(working_directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if !manifest.runtime_libraries.is_empty() {
+        let runtime_directories = runtime_library_directories(resource_root, manifest)?;
+        let value = env::join_paths(&runtime_directories)
+            .context("packaged runtime-library search path cannot be encoded")?;
+        command.env(
+            runtime_library_environment(&manifest.build.target_triple)?,
+            value,
+        );
+    }
+
+    let mut child = command
+        .spawn()
+        .context("failed to launch the exact packaged OR-Tools worker")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("packaged worker stdout pipe is unavailable")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("packaged worker stderr pipe is unavailable")?;
+    let (output_tx, output_rx) = mpsc::sync_channel(1);
+    let output_thread = thread::spawn(move || read_worker_output(stdout, limits, &output_tx));
+    let (diagnostic_tx, diagnostic_rx) = mpsc::sync_channel(1);
+    let diagnostic_thread = thread::spawn(move || {
+        drain_worker_diagnostics(stderr, limits.stderr_bytes, &diagnostic_tx)
+    });
+
+    let result = execute_smoke_protocol(
+        &mut child,
+        manifest,
+        manifest_digest,
+        policy,
+        &output_rx,
+        &diagnostic_rx,
+    );
+    drop(output_rx);
+    drop(diagnostic_rx);
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let output_result = output_thread
+        .join()
+        .map_err(|_| anyhow::anyhow!("packaged worker stdout reader panicked"))?;
+    let diagnostic_result = diagnostic_thread
+        .join()
+        .map_err(|_| anyhow::anyhow!("packaged worker stderr reader panicked"))?;
+    result?;
+    output_result?;
+    let diagnostic_bytes = diagnostic_result?;
+    ensure!(
+        diagnostic_bytes == 0,
+        "packaged worker emitted unexpected diagnostics"
+    );
+    Ok(())
+}
+
+fn runtime_library_directories(
+    resource_root: &Path,
+    manifest: &SmokeManifest,
+) -> Result<Vec<PathBuf>> {
+    let mut directories = BTreeSet::new();
+    for runtime in &manifest.runtime_libraries {
+        let relative_parent = Path::new(&runtime.path)
+            .parent()
+            .context("packaged runtime library path has no parent")?;
+        let directory = resource_root.join(relative_parent);
+        let metadata = fs::symlink_metadata(&directory).with_context(|| {
+            format!(
+                "packaged runtime-library directory is missing: {}",
+                relative_parent.display()
+            )
+        })?;
+        ensure!(
+            metadata.is_dir() && !is_link_like(&metadata),
+            "packaged runtime-library directory is unsafe: {}",
+            relative_parent.display()
+        );
+        directories.insert(directory);
+    }
+    Ok(directories.into_iter().collect())
+}
+
+fn runtime_library_environment(target: &str) -> Result<&'static str> {
+    match target {
+        "x86_64-pc-windows-msvc" => Ok("PATH"),
+        "x86_64-apple-darwin" | "aarch64-apple-darwin" => Ok("DYLD_LIBRARY_PATH"),
+        "x86_64-unknown-linux-gnu" => Ok("LD_LIBRARY_PATH"),
+        _ => bail!("unsupported packaged worker target: {target}"),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn execute_smoke_protocol(
+    child: &mut Child,
+    manifest: &SmokeManifest,
+    manifest_digest: &[u8; 32],
+    policy: &ProtocolPolicy,
+    output: &Receiver<WorkerOutput>,
+    diagnostics: &Receiver<()>,
+) -> Result<()> {
+    let model_fingerprint: [u8; 32] = Sha256::digest(SMOKE_MODEL).into();
+    let capabilities = manifest_capabilities(&manifest.capabilities)?;
+    let expectations = HandshakeExpectations::new(
+        manifest.protocol.major,
+        manifest.protocol.minor,
+        manifest.worker.identity.clone(),
+        manifest.worker.version.clone(),
+        manifest.worker.backend_id.clone(),
+        manifest.backend_source.version.clone(),
+        manifest.worker.adapter_version.clone(),
+        *manifest_digest,
+        capabilities.iter().copied(),
+        capabilities.iter().copied(),
+    )
+    .context("packaged worker handshake expectations are invalid")?;
+    let handshake = ParentFrame {
+        body: Some(parent_frame::Body::HandshakeRequest(
+            eutheto_protocol::wire::HandshakeRequest {
+                protocol_major: manifest.protocol.major,
+                protocol_minor: manifest.protocol.minor,
+                core_version: env!("CARGO_PKG_VERSION").to_owned(),
+                expected_backend_id: manifest.worker.backend_id.clone(),
+                required_capabilities: capabilities
+                    .iter()
+                    .map(|capability| *capability as i32)
+                    .collect(),
+                expected_manifest_sha256: prost::bytes::Bytes::copy_from_slice(manifest_digest),
+            },
+        )),
+    };
+    let solve = ParentFrame {
+        body: Some(parent_frame::Body::SolveRequest(SolveRequest {
+            request_id: SMOKE_REQUEST_ID.to_owned(),
+            cp_model_proto: prost::bytes::Bytes::from_static(SMOKE_MODEL),
+            parameters: Some(SolveParameters {
+                random_seed: Some(1),
+                stop_after_first_feasible: Some(false),
+                emit_intermediate_solutions: Some(false),
+                log_search_progress: Some(false),
+                deterministic_test_profile: Some(true),
+            }),
+            projections: Vec::new(),
+            resource_limits: Some(ResourceLimits {
+                wall_time_millis: 5_000,
+                memory_bytes: None,
+                worker_threads: 1,
+            }),
+            model_fingerprint: prost::bytes::Bytes::copy_from_slice(&model_fingerprint),
+        })),
+    };
+    let mut protocol = ParentProtocol::new(expectations);
+    protocol
+        .on_parent_frame(&handshake)
+        .context("packaged worker handshake request violates protocol state")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("packaged worker stdin pipe is unavailable")?;
+    stdin
+        .write_all(
+            &encode_frame(&handshake, FrameClass::Handshake, policy)
+                .context("failed to encode packaged worker handshake")?,
+        )
+        .context("failed to write packaged worker handshake")?;
+    stdin
+        .flush()
+        .context("failed to flush packaged worker handshake")?;
+
+    let deadline = Instant::now() + SMOKE_TIMEOUT;
+    let handshake_payload = match receive_worker_output(output, diagnostics, deadline)? {
+        WorkerOutput::Frame(payload) => payload,
+        WorkerOutput::Eof => {
+            protocol
+                .on_eof()
+                .context("packaged worker ended before its handshake response")?;
+            unreachable!("protocol accepted EOF before a handshake response");
+        }
+        WorkerOutput::Fault(message) => bail!("{message}"),
+    };
+    let handshake_response = decode_worker_frame(
+        prost::bytes::Bytes::from(handshake_payload),
+        FrameClass::Handshake,
+    )
+    .context("packaged worker emitted an invalid handshake frame")?;
+    ensure!(
+        matches!(
+            protocol
+                .on_worker_frame(handshake_response)
+                .context("packaged worker handshake response violated protocol state")?,
+            WorkerObservation::HandshakeAccepted
+        ),
+        "packaged worker rejected the validated smoke handshake"
+    );
+
+    protocol
+        .on_parent_frame(&solve)
+        .context("packaged worker solve request violates protocol state")?;
+    let Some(parent_frame::Body::SolveRequest(solve_request)) = &solve.body else {
+        unreachable!("the smoke solve frame was constructed immediately above");
+    };
+    write_solve_request_frame(&mut stdin, solve_request, policy)
+        .context("failed to write packaged worker smoke request")?;
+    stdin
+        .flush()
+        .context("failed to flush packaged worker input")?;
+    drop(stdin);
+
+    loop {
+        match receive_worker_output(output, diagnostics, deadline)? {
+            WorkerOutput::Frame(payload) => {
+                let frame = decode_worker_frame(
+                    prost::bytes::Bytes::from(payload),
+                    FrameClass::WorkerEvent,
+                )
+                .context("packaged worker emitted an invalid event frame")?;
+                protocol
+                    .on_worker_frame(frame)
+                    .context("packaged worker event violated protocol state")?;
+            }
+            WorkerOutput::Eof => {
+                protocol
+                    .on_eof()
+                    .context("packaged worker ended before protocol completion")?;
+                break;
+            }
+            WorkerOutput::Fault(message) => bail!("{message}"),
+        }
+    }
+    let status = loop {
+        if diagnostics.try_recv().is_ok() {
+            bail!("packaged worker emitted unexpected diagnostics");
+        }
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to inspect packaged worker exit status")?
+        {
+            break status;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "packaged worker exited too late after protocol EOF"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    let exit_code = status
+        .code()
+        .context("packaged worker terminated without a portable exit code")?;
+    protocol
+        .on_exit(exit_code)
+        .context("packaged worker exit contradicted terminal protocol evidence")?;
+    let CompletedSession::Solve(terminal) = protocol
+        .into_completion()
+        .context("packaged worker session did not complete")?
+    else {
+        bail!("packaged worker rejected the validated smoke handshake");
+    };
+    let Some(worker_frame::Body::Finished(finished)) = &terminal.frame().body else {
+        bail!("packaged worker returned an error for the fixed smoke request");
+    };
+    ensure!(
+        status.success()
+            && finished.status == WorkerSolveStatus::Optimal as i32
+            && finished.termination_reason == TerminationReason::Optimal as i32,
+        "packaged worker did not complete the fixed smoke request optimally"
+    );
+    Ok(())
+}
+
+fn receive_worker_output(
+    output: &Receiver<WorkerOutput>,
+    diagnostics: &Receiver<()>,
+    deadline: Instant,
+) -> Result<WorkerOutput> {
+    loop {
+        if diagnostics.try_recv().is_ok() {
+            bail!("packaged worker emitted unexpected diagnostics");
+        }
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .context("packaged worker smoke timed out")?;
+        match output.recv_timeout(remaining.min(Duration::from_millis(50))) {
+            Ok(value) => return Ok(value),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("packaged worker stdout ended without clean EOF evidence");
+            }
+        }
+    }
+}
+
+fn manifest_capabilities(capabilities: &[String]) -> Result<BTreeSet<Capability>> {
+    let mut values = BTreeSet::new();
+    for capability in capabilities {
+        let value = match capability.as_str() {
+            "cp-sat" => Capability::CpSat,
+            "deterministic-time" => Capability::DeterministicTime,
+            "intermediate-solutions" => Capability::IntermediateSolutions,
+            "objective-bounds" => Capability::ObjectiveBounds,
+            "progress" => Capability::Progress,
+            "solution-projection" => Capability::SolutionProjection,
+            "solution-stats" => Capability::SolutionStats,
+            _ => bail!("packaged manifest contains an unknown worker capability"),
+        };
+        ensure!(
+            values.insert(value),
+            "packaged manifest contains a duplicate worker capability"
+        );
+    }
+    Ok(values)
+}
+
+fn read_worker_output(
+    mut stdout: std::process::ChildStdout,
+    limits: SmokeTransportLimits,
+    sender: &SyncSender<WorkerOutput>,
+) -> Result<()> {
+    let result = (|| -> Result<()> {
+        let mut frames = 0usize;
+        let mut total_bytes = 0usize;
+        loop {
+            let mut prefix = [0u8; 4];
+            let first = stdout
+                .read(&mut prefix[..1])
+                .context("failed to read packaged worker stdout")?;
+            if first == 0 {
+                let _ = sender.send(WorkerOutput::Eof);
+                return Ok(());
+            }
+            stdout
+                .read_exact(&mut prefix[1..])
+                .context("packaged worker emitted a truncated frame prefix")?;
+            let length = usize::try_from(u32::from_be_bytes(prefix))
+                .context("packaged worker frame length exceeds usize")?;
+            let cap = if frames == 0 {
+                limits.handshake_bytes
+            } else {
+                limits.worker_event_bytes
+            };
+            ensure!(
+                length > 0 && length <= cap,
+                "packaged worker emitted an empty or oversized frame"
+            );
+            frames = frames
+                .checked_add(1)
+                .context("packaged worker frame count overflow")?;
+            ensure!(
+                frames <= limits.frames,
+                "packaged worker exceeded the protocol frame-count limit"
+            );
+            total_bytes = total_bytes
+                .checked_add(length + 4)
+                .context("packaged worker output byte count overflow")?;
+            ensure!(
+                total_bytes <= limits.session_bytes,
+                "packaged worker exceeded the protocol session-byte limit"
+            );
+            let mut payload = Vec::new();
+            payload
+                .try_reserve_exact(length)
+                .context("failed to reserve packaged worker frame")?;
+            payload.resize(length, 0);
+            stdout
+                .read_exact(&mut payload)
+                .context("packaged worker emitted a truncated frame payload")?;
+            sender
+                .send(WorkerOutput::Frame(payload))
+                .map_err(|_| anyhow::anyhow!("packaged worker output receiver closed"))?;
+        }
+    })();
+    if let Err(error) = &result {
+        let _ = sender.send(WorkerOutput::Fault(error.to_string()));
+    }
+    result
+}
+
+fn drain_worker_diagnostics(
+    mut stderr: std::process::ChildStderr,
+    cap: usize,
+    sender: &SyncSender<()>,
+) -> Result<usize> {
+    let mut total = 0usize;
+    let mut buffer = [0u8; 8 * 1024];
+    loop {
+        let count = stderr
+            .read(&mut buffer)
+            .context("failed to read packaged worker diagnostics")?;
+        if count == 0 {
+            return Ok(total);
+        }
+        if total == 0 {
+            let _ = sender.send(());
+        }
+        total = total
+            .checked_add(count)
+            .context("packaged worker diagnostic byte count overflow")?;
+        ensure!(
+            total <= cap,
+            "packaged worker exceeded the diagnostic byte limit"
+        );
+    }
+}
+
+fn read_bounded_file(path: &Path, cap: u64, name: &str) -> Result<Vec<u8>> {
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("{name} is missing or inaccessible"))?;
+    ensure!(
+        metadata.is_file() && !is_link_like(&metadata) && metadata.len() <= cap,
+        "{name} must be a bounded direct regular file"
+    );
+    let mut file = open_regular_file_no_follow(path)?;
+    let capacity = usize::try_from(metadata.len()).context("bounded file length exceeds usize")?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(cap + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {name}"))?;
+    ensure!(
+        u64::try_from(bytes.len()).context("bounded file byte count exceeds u64")?
+            == metadata.len(),
+        "{name} changed while it was read"
+    );
+    Ok(bytes)
+}
+
+fn decode_sha256(value: &str) -> Result<[u8; 32]> {
+    ensure!(
+        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "solver manifest digest is not a 32-byte hexadecimal SHA-256"
+    );
+    let mut digest = [0u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .context("solver manifest digest contains invalid hexadecimal")?;
+    }
+    Ok(digest)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut reader = BufReader::new(open_regular_file_no_follow(path)?);
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .with_context(|| format!("failed to hash packaged file {}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finalize_artifact(
     authority_root: &Path,
@@ -120,10 +1001,15 @@ pub(crate) fn build_desktop(repo_root: &Path) -> Result<()> {
             "--config",
             "src-tauri/tauri.sidecar.conf.json",
         ])
+        .arg("--no-sign")
         .current_dir(repo_root)
         .env(SOLVER_MANIFEST_DIGEST_ENV, manifest_sha256);
     #[cfg(target_os = "linux")]
     command.args(["--bundles", "deb,rpm"]);
+    #[cfg(target_os = "macos")]
+    command.args(["--bundles", "app"]);
+    #[cfg(windows)]
+    command.args(["--bundles", "msi"]);
     let build_result = command
         .status()
         .context("failed to start the bundle-aware Tauri desktop build");
@@ -362,7 +1248,7 @@ fn read_manifest_target(artifact_root: &Path) -> Result<String> {
     let capacity =
         usize::try_from(metadata.len()).context("solver manifest byte length exceeds usize")?;
     let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(MAX_MANIFEST_BYTES + 1)
         .read_to_end(&mut bytes)
         .with_context(|| format!("failed to read solver manifest {}", path.display()))?;

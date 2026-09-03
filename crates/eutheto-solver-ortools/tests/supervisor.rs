@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eutheto_protocol::wire::{
     Capability, ResourceLimits, SolveParameters, SolveRequest, WorkerErrorCode, worker_frame,
@@ -168,6 +168,24 @@ async fn handshake_rejection_is_a_complete_normal_outcome() -> Result<(), Box<dy
 }
 
 #[tokio::test]
+async fn solver_timing_stops_at_the_terminal_frame() -> Result<(), Box<dyn Error>> {
+    let (budget, _) = budget(30_000)?;
+    let wall_started = Instant::now();
+    let result = supervise(request("0.2.4", false).await?, budget).await?;
+    let wall_milliseconds = u64::try_from(wall_started.elapsed().as_millis())?;
+    let solver_milliseconds = result
+        .timings
+        .solver_milliseconds
+        .ok_or("missing solver timing")?
+        .value();
+    assert!(
+        wall_milliseconds.saturating_sub(solver_milliseconds) >= 150,
+        "solver timing included the helper's post-terminal delay"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn stderr_is_sanitized_and_bounded_while_stdout_completes() -> Result<(), Box<dyn Error>> {
     let (budget, _) = budget(30_000)?;
     let result = supervise(request("0.1.4", false).await?, budget).await?;
@@ -220,6 +238,14 @@ async fn crashes_missing_and_duplicate_terminals_are_not_evidence() -> Result<()
         )?;
         assert_eq!(failure.stop_reason, SafeStopReason::ProtocolViolation);
         assert!(matches!(failure.error, SupervisorError::Protocol(_)));
+        if mode == "0.1.6" {
+            let timings = failure
+                .timings
+                .as_ref()
+                .ok_or("missing post-handshake failure timing evidence")?;
+            assert!(timings.solver_milliseconds.is_some());
+            assert!(timings.dispatched_wall_time_milliseconds.is_some());
+        }
     }
     Ok(())
 }

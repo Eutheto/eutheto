@@ -5476,6 +5476,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "clap",
+ "eutheto-protocol",
  "eutheto-types",
  "prost",
  "prost-build",

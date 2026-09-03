@@ -305,6 +305,7 @@ impl SolverBackend for SequenceBackend {
                     ),
                     objective: None,
                     evidence_refs: Vec::new(),
+                    execution: None,
                 },
             })
         })
@@ -1118,6 +1119,7 @@ fn outcome_requires_both_fingerprints_and_exact_first_incumbent() -> TestResult 
             first_incumbent_milliseconds: Some(DurationMillis::new(1)?),
             objective: None,
             evidence_refs: Vec::new(),
+            execution: None,
         },
     };
     assert_eq!(
@@ -1139,6 +1141,151 @@ fn outcome_requires_both_fingerprints_and_exact_first_incumbent() -> TestResult 
             SolverApiLimits::DEFAULT,
         ),
         Err(OutcomeError::SolveFingerprintMismatch)
+    );
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn execution_evidence_round_trips_and_is_bound_to_the_request() -> TestResult {
+    let (request, _, _) = request(BackendId::new(FAKE_BACKEND_ID)?)?;
+    let candidate = BackendCandidate {
+        sequence: 1,
+        values: valid_candidate()?,
+        observed_after_milliseconds: DurationMillis::new(2)?,
+        objective: None,
+        evidence_refs: Vec::new(),
+    };
+    let mut outcome = BackendSolveOutcome {
+        backend_id: request.backend_id().clone(),
+        model_hash: request.model_hash().to_owned(),
+        solve_fingerprint: request.solve_fingerprint().to_owned(),
+        termination: BackendTerminationReason::CandidateFound,
+        evidence: BackendTerminationEvidence {
+            remaining_at_dispatch_milliseconds: request.dispatch_budget().remaining_at_dispatch(),
+            backend_limit_milliseconds: request.dispatch_budget().backend_limit(),
+            elapsed_milliseconds: DurationMillis::new(10)?,
+            first_incumbent_milliseconds: Some(DurationMillis::new(2)?),
+            objective: None,
+            evidence_refs: Vec::new(),
+            execution: Some(BackendExecutionEvidence {
+                timings: BackendTimingEvidence {
+                    translation_serialization_milliseconds: DurationMillis::new(1)?,
+                    worker_startup_milliseconds: Some(DurationMillis::new(2)?),
+                    handshake_milliseconds: Some(DurationMillis::new(1)?),
+                    solver_milliseconds: Some(DurationMillis::new(5)?),
+                    protocol_decode_milliseconds: Some(DurationMillis::new(1)?),
+                },
+                model_counts: BackendModelCountEvidence {
+                    planning_variable_count: request.summary().variable_count,
+                    planning_constraint_count: request.summary().constraint_count,
+                    translated_variable_count: 2,
+                    translated_constraint_count: 1,
+                },
+                worker_statistics: Some(BackendWorkerStatistics {
+                    wall_time_milliseconds: Some(DurationMillis::new(4)?),
+                    user_time_milliseconds: Some(DurationMillis::new(3)?),
+                    deterministic_time_milliseconds: Some(DurationMillis::new(2)?),
+                    conflicts: Some(3),
+                    branches: Some(4),
+                    binary_propagations: Some(5),
+                    integer_propagations: Some(6),
+                }),
+                reproducibility: BackendReproducibilityEvidence {
+                    backend_version: request.backend_version().to_owned(),
+                    adapter_version: request.adapter_version().to_owned(),
+                    worker_version: "1.0.0".to_owned(),
+                    engine_version: "1.0.0".to_owned(),
+                    protocol_major: 1,
+                    protocol_minor: 0,
+                    applied_options: request.options().clone(),
+                    applied_parameters: BackendAppliedParameterEvidence {
+                        wall_time_milliseconds: Some(DurationMillis::new(700)?),
+                        memory_limit_bytes: None,
+                        worker_threads: 1,
+                        random_seed: 7,
+                        stop_after_first_feasible: false,
+                        emit_intermediate_solutions: false,
+                        log_search_progress: false,
+                        deterministic_test_profile: true,
+                    },
+                    model_fingerprint_sha256: "a".repeat(64),
+                    applied_parameters_sha256: Some("b".repeat(64)),
+                },
+            }),
+        },
+    };
+    assert_eq!(
+        validate_outcome(
+            &request,
+            &outcome,
+            std::slice::from_ref(&candidate),
+            SolverApiLimits::DEFAULT,
+        ),
+        Ok(())
+    );
+    outcome
+        .evidence
+        .execution
+        .as_mut()
+        .ok_or("fixture missing execution evidence")?
+        .timings
+        .solver_milliseconds = Some(DurationMillis::new(11)?);
+    assert_eq!(
+        validate_outcome(
+            &request,
+            &outcome,
+            std::slice::from_ref(&candidate),
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::InvalidExecutionEvidence)
+    );
+    outcome
+        .evidence
+        .execution
+        .as_mut()
+        .ok_or("fixture missing execution evidence")?
+        .timings
+        .solver_milliseconds = Some(DurationMillis::new(5)?);
+    let encoded = serde_json::to_vec(&outcome)?;
+    assert_eq!(
+        serde_json::from_slice::<BackendSolveOutcome>(&encoded)?,
+        outcome
+    );
+
+    outcome
+        .evidence
+        .execution
+        .as_mut()
+        .ok_or("fixture missing execution evidence")?
+        .reproducibility
+        .applied_options
+        .random_seed = 8;
+    assert_eq!(
+        validate_outcome(
+            &request,
+            &outcome,
+            std::slice::from_ref(&candidate),
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::ExecutionOptionsMismatch)
+    );
+    let reproducibility = &mut outcome
+        .evidence
+        .execution
+        .as_mut()
+        .ok_or("fixture missing execution evidence")?
+        .reproducibility;
+    reproducibility.applied_options.random_seed = 7;
+    reproducibility.applied_parameters.worker_threads = 2;
+    assert_eq!(
+        validate_outcome(
+            &request,
+            &outcome,
+            std::slice::from_ref(&candidate),
+            SolverApiLimits::DEFAULT,
+        ),
+        Err(OutcomeError::InvalidExecutionEvidence)
     );
     Ok(())
 }
@@ -1175,6 +1322,7 @@ fn final_backend_evidence_matches_objective_dimension() -> TestResult {
                 best_bound_values: Some(vec![0, 0]),
             }),
             evidence_refs: Vec::new(),
+            execution: None,
         },
     };
     assert_eq!(

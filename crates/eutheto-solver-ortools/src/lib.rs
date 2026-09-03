@@ -54,7 +54,7 @@ use eutheto_protocol::{
     BoundedStderr, CompletedSession, FrameClass, FrameFault, HandshakeExpectations, ParentProtocol,
     ProtocolFault, ProtocolPolicy, WorkerObservation, checked_in_policy,
 };
-use eutheto_types::SolveBudgetView;
+use eutheto_types::{DurationMillis, SolveBudgetView};
 #[cfg(windows)]
 use process_wrap::tokio::JobObject;
 #[cfg(unix)]
@@ -203,6 +203,17 @@ pub enum SafeStopReason {
     WorkerExit,
 }
 
+/// Parent-measured spans for a worker session that reached protocol execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkerSessionTimings {
+    pub startup_milliseconds: DurationMillis,
+    pub handshake_milliseconds: DurationMillis,
+    pub request_dispatch_milliseconds: Option<DurationMillis>,
+    pub solver_milliseconds: Option<DurationMillis>,
+    pub protocol_decode_milliseconds: DurationMillis,
+    pub dispatched_wall_time_milliseconds: Option<DurationMillis>,
+}
+
 /// A fully corroborated normal protocol outcome and bounded sanitized stderr.
 ///
 /// Solve terminal evidence remains untrusted: this type conveys no candidate
@@ -212,6 +223,7 @@ pub struct SessionCompletion {
     pub evidence: CompletedSession,
     pub stderr: BoundedStderr,
     pub stop_reason: SafeStopReason,
+    pub timings: WorkerSessionTimings,
 }
 
 /// A failed session after process-tree termination and reaping was attempted.
@@ -220,6 +232,8 @@ pub struct SessionFailure {
     pub error: SupervisorError,
     pub stderr: BoundedStderr,
     pub stop_reason: SafeStopReason,
+    /// Partial phase timings when the worker process reached protocol execution.
+    pub timings: Option<WorkerSessionTimings>,
 }
 
 impl fmt::Display for SessionFailure {
@@ -324,6 +338,7 @@ where
     F: FnMut(WorkerObservation) -> Result<(), SupervisorError> + Send,
 {
     let remaining_at_entry = budget.remaining_duration();
+    let startup_started = Instant::now();
     let policy = match checked_in_policy() {
         Ok(policy) => policy,
         Err(error) => return Err(prelaunch_failure(error.into())),
@@ -379,7 +394,7 @@ where
     };
     let mut process = ProcessGuard::new(child, directory);
     if let Err(error) = budget_checkpoint(&budget) {
-        return cleanup_failure(process, None, error).await;
+        return cleanup_failure(process, None, error, None).await;
     }
     let Some(stdin) = process.child_mut().stdin().take() else {
         return cleanup_failure(
@@ -389,6 +404,7 @@ where
                 operation: "taking worker stdin",
                 kind: io::ErrorKind::BrokenPipe,
             },
+            None,
         )
         .await;
     };
@@ -400,6 +416,7 @@ where
                 operation: "taking worker stdout",
                 kind: io::ErrorKind::BrokenPipe,
             },
+            None,
         )
         .await;
     };
@@ -411,11 +428,13 @@ where
                 operation: "taking worker stderr",
                 kind: io::ErrorKind::BrokenPipe,
             },
+            None,
         )
         .await;
     };
     let stderr_task = tokio::spawn(drain_stderr(stderr, policy.max_stderr_bytes()));
 
+    let startup_milliseconds = duration_millis(startup_started.elapsed());
     let execution = execute_session(
         process.child_mut(),
         WorkerPipes { stdin, stdout },
@@ -428,35 +447,57 @@ where
             solve: &request.solve,
         },
         &mut observer,
+        startup_milliseconds,
     )
     .await;
     match execution {
-        Ok(evidence) => {
+        Ok(execution) => {
             process.kill_remaining_tree().await;
             let stderr = match budgeted(&budget, finish_stderr(stderr_task)).await {
                 Ok(stderr) => stderr,
                 Err(BudgetedError::Cancelled) => {
-                    return cleanup_failure(process, None, SupervisorError::Cancelled).await;
+                    return cleanup_failure(
+                        process,
+                        None,
+                        SupervisorError::Cancelled,
+                        Some(execution.timings),
+                    )
+                    .await;
                 }
                 Err(BudgetedError::DeadlineExceeded) => {
-                    return cleanup_failure(process, None, SupervisorError::DeadlineExceeded).await;
+                    return cleanup_failure(
+                        process,
+                        None,
+                        SupervisorError::DeadlineExceeded,
+                        Some(execution.timings),
+                    )
+                    .await;
                 }
                 Err(BudgetedError::Inner(error)) => {
-                    return cleanup_failure(process, None, error).await;
+                    return cleanup_failure(process, None, error, Some(execution.timings)).await;
                 }
             };
             process.finish();
-            let stop_reason = match evidence {
+            let stop_reason = match execution.evidence {
                 CompletedSession::Solve(_) => SafeStopReason::Completed,
                 CompletedSession::HandshakeRejected(_) => SafeStopReason::HandshakeRejected,
             };
             Ok(SessionCompletion {
-                evidence,
+                evidence: execution.evidence,
                 stderr,
                 stop_reason,
+                timings: execution.timings,
             })
         }
-        Err(error) => cleanup_failure(process, Some(stderr_task), error).await,
+        Err(failure) => {
+            cleanup_failure(
+                process,
+                Some(stderr_task),
+                failure.error,
+                Some(failure.timings),
+            )
+            .await
+        }
     }
 }
 
@@ -466,6 +507,7 @@ fn prelaunch_failure(error: SupervisorError) -> SessionFailure {
         error,
         stderr: empty_stderr(),
         stop_reason,
+        timings: None,
     }
 }
 
@@ -481,6 +523,97 @@ struct ProtocolSession<'a> {
     solve: &'a SolveRequest,
 }
 
+struct ExecuteSessionResult {
+    evidence: CompletedSession,
+    timings: WorkerSessionTimings,
+}
+
+struct ExecuteSessionFailure {
+    error: SupervisorError,
+    timings: WorkerSessionTimings,
+}
+
+struct SessionTimingRecorder {
+    handshake_started: Instant,
+    handshake_milliseconds: Option<DurationMillis>,
+    request_dispatch_started: Option<Instant>,
+    request_dispatch_milliseconds: Option<DurationMillis>,
+    solver_started: Option<Instant>,
+    solver_milliseconds: Option<DurationMillis>,
+    protocol_decode: Duration,
+    dispatched_wall_time_milliseconds: Option<DurationMillis>,
+}
+
+impl SessionTimingRecorder {
+    fn new() -> Self {
+        Self {
+            handshake_started: Instant::now(),
+            handshake_milliseconds: None,
+            request_dispatch_started: None,
+            request_dispatch_milliseconds: None,
+            solver_started: None,
+            solver_milliseconds: None,
+            protocol_decode: Duration::ZERO,
+            dispatched_wall_time_milliseconds: None,
+        }
+    }
+
+    fn record_handshake_complete(&mut self) {
+        self.handshake_milliseconds = Some(duration_millis(self.handshake_started.elapsed()));
+    }
+
+    fn begin_request_dispatch(&mut self, dispatched_wall_time_milliseconds: DurationMillis) {
+        self.dispatched_wall_time_milliseconds = Some(dispatched_wall_time_milliseconds);
+        self.request_dispatch_started = Some(Instant::now());
+    }
+
+    fn record_request_dispatched(&mut self) {
+        if self.request_dispatch_milliseconds.is_none() {
+            self.request_dispatch_milliseconds = self
+                .request_dispatch_started
+                .map(|started| duration_millis(started.elapsed()));
+        }
+    }
+
+    fn record_worker_started(&mut self) {
+        if self.solver_started.is_none() {
+            self.solver_started = Some(Instant::now());
+        }
+    }
+
+    fn record_protocol_decode(&mut self, elapsed: Duration) {
+        self.protocol_decode = self.protocol_decode.saturating_add(elapsed);
+    }
+
+    fn record_terminal(&mut self) {
+        if self.solver_milliseconds.is_none() {
+            self.solver_milliseconds = self
+                .solver_started
+                .map(|started| duration_millis(started.elapsed()));
+        }
+    }
+
+    fn finish(&self, startup_milliseconds: DurationMillis) -> WorkerSessionTimings {
+        WorkerSessionTimings {
+            startup_milliseconds,
+            handshake_milliseconds: self
+                .handshake_milliseconds
+                .unwrap_or_else(|| duration_millis(self.handshake_started.elapsed())),
+            request_dispatch_milliseconds: self.request_dispatch_milliseconds.or_else(|| {
+                self.request_dispatch_started
+                    .map(|started| duration_millis(started.elapsed()))
+            }),
+            solver_milliseconds: self.solver_milliseconds.or_else(|| {
+                self.solver_started
+                    .map(|started| duration_millis(started.elapsed()))
+            }),
+            protocol_decode_milliseconds: duration_millis(self.protocol_decode),
+            dispatched_wall_time_milliseconds: self.dispatched_wall_time_milliseconds,
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 async fn execute_session<F>(
     child: &mut Box<dyn ChildWrapper>,
     pipes: WorkerPipes,
@@ -488,7 +621,8 @@ async fn execute_session<F>(
     policy: &ProtocolPolicy,
     session: ProtocolSession<'_>,
     observer: &mut F,
-) -> Result<CompletedSession, SupervisorError>
+    startup_milliseconds: DurationMillis,
+) -> Result<ExecuteSessionResult, ExecuteSessionFailure>
 where
     F: FnMut(WorkerObservation) -> Result<(), SupervisorError> + Send,
 {
@@ -502,90 +636,121 @@ where
         mut stdin,
         mut stdout,
     } = pipes;
-    let mut protocol = ParentProtocol::new(expectations);
-    protocol.on_parent_frame(&handshake)?;
-    let handshake_bytes = encode_frame(&handshake, FrameClass::Handshake, policy)?;
-    budgeted(budget, stdin.write_all(&handshake_bytes))
-        .await
-        .map_err(|error| map_budgeted_io(error, "writing worker handshake"))?;
-
-    let mut accounting = OutputAccounting::default();
-    let Some(first) = read_worker_frame(
-        &mut stdout,
-        FrameClass::Handshake,
-        policy,
-        budget,
-        accounting.session_bytes,
-        accounting.frames,
-    )
-    .await?
-    else {
-        protocol.on_eof()?;
-        return Err(ProtocolFault::from(eutheto_protocol::StateFault::MissingTerminal).into());
-    };
-    accounting.record_frame(first.1, false, policy)?;
-    let observation = protocol.on_worker_frame(first.0)?;
-    match observation {
-        WorkerObservation::HandshakeAccepted => {
-            let mut parent_solve = ParentFrame {
-                body: Some(parent_frame::Body::SolveRequest(solve.clone())),
-            };
-            protocol.on_parent_frame(&parent_solve)?;
-            let Some(parent_frame::Body::SolveRequest(dispatch_solve)) = &mut parent_solve.body
-            else {
-                unreachable!("the solve frame was constructed immediately above");
-            };
-            let wall_time_millis =
-                finalize_solve_for_dispatch(dispatch_solve, budget, remaining_at_entry)?;
-            protocol.tighten_started_wall_time_millis(wall_time_millis)?;
-            budgeted(
-                budget,
-                write_solve_request_frame_async(&mut stdin, dispatch_solve, policy),
-            )
+    let mut timings = SessionTimingRecorder::new();
+    let result: Result<CompletedSession, SupervisorError> = async {
+        let mut protocol = ParentProtocol::new(expectations);
+        protocol.on_parent_frame(&handshake)?;
+        let handshake_bytes = encode_frame(&handshake, FrameClass::Handshake, policy)?;
+        budgeted(budget, stdin.write_all(&handshake_bytes))
             .await
-            .map_err(map_budgeted_protocol)?;
-            budgeted(budget, stdin.shutdown())
-                .await
-                .map_err(|error| map_budgeted_io(error, "closing worker stdin"))?;
-            drop(stdin);
-        }
-        WorkerObservation::HandshakeRejected => drop(stdin),
-        _ => return Err(ProtocolFault::from(eutheto_protocol::StateFault::MissingTerminal).into()),
-    }
+            .map_err(|error| map_budgeted_io(error, "writing worker handshake"))?;
 
-    loop {
-        if let Some((frame, bytes)) = read_worker_frame(
+        let mut accounting = OutputAccounting::default();
+        let Some((first_frame, first_bytes, first_decode)) = read_worker_frame(
             &mut stdout,
-            FrameClass::WorkerEvent,
+            FrameClass::Handshake,
             policy,
             budget,
             accounting.session_bytes,
             accounting.frames,
         )
         .await?
-        {
-            let intermediate = matches!(
-                &frame.body,
-                Some(worker_frame::Body::Progress(_) | worker_frame::Body::Incumbent(_))
-            );
-            accounting.record_frame(bytes, intermediate, policy)?;
-            if intermediate {
-                accounting.record_intermediate_rate(Instant::now(), policy)?;
-            }
-            let observation = protocol.on_worker_frame(frame)?;
-            observer(observation)?;
-        } else {
+        else {
             protocol.on_eof()?;
-            break;
+            return Err(ProtocolFault::from(eutheto_protocol::StateFault::MissingTerminal).into());
+        };
+        timings.record_protocol_decode(first_decode);
+        accounting.record_frame(first_bytes, false, policy)?;
+        let observation = protocol.on_worker_frame(first_frame)?;
+        timings.record_handshake_complete();
+        match observation {
+            WorkerObservation::HandshakeAccepted => {
+                let mut parent_solve = ParentFrame {
+                    body: Some(parent_frame::Body::SolveRequest(solve.clone())),
+                };
+                protocol.on_parent_frame(&parent_solve)?;
+                let Some(parent_frame::Body::SolveRequest(dispatch_solve)) = &mut parent_solve.body
+                else {
+                    unreachable!("the solve frame was constructed immediately above");
+                };
+                let wall_time_millis =
+                    finalize_solve_for_dispatch(dispatch_solve, budget, remaining_at_entry)?;
+                protocol.tighten_started_wall_time_millis(wall_time_millis)?;
+                timings.begin_request_dispatch(duration_millis(Duration::from_millis(
+                    wall_time_millis,
+                )));
+                budgeted(
+                    budget,
+                    write_solve_request_frame_async(&mut stdin, dispatch_solve, policy),
+                )
+                .await
+                .map_err(map_budgeted_protocol)?;
+                budgeted(budget, stdin.shutdown())
+                    .await
+                    .map_err(|error| map_budgeted_io(error, "closing worker stdin"))?;
+                drop(stdin);
+                timings.record_request_dispatched();
+            }
+            WorkerObservation::HandshakeRejected => drop(stdin),
+            _ => {
+                return Err(
+                    ProtocolFault::from(eutheto_protocol::StateFault::MissingTerminal).into(),
+                );
+            }
         }
-    }
 
-    let status = budgeted(budget, child.wait())
-        .await
-        .map_err(|error| map_budgeted_io(error, "waiting for worker exit"))?;
-    let code = portable_exit_code(status)?;
-    protocol.on_exit(code)?;
-    protocol.into_completion().map_err(Into::into)
+        loop {
+            if let Some((frame, bytes, decode_elapsed)) = read_worker_frame(
+                &mut stdout,
+                FrameClass::WorkerEvent,
+                policy,
+                budget,
+                accounting.session_bytes,
+                accounting.frames,
+            )
+            .await?
+            {
+                timings.record_protocol_decode(decode_elapsed);
+                let intermediate = matches!(
+                    &frame.body,
+                    Some(worker_frame::Body::Progress(_) | worker_frame::Body::Incumbent(_))
+                );
+                accounting.record_frame(bytes, intermediate, policy)?;
+                if intermediate {
+                    accounting.record_intermediate_rate(Instant::now(), policy)?;
+                }
+                let observation = protocol.on_worker_frame(frame)?;
+                if matches!(&observation, WorkerObservation::Started(_)) {
+                    timings.record_worker_started();
+                }
+                if matches!(&observation, WorkerObservation::Terminal) {
+                    timings.record_terminal();
+                }
+                observer(observation)?;
+            } else {
+                protocol.on_eof()?;
+                break;
+            }
+        }
+
+        let status = budgeted(budget, child.wait())
+            .await
+            .map_err(|error| map_budgeted_io(error, "waiting for worker exit"))?;
+        let code = portable_exit_code(status)?;
+        protocol.on_exit(code)?;
+        protocol.into_completion().map_err(SupervisorError::from)
+    }
+    .await;
+    let timings = timings.finish(startup_milliseconds);
+    match result {
+        Ok(evidence) => Ok(ExecuteSessionResult { evidence, timings }),
+        Err(error) => Err(ExecuteSessionFailure { error, timings }),
+    }
+}
+
+fn duration_millis(duration: Duration) -> DurationMillis {
+    let milliseconds = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    DurationMillis::new(milliseconds).unwrap_or(DurationMillis::MAX)
 }
 
 #[derive(Default)]
@@ -657,7 +822,7 @@ async fn read_worker_frame<R: AsyncRead + Unpin>(
     budget: &SolveBudgetView,
     accounted_bytes: usize,
     accounted_frames: usize,
-) -> Result<Option<(WorkerFrame, usize)>, SupervisorError> {
+) -> Result<Option<(WorkerFrame, usize, Duration)>, SupervisorError> {
     let mut prefix = [0u8; 4];
     let first = budgeted(budget, reader.read(&mut prefix[..1]))
         .await
@@ -718,8 +883,9 @@ async fn read_worker_frame<R: AsyncRead + Unpin>(
         })
         .into());
     }
+    let decode_started = Instant::now();
     let frame = decode_worker_frame(Bytes::from(payload), class)?;
-    Ok(Some((frame, total_bytes)))
+    Ok(Some((frame, total_bytes, decode_started.elapsed())))
 }
 
 async fn read_exact_count<R: AsyncRead + Unpin>(
@@ -851,7 +1017,7 @@ async fn stage_verified_file(
     let metadata = tokio::fs::symlink_metadata(source_path)
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
-    if metadata.file_type().is_symlink() {
+    if is_link_like(&metadata) {
         return Err(ExecutableIdentityError::SymbolicLink);
     }
     if !metadata.is_file() {
@@ -860,7 +1026,11 @@ async fn stage_verified_file(
     if metadata.len() != expected_len {
         return Err(ExecutableIdentityError::SizeMismatch);
     }
-    let source = tokio::fs::File::open(source_path)
+    let mut source_options = tokio::fs::OpenOptions::new();
+    source_options.read(true);
+    add_no_follow_flags(&mut source_options);
+    let source = source_options
+        .open(source_path)
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
     let open_metadata = source
@@ -869,6 +1039,9 @@ async fn stage_verified_file(
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
     if !open_metadata.is_file() {
         return Err(ExecutableIdentityError::NotRegularFile);
+    }
+    if is_link_like(&open_metadata) {
+        return Err(ExecutableIdentityError::SymbolicLink);
     }
     if open_metadata.len() != expected_len {
         return Err(ExecutableIdentityError::SizeMismatch);
@@ -945,7 +1118,7 @@ async fn verify_path_and_digest(
     let metadata = tokio::fs::symlink_metadata(path)
         .await
         .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
-    if metadata.file_type().is_symlink() {
+    if is_link_like(&metadata) {
         return Err(ExecutableIdentityError::SymbolicLink);
     }
     if !metadata.is_file() {
@@ -955,10 +1128,27 @@ async fn verify_path_and_digest(
     if len > MAX_STAGED_FILE_BYTES {
         return Err(ExecutableIdentityError::FileTooLarge);
     }
-    let mut file = tokio::fs::File::open(path)
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    add_no_follow_flags(&mut options);
+    let file = options
+        .open(path)
         .await
-        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?
-        .take(len.saturating_add(1));
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    let open_metadata = file
+        .metadata()
+        .await
+        .map_err(|error| ExecutableIdentityError::Io(error.kind()))?;
+    if is_link_like(&open_metadata) {
+        return Err(ExecutableIdentityError::SymbolicLink);
+    }
+    if !open_metadata.is_file() {
+        return Err(ExecutableIdentityError::NotRegularFile);
+    }
+    if open_metadata.len() != len {
+        return Err(ExecutableIdentityError::SizeMismatch);
+    }
+    let mut file = file.take(len.saturating_add(1));
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; HASH_BUFFER_BYTES];
     let mut read_total = 0_u64;
@@ -986,6 +1176,31 @@ async fn verify_path_and_digest(
         return Err(ExecutableIdentityError::DigestMismatch);
     }
     Ok(len)
+}
+
+fn add_no_follow_flags(options: &mut tokio::fs::OpenOptions) {
+    #[cfg(windows)]
+    {
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(not(windows))]
+    let _ = options;
+}
+
+fn is_link_like(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
 }
 
 async fn drain_stderr(
@@ -1080,6 +1295,7 @@ async fn cleanup_failure(
     mut process: ProcessGuard,
     stderr_task: Option<JoinHandle<Result<BoundedStderr, SupervisorError>>>,
     error: SupervisorError,
+    timings: Option<WorkerSessionTimings>,
 ) -> Result<SessionCompletion, SessionFailure> {
     process.stop_and_reap(error.graceful_stop()).await;
     let stderr = match stderr_task {
@@ -1095,6 +1311,7 @@ async fn cleanup_failure(
         error,
         stderr,
         stop_reason,
+        timings,
     })
 }
 

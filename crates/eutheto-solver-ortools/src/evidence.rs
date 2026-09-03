@@ -210,6 +210,7 @@ impl AdapterEvidenceRecorder {
             first_incumbent_milliseconds: self.first_incumbent_milliseconds,
             objective: self.latest_objective,
             evidence_refs: Vec::new(),
+            execution: None,
         })
     }
 
@@ -358,6 +359,7 @@ mod tests {
                     best_bound_values: Some(vec![3]),
                 }),
                 evidence_refs: Vec::new(),
+                execution: None,
             }
         );
         Ok(())

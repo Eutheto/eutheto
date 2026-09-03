@@ -14,7 +14,7 @@ use eutheto_planning_ir::{
 };
 use eutheto_solver_api::{
     BackendOutputSink, BackendTerminationReason, BoundedBackendOutput, ProgressSink,
-    SolveProgressEvent, SolveRequest, SolverApiLimits,
+    SolveProgressEvent, SolveRequest, SolverApiLimits, validate_outcome,
 };
 use eutheto_solver_ortools::{
     BundledWorkerArtifactError, ExecutableIdentityError, ORTOOLS_ADAPTER_VERSION,
@@ -280,6 +280,7 @@ async fn artifact_verification_rejects_untrusted_manifest_and_tampered_worker() 
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn production_backend_translates_supervises_and_submits_candidate() -> TestResult {
     let (artifact, _artifact_guard) = verified_artifact().await?;
     let registry = registry_with_ortools(artifact)?;
@@ -325,6 +326,12 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         .solve(&request, &mut output as &mut dyn BackendOutputSink)
         .await?;
     let result = output.into_result(outcome);
+    validate_outcome(
+        &request,
+        &result.outcome,
+        &result.candidates,
+        SolverApiLimits::DEFAULT,
+    )?;
     assert_eq!(
         result.outcome.termination,
         BackendTerminationReason::OptimalityClaimed
@@ -340,5 +347,85 @@ async fn production_backend_translates_supervises_and_submits_candidate() -> Tes
         progress.0.last(),
         Some(SolveProgressEvent::IncumbentFound(_))
     ));
+    let execution = result
+        .outcome
+        .evidence
+        .execution
+        .as_ref()
+        .ok_or("missing OR-Tools execution evidence")?;
+    assert_eq!(
+        execution.model_counts.planning_variable_count,
+        request.summary().variable_count
+    );
+    assert_eq!(
+        execution.model_counts.planning_constraint_count,
+        request.summary().constraint_count
+    );
+    assert_eq!(execution.model_counts.translated_variable_count, 2);
+    assert_eq!(execution.model_counts.translated_constraint_count, 0);
+    assert_eq!(execution.reproducibility.backend_version, ORTOOLS_VERSION);
+    assert_eq!(
+        execution.reproducibility.adapter_version,
+        ORTOOLS_ADAPTER_VERSION
+    );
+    assert_eq!(execution.reproducibility.worker_version, "0.1.0");
+    assert_eq!(execution.reproducibility.engine_version, ORTOOLS_VERSION);
+    assert_eq!(
+        execution.reproducibility.applied_parameters.random_seed,
+        i32::try_from(request.options().random_seed)?
+    );
+    assert_eq!(
+        execution.reproducibility.applied_parameters.worker_threads,
+        1
+    );
+    assert!(
+        !execution
+            .reproducibility
+            .applied_parameters
+            .emit_intermediate_solutions
+    );
+    assert!(
+        execution
+            .reproducibility
+            .applied_parameters
+            .deterministic_test_profile
+    );
+    assert_eq!(
+        execution.reproducibility.applied_options,
+        *request.options()
+    );
+    assert_eq!(execution.reproducibility.model_fingerprint_sha256.len(), 64);
+    assert_eq!(
+        execution
+            .reproducibility
+            .applied_parameters_sha256
+            .as_deref()
+            .map(str::len),
+        Some(64)
+    );
+    assert!(
+        execution
+            .reproducibility
+            .applied_parameters
+            .wall_time_milliseconds
+            .is_some()
+    );
+    assert!(execution.timings.worker_startup_milliseconds.is_some());
+    assert!(execution.timings.handshake_milliseconds.is_some());
+    assert!(execution.timings.solver_milliseconds.is_some());
+    assert!(execution.timings.protocol_decode_milliseconds.is_some());
+    assert!(execution.worker_statistics.is_some());
+    if std::env::var_os("EUTHETO_TEST_ORTOOLS_ARTIFACT").is_some() {
+        let statistics = execution
+            .worker_statistics
+            .as_ref()
+            .ok_or("missing production worker statistics")?;
+        assert!(statistics.wall_time_milliseconds.is_some());
+        assert!(statistics.deterministic_time_milliseconds.is_some());
+        assert!(statistics.conflicts.is_some());
+        assert!(statistics.branches.is_some());
+        assert!(statistics.binary_propagations.is_some());
+        assert!(statistics.integer_propagations.is_some());
+    }
     Ok(())
 }

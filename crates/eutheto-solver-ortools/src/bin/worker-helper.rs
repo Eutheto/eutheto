@@ -242,6 +242,9 @@ fn worker() -> Result<(), Box<dyn Error>> {
         })),
     };
     write_worker(&mut output, &terminal)?;
+    if handshake.core_version == "0.2.4" {
+        thread::sleep(Duration::from_millis(200));
+    }
     if handshake.core_version == "0.1.6" {
         write_worker(&mut output, &terminal)?;
     }

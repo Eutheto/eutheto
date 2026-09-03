@@ -66,6 +66,8 @@ pub enum CandidateProjectionVariable {
 pub struct TranslatedCpSatModel {
     cp_model_proto: Vec<u8>,
     maps: TranslationMaps,
+    translated_variable_count: u64,
+    translated_constraint_count: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +95,18 @@ impl TranslatedCpSatModel {
     #[must_use]
     pub fn cp_model_proto(&self) -> &[u8] {
         &self.cp_model_proto
+    }
+
+    /// Returns the number of scalar variables in the encoded CP-SAT model.
+    #[must_use]
+    pub fn translated_variable_count(&self) -> u64 {
+        self.translated_variable_count
+    }
+
+    /// Returns the number of constraints in the encoded CP-SAT model.
+    #[must_use]
+    pub fn translated_constraint_count(&self) -> u64 {
+        self.translated_constraint_count
     }
 
     /// Returns the CP-SAT index retained for a Boolean planning variable.
@@ -405,6 +419,11 @@ pub fn translate_supported_model(
         translate_constraints(problem, &mut model, &boolean_indices, &integer_indices, 0)?;
     translate_objective(problem, &objective_weights, &mut model, &integer_indices, 0)?;
 
+    let translated_variable_count = u64::try_from(model.variables.len())
+        .map_err(|_| TranslationError::VariableIndexOverflow)?;
+    let translated_constraint_count = u64::try_from(model.constraints.len())
+        .map_err(|_| TranslationError::ConstraintIndexOverflow)?;
+
     let maps = retain_translation_maps(
         problem,
         objective_weights,
@@ -417,6 +436,8 @@ pub fn translate_supported_model(
     Ok(TranslatedCpSatModel {
         cp_model_proto: model.encode_to_vec(),
         maps,
+        translated_variable_count,
+        translated_constraint_count,
     })
 }
 

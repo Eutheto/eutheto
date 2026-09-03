@@ -13,7 +13,7 @@ mod supply_chain;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -95,8 +95,16 @@ enum SolverCommand {
     BuildDesktop,
     /// Build the pinned Nix worker and atomically stage its Tauri sidecar.
     InstallFromNix,
-    /// Exercise the installed solver worker (not yet available).
-    Smoke,
+    /// Validate and handshake with one exact packaged worker/resource pair.
+    Smoke {
+        #[arg(long)]
+        executable: PathBuf,
+        #[arg(long)]
+        resource_root: PathBuf,
+        /// Trusted SHA-256 of the manifest embedded by the desktop build.
+        #[arg(long)]
+        manifest_sha256: String,
+    },
     /// Finalize a pristine target artifact from reviewed repository and build authorities.
     FinalizeArtifact {
         #[arg(long)]
@@ -241,9 +249,15 @@ fn run_solver(command: SolverCommand) -> Result<()> {
         SolverCommand::BuildNative => solver::build_native(&repository_root()?),
         SolverCommand::BuildDesktop => solver::build_desktop(&repository_root()?),
         SolverCommand::InstallFromNix => solver::install_from_nix(&repository_root()?),
-        SolverCommand::Smoke => unavailable_solver(
-            "smoke",
-            "the packaged worker launch smoke contract is implemented",
+        SolverCommand::Smoke {
+            executable,
+            resource_root,
+            manifest_sha256,
+        } => solver::smoke(
+            &repository_root()?,
+            &executable,
+            &resource_root,
+            &manifest_sha256,
         ),
     }
 }
@@ -253,8 +267,4 @@ fn repository_root() -> Result<PathBuf> {
         .parent()
         .map(Path::to_path_buf)
         .context("xtask manifest directory has no repository parent")
-}
-
-fn unavailable_solver(operation: &str, prerequisite: &str) -> Result<()> {
-    bail!("solver {operation} is unavailable until {prerequisite}")
 }

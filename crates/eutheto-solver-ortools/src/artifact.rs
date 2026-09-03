@@ -11,7 +11,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::{
     ExecutableIdentityError, ORTOOLS_ADAPTER_VERSION, ORTOOLS_VERSION, VerifiedExecutable,
-    VerifiedRuntimeFile, verify_path_and_digest,
+    VerifiedRuntimeFile, add_no_follow_flags, is_link_like, verify_path_and_digest,
 };
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -178,7 +178,7 @@ async fn verify_artifact_root(root: &Path) -> Result<(), BundledWorkerArtifactEr
     let metadata = tokio::fs::symlink_metadata(root)
         .await
         .map_err(|error| BundledWorkerArtifactError::Io(error.kind()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if is_link_like(&metadata) || !metadata.is_dir() {
         return Err(BundledWorkerArtifactError::InvalidRoot);
     }
     Ok(())
@@ -188,23 +188,28 @@ async fn verify_direct_regular_file(path: &Path) -> Result<(), BundledWorkerArti
     let metadata = tokio::fs::symlink_metadata(path)
         .await
         .map_err(|error| BundledWorkerArtifactError::Io(error.kind()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if is_link_like(&metadata) || !metadata.is_file() {
         return Err(BundledWorkerArtifactError::InvalidManifestFile);
     }
     Ok(())
 }
 
 async fn read_bounded_manifest(path: &Path) -> Result<Vec<u8>, BundledWorkerArtifactError> {
-    let file = tokio::fs::File::open(path)
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    add_no_follow_flags(&mut options);
+    let file = options
+        .open(path)
         .await
         .map_err(|error| BundledWorkerArtifactError::Io(error.kind()))?;
-    if file
+    let metadata = file
         .metadata()
         .await
-        .map_err(|error| BundledWorkerArtifactError::Io(error.kind()))?
-        .len()
-        > MAX_MANIFEST_BYTES
-    {
+        .map_err(|error| BundledWorkerArtifactError::Io(error.kind()))?;
+    if is_link_like(&metadata) || !metadata.is_file() {
+        return Err(BundledWorkerArtifactError::InvalidManifestFile);
+    }
+    if metadata.len() > MAX_MANIFEST_BYTES {
         return Err(BundledWorkerArtifactError::ManifestTooLarge);
     }
     let mut bytes = Vec::new();
@@ -283,7 +288,7 @@ async fn verify_no_symlink_components(
         let metadata = tokio::fs::symlink_metadata(&current)
             .await
             .map_err(|error| BundledWorkerArtifactError::Io(error.kind()))?;
-        if metadata.file_type().is_symlink() {
+        if is_link_like(&metadata) {
             return Err(BundledWorkerArtifactError::SymlinkComponent);
         }
     }

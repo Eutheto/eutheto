@@ -1,17 +1,23 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use eutheto_planning_ir::PlanningIrLimitsV1;
 use eutheto_protocol::wire::{
     Capability, Progress, ProgressKind, ResourceLimits, SolveParameters,
     SolveRequest as WorkerSolveRequest, worker_frame,
 };
-use eutheto_protocol::{CompletedSession, MAX_ORTOOLS_WORKER_THREADS, WorkerObservation};
-use eutheto_solver_api::{
-    BackendError, BackendOutputSink, BackendSolveFuture, BackendSolveOutcome,
-    BackendTerminationReason, CapabilityMatrix, CompatibilityLevel, CompatibilityReport,
-    RegistryError, SolveDispatchBudget, SolverBackend, SolverDescriptor, SolverRegistry, preflight,
+use eutheto_protocol::{
+    CompletedSession, MAX_ORTOOLS_WORKER_THREADS, WorkerObservation, checked_in_policy,
 };
-use eutheto_types::{ReproducibilityMode, SolveOptions, WorkerThreadPolicy};
+use eutheto_solver_api::{
+    BACKEND_STATISTIC_MAX_V1, BackendAppliedParameterEvidence, BackendError,
+    BackendExecutionEvidence, BackendModelCountEvidence, BackendOutputSink,
+    BackendReproducibilityEvidence, BackendSolveFuture, BackendSolveOutcome,
+    BackendTerminationReason, BackendTimingEvidence, BackendWorkerStatistics, CapabilityMatrix,
+    CompatibilityLevel, CompatibilityReport, RegistryError, SolveDispatchBudget, SolverBackend,
+    SolverDescriptor, SolverRegistry, preflight,
+};
+use eutheto_types::{DurationMillis, ReproducibilityMode, SolveOptions, WorkerThreadPolicy};
 use prost::bytes::Bytes;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -21,7 +27,7 @@ use crate::{
     ORTOOLS_ADAPTER_VERSION, ORTOOLS_VERSION, OrToolsDescriptorError, SafeStopReason,
     SessionCompletion, SessionFailure, SessionRequest, SupervisorError, TranslatedCpSatModel,
     VerifiedWorkerArtifact, WorkerIdentity, WorkerLimitKind, backend_started_progress,
-    bound_progress, candidate_progress, candidate_submission, normalize_terminal,
+    bound_progress, candidate_progress, candidate_submission, duration_millis, normalize_terminal,
     ortools_compatibility, ortools_descriptor, supervise_with_observer, translate_supported_model,
 };
 
@@ -96,11 +102,13 @@ impl OrToolsBackend {
             ));
         }
 
+        let translation_started = Instant::now();
         let translated = translate_supported_model(request.problem(), PlanningIrLimitsV1::DEFAULT)
             .map_err(|_| {
                 safe_backend_error("solver.ortools.translation", "The validated planning model could not be translated by the reviewed OR-Tools adapter.")
             })?;
-        let worker_request = build_worker_request(request, &translated)?;
+        let (worker_request, request_evidence) = build_worker_request(request, &translated)?;
+        let translation_milliseconds = duration_millis(translation_started.elapsed());
         let mut recorder = AdapterEvidenceRecorder::new(
             &translated,
             request.dispatch_budget().remaining_at_dispatch(),
@@ -128,10 +136,17 @@ impl OrToolsBackend {
         )
         .await;
 
-        let termination = match completion {
+        let execution_evidence = self.execution_evidence(
+            request,
+            &translated,
+            &request_evidence,
+            translation_milliseconds,
+            &completion,
+        )?;
+        let termination = match &completion {
             Ok(completion) => {
                 process_terminal_candidate(
-                    &completion,
+                    completion,
                     &translated,
                     request,
                     output,
@@ -139,9 +154,9 @@ impl OrToolsBackend {
                 )?;
                 normalized_termination(normalize_terminal(&completion.evidence))
             }
-            Err(failure) => failure_termination(&failure),
+            Err(failure) => failure_termination(failure),
         };
-        let evidence = recorder
+        let mut evidence = recorder
             .finish(request.dispatch_budget().elapsed_milliseconds())
             .map_err(|_| {
                 safe_backend_error(
@@ -149,12 +164,78 @@ impl OrToolsBackend {
                     "OR-Tools adapter evidence violated its parent-measured ordering contract.",
                 )
             })?;
+        evidence.execution = Some(execution_evidence);
         Ok(BackendSolveOutcome {
             backend_id: self.descriptor.id.clone(),
             model_hash: request.model_hash().to_owned(),
             solve_fingerprint: request.solve_fingerprint().to_owned(),
             termination,
             evidence,
+        })
+    }
+
+    fn execution_evidence(
+        &self,
+        request: &eutheto_solver_api::SolveRequest,
+        translated: &TranslatedCpSatModel,
+        request_evidence: &WorkerRequestEvidence,
+        translation_milliseconds: DurationMillis,
+        session: &Result<SessionCompletion, SessionFailure>,
+    ) -> Result<BackendExecutionEvidence, BackendError> {
+        let policy = checked_in_policy().map_err(|_| {
+            safe_backend_error(
+                "solver.ortools.protocol_policy",
+                "The checked-in worker protocol policy is invalid.",
+            )
+        })?;
+        let session_timings = match session {
+            Ok(completion) => Some(&completion.timings),
+            Err(failure) => failure.timings.as_ref(),
+        };
+        let translation_milliseconds = session_timings
+            .and_then(|value| value.request_dispatch_milliseconds)
+            .map_or(translation_milliseconds, |request_dispatch| {
+                DurationMillis::new(
+                    translation_milliseconds
+                        .value()
+                        .saturating_add(request_dispatch.value()),
+                )
+                .unwrap_or(DurationMillis::MAX)
+            });
+        let timings = BackendTimingEvidence {
+            translation_serialization_milliseconds: translation_milliseconds,
+            worker_startup_milliseconds: session_timings.map(|value| value.startup_milliseconds),
+            handshake_milliseconds: session_timings.map(|value| value.handshake_milliseconds),
+            solver_milliseconds: session_timings.and_then(|value| value.solver_milliseconds),
+            protocol_decode_milliseconds: session_timings
+                .map(|value| value.protocol_decode_milliseconds),
+        };
+        let (worker_statistics, applied_parameters_sha256) =
+            terminal_execution_evidence(session.as_ref().ok())?;
+        let mut applied_parameters = request_evidence.applied_parameters.clone();
+        applied_parameters.wall_time_milliseconds =
+            session_timings.and_then(|value| value.dispatched_wall_time_milliseconds);
+        Ok(BackendExecutionEvidence {
+            timings,
+            model_counts: BackendModelCountEvidence {
+                planning_variable_count: request.summary().variable_count,
+                planning_constraint_count: request.summary().constraint_count,
+                translated_variable_count: translated.translated_variable_count(),
+                translated_constraint_count: translated.translated_constraint_count(),
+            },
+            worker_statistics,
+            reproducibility: BackendReproducibilityEvidence {
+                backend_version: self.descriptor.version.clone(),
+                adapter_version: self.descriptor.adapter_version.clone(),
+                worker_version: WORKER_VERSION.to_owned(),
+                engine_version: ORTOOLS_VERSION.to_owned(),
+                protocol_major: policy.protocol_major(),
+                protocol_minor: policy.protocol_minor(),
+                applied_options: request.options().clone(),
+                applied_parameters,
+                model_fingerprint_sha256: request_evidence.model_fingerprint_sha256.clone(),
+                applied_parameters_sha256,
+            },
         })
     }
 }
@@ -202,10 +283,16 @@ pub fn registry_with_ortools(
     Ok(SolverRegistry::new(matrix, [backend])?)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorkerRequestEvidence {
+    applied_parameters: BackendAppliedParameterEvidence,
+    model_fingerprint_sha256: String,
+}
+
 fn build_worker_request(
     request: &eutheto_solver_api::SolveRequest,
     translated: &TranslatedCpSatModel,
-) -> Result<WorkerSolveRequest, BackendError> {
+) -> Result<(WorkerSolveRequest, WorkerRequestEvidence), BackendError> {
     let random_seed = i32::try_from(request.options().random_seed).map_err(|_| {
         safe_backend_error(
             "solver.ortools.random_seed",
@@ -213,6 +300,7 @@ fn build_worker_request(
         )
     })?;
     let deterministic = request.options().reproducibility == ReproducibilityMode::Deterministic;
+    let log_search_progress = !translated.objective_plan().levels.is_empty();
     let worker_threads = match request.options().worker_threads {
         WorkerThreadPolicy::Exact(count) => u32::from(count),
         WorkerThreadPolicy::Auto => std::thread::available_parallelism()
@@ -228,14 +316,14 @@ fn build_worker_request(
     )
     .unwrap_or(u64::MAX);
 
-    Ok(WorkerSolveRequest {
+    let worker_request = WorkerSolveRequest {
         request_id: request.solve_fingerprint().to_owned(),
         cp_model_proto: Bytes::copy_from_slice(translated.cp_model_proto()),
         parameters: Some(SolveParameters {
             random_seed: Some(random_seed),
             stop_after_first_feasible: Some(request.options().stop_after_first_feasible),
             emit_intermediate_solutions: Some(false),
-            log_search_progress: Some(!translated.objective_plan().levels.is_empty()),
+            log_search_progress: Some(log_search_progress),
             deterministic_test_profile: Some(deterministic),
         }),
         projections: translated.worker_projection_requests().to_vec(),
@@ -245,7 +333,101 @@ fn build_worker_request(
             worker_threads,
         }),
         model_fingerprint: Bytes::copy_from_slice(&model_fingerprint),
-    })
+    };
+    Ok((
+        worker_request,
+        WorkerRequestEvidence {
+            applied_parameters: BackendAppliedParameterEvidence {
+                wall_time_milliseconds: None,
+                memory_limit_bytes: None,
+                worker_threads,
+                random_seed,
+                stop_after_first_feasible: request.options().stop_after_first_feasible,
+                emit_intermediate_solutions: false,
+                log_search_progress,
+                deterministic_test_profile: deterministic,
+            },
+            model_fingerprint_sha256: encode_hex(&model_fingerprint),
+        },
+    ))
+}
+
+fn terminal_execution_evidence(
+    completion: Option<&SessionCompletion>,
+) -> Result<(Option<BackendWorkerStatistics>, Option<String>), BackendError> {
+    let Some(SessionCompletion {
+        evidence: CompletedSession::Solve(terminal),
+        ..
+    }) = completion
+    else {
+        return Ok((None, None));
+    };
+    let Some(worker_frame::Body::Finished(finished)) = &terminal.frame().body else {
+        return Ok((None, None));
+    };
+    if finished.applied_parameters_sha256.len() != 32 {
+        return Err(safe_backend_error(
+            "solver.ortools.parameters_hash",
+            "OR-Tools returned an invalid applied-parameter digest.",
+        ));
+    }
+    Ok((
+        Some(BackendWorkerStatistics {
+            wall_time_milliseconds: seconds_to_millis(finished.wall_time_seconds)?,
+            user_time_milliseconds: seconds_to_millis(finished.user_time_seconds)?,
+            deterministic_time_milliseconds: seconds_to_millis(finished.deterministic_time)?,
+            conflicts: checked_worker_counter(finished.conflicts)?,
+            branches: checked_worker_counter(finished.branches)?,
+            binary_propagations: checked_worker_counter(finished.binary_propagations)?,
+            integer_propagations: checked_worker_counter(finished.integer_propagations)?,
+        }),
+        Some(encode_hex(&finished.applied_parameters_sha256)),
+    ))
+}
+
+fn seconds_to_millis(value: Option<f64>) -> Result<Option<DurationMillis>, BackendError> {
+    value
+        .map(|seconds| {
+            let duration = Duration::try_from_secs_f64(seconds).map_err(|_| {
+                safe_backend_error(
+                    "solver.ortools.worker_timing",
+                    "OR-Tools returned an invalid native timing value.",
+                )
+            })?;
+            let milliseconds = u64::try_from(duration.as_millis()).map_err(|_| {
+                safe_backend_error(
+                    "solver.ortools.worker_timing",
+                    "OR-Tools returned an out-of-range native timing value.",
+                )
+            })?;
+            DurationMillis::new(milliseconds).map_err(|_| {
+                safe_backend_error(
+                    "solver.ortools.worker_timing",
+                    "OR-Tools returned an out-of-range native timing value.",
+                )
+            })
+        })
+        .transpose()
+}
+
+fn checked_worker_counter(value: Option<u64>) -> Result<Option<u64>, BackendError> {
+    if value.is_some_and(|count| count > BACKEND_STATISTIC_MAX_V1) {
+        return Err(safe_backend_error(
+            "solver.ortools.worker_statistics",
+            "OR-Tools returned an out-of-range native search counter.",
+        ));
+    }
+    Ok(value)
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn observe_worker(
