@@ -5,6 +5,7 @@ fuzz_toolchain := "nightly-2026-08-28"
 fuzz_dir := "crates/eutheto-import/fuzz"
 fuzz_artifacts := env_var_or_default("FUZZ_ARTIFACTS", ".cache/fuzz-artifacts")
 fuzz_corpus := env_var_or_default("FUZZ_CORPUS", ".cache/fuzz-corpus")
+benchmark_artifacts := env_var_or_default("EUTHETO_BENCHMARK_ARTIFACTS", ".cache/benchmarks")
 desktop_runtime := if os() == "linux" { "eutheto-desktop-runtime" } else { "" }
 
 # Show the canonical repository commands.
@@ -135,21 +136,25 @@ test: test-rust test-doc test-ui
 coverage:
     cargo llvm-cov nextest --workspace --locked
 
-# Evaluate the gated Nix OR-Tools worker derivation contract.
+# Build the pinned Nix OR-Tools worker artifact.
 worker-build-nix:
-    nix build --impure --expr 'let flake = builtins.getFlake (toString ./.); in flake.legacyPackages.${builtins.currentSystem}.ortools-worker-contract'
+    nix build .#ortools-worker
 
-# Build the native OR-Tools worker once its Phase-03 pin is approved.
+# Build and verify the approved native Windows x86_64 worker.
 worker-build-native:
     cargo xtask solver build-native
 
-# Install the Nix-built OR-Tools worker once its Phase-03 pin is approved.
+# Install the Nix-built worker once its manifest and license payload exist.
 worker-install-from-nix:
     cargo xtask solver install-from-nix
 
-# Smoke-test the OR-Tools worker once its Phase-03 pin is approved.
-worker-smoke:
-    cargo xtask solver smoke
+# Build an unsigned desktop package with one trusted bundled-worker handoff.
+worker-build-desktop:
+    cargo xtask solver build-desktop
+
+# Validate one manifest-bound packaged OR-Tools worker/resource pair through a trivial solve.
+worker-smoke executable resource_root manifest_sha256:
+    cargo xtask solver smoke --executable "{{ executable }}" --resource-root "{{ resource_root }}" --manifest-sha256 "{{ manifest_sha256 }}"
 
 # Run the real Phase-01 CLI status command.
 cli:
@@ -223,7 +228,7 @@ fuzz-check: fuzz-build
             exit 1
         fi
     done
-    targets=(scenario_envelope bundle migration_chain bundle_remap planning_ir integer_expression projection component_graph)
+    targets=(scenario_envelope bundle migration_chain bundle_remap planning_ir integer_expression projection component_graph worker_frame)
     if [[ "$scratch_corpus" == "$scratch_artifacts" || "$scratch_corpus" == "$scratch_artifacts/"* || "$scratch_artifacts" == "$scratch_corpus/"* ]]; then
         printf 'error: fuzz corpus and artifact scratch paths must not overlap\n' >&2
         exit 1
@@ -235,9 +240,27 @@ fuzz-check: fuzz-build
         env RUSTC="$FUZZ_RUSTC" RUSTDOC="$FUZZ_RUSTDOC" "$FUZZ_CARGO" fuzz run --fuzz-dir {{ fuzz_dir }} "$target" "$scratch_corpus/$target" -- -seed=0 -jobs=1 -workers=1 -timeout=5 -max_total_time=30 -rss_limit_mb=4096 -artifact_prefix="$scratch_artifacts/$target/"
     done
 
-# Run solver benchmarks after the Phase-03 benchmark corpus is approved.
+# Build the exact worker and emit raw Phase-03 microbenchmark evidence.
 bench:
-    {{ error("benchmarks are unavailable until Phase 03 approves the OR-Tools pin and a real primitive benchmark corpus") }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    artifact_root="$(nix build --no-link --print-out-paths .#ortools-worker)"
+    if [[ ! -d "$artifact_root" ]]; then
+        printf 'error: expected one native OR-Tools worker artifact, got %q\n' "$artifact_root" >&2
+        exit 1
+    fi
+    manifest="$artifact_root/solver-manifest.json"
+    digest_line="$(sha256sum "$manifest")"
+    manifest_sha256="${digest_line%% *}"
+    output_root="$(realpath -m "{{ benchmark_artifacts }}")"
+    mkdir -p "$output_root"
+    output="$output_root/phase03-primitives.json"
+    cargo run --locked --release --package eutheto-phase03-benchmark -- \
+        --artifact-root "$artifact_root" \
+        --manifest-sha256 "$manifest_sha256" \
+        --corpus benchmarks/corpus/solver/phase03-primitives.json \
+        --output "$output"
+    cat "$output"
 
 # Build and exercise real Linux desktop persistence through WebKit WebDriver.
 e2e:

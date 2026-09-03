@@ -105,6 +105,7 @@ The development shell redirects writable tool caches into the checkout:
 |---|---|
 | Cargo registry/config | `.cache/cargo` |
 | Cargo build output | `.cache/cargo-target` |
+| Native Windows worker output | `.cache/ortools-native/windows-x86_64/current` |
 | Corepack | `.cache/corepack` |
 | npm | `.cache/npm` |
 | pnpm store/home | `.cache/pnpm/store` and `.cache/pnpm/home` |
@@ -116,7 +117,7 @@ No project binary cache is claimed in Phase 00. Nix first uses the substituters 
 
 ## Common commands
 
-These recipes exist in Phase 00:
+The repository command set includes:
 
 ```console
 just fmt-check
@@ -131,12 +132,14 @@ just generate-check
 just licenses
 just sbom
 just nix-check
+just worker-build-nix
+just worker-build-native
 just check
 ```
 
 `just check` calls the non-mutating `generate-check` recipe, which validates the existing checked-in generated outputs, including license and SBOM files, without regenerating them. Use `just generate` only after changing an authoritative generator input; generated files are never hand-edited. Run `just licenses` or `just sbom` when you explicitly intend to regenerate the corresponding supply-chain outputs. The optional `just test-rust-nextest` and `just coverage` recipes require the full shell; the default `just test-rust` recipe does not.
 
-The following recipe families are present but fail clearly while their named prerequisite is deferred: native/Nix worker build, install, and smoke require the approved Phase-03 OR-Tools/protobuf contract; packaged E2E and release preflight require Phase-11 packaging/release inputs. Do not treat those expected failures as platform support or release evidence.
+`just worker-build-nix` builds the approved source contract on x86_64 Linux and x86_64/aarch64 macOS. `just worker-build-native` requires native Windows x86_64 plus an activated x64 Visual Studio developer environment; it performs the equivalent fixed-source MSVC/Ninja build with the dynamic `MultiThreadedDLL` runtime required across the shared-Protobuf boundary, copies the transitively imported app-local x64 MSVC runtime files, finalizes the exact license/NOTICE/SPDX/manifest payload, and replaces `.cache/ortools-native/windows-x86_64/current` only after staging validation while preserving the last-good result on earlier failure. Both commands prove only their buildable worker artifact, native tests, runtime-dependency inspection, installed EOF smoke, and build-level evidence payload. Manifest-validated installation, packaged E2E, backend availability, and release preflight still fail closed until their later work packages.
 
 ## Core-only route
 

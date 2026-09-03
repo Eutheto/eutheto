@@ -53,6 +53,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `cfb` | `0.7.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cfg-expr` | `0.15.8` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `cfg-if` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `cfg_aliases` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `chrono` | `0.4.45` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `clap` | `4.6.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `clap_builder` | `4.6.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -122,6 +123,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `foreign-types-macros` | `0.2.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `foreign-types-shared` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `form_urlencoded` | `1.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `futures` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `futures-channel` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `futures-core` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `futures-executor` | `0.3.34` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -227,6 +229,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `ndk` | `0.9.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `ndk-sys` | `0.6.0+11769913` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `new_debug_unreachable` | `1.0.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `nix` | `0.31.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `num-conv` | `0.2.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `num-traits` | `0.2.19` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `num_enum` | `0.7.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -280,6 +283,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `proc-macro-error` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `proc-macro-error-attr` | `1.0.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `proc-macro2` | `1.0.107` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `process-wrap` | `10.0.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `proptest` | `1.11.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `prost` | `0.14.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `prost-build` | `0.14.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -366,7 +370,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `tauri-macros` | `2.6.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tauri-plugin` | `2.6.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tauri-plugin-dialog` | `2.7.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
-| cargo | `tauri-plugin-fs` | `2.5.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `tauri-plugin-fs` | `2.5.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tauri-runtime` | `2.11.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tauri-runtime-wry` | `2.11.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `tauri-utils` | `2.9.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -450,15 +454,19 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `winapi-x86_64-pc-windows-gnu` | `0.4.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `window-vibrancy` | `0.6.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows` | `0.61.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `windows` | `0.62.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-collections` | `0.2.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `windows-collections` | `0.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-core` | `0.61.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-core` | `0.62.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-future` | `0.2.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `windows-future` | `0.3.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-implement` | `0.60.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-interface` | `0.59.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-link` | `0.1.3` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-link` | `0.2.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-numerics` | `0.2.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `windows-numerics` | `0.3.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-result` | `0.3.4` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-result` | `0.4.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-strings` | `0.4.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -471,6 +479,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | cargo | `windows-targets` | `0.52.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-targets` | `0.53.5` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-threading` | `0.1.0` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
+| cargo | `windows-threading` | `0.2.1` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows-version` | `0.1.7` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows_aarch64_gnullvm` | `0.42.2` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
 | cargo | `windows_aarch64_gnullvm` | `0.52.6` | `NOASSERTION` | `registry+https://github.com/rust-lang/crates.io-index` |
@@ -777,4 +786,4 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 
 ## Review state
 
-765 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.
+774 locked dependency package(s) have `NOASSERTION` because no exact conclusion is present in the reviewed static input. Generation records those unresolved facts rather than guessing. A Phase-11 release remains blocked until every shipped component has a reviewed conclusion, required attribution, and corresponding license text.

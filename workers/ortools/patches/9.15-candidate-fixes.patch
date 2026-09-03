@@ -1,0 +1,75 @@
+diff --git a/ortools/linear_solver/wrappers/model_builder_helper.cc b/ortools/linear_solver/wrappers/model_builder_helper.cc
+--- a/ortools/linear_solver/wrappers/model_builder_helper.cc
++++ b/ortools/linear_solver/wrappers/model_builder_helper.cc
+@@ -30,12 +30,14 @@
+ #include "absl/strings/str_join.h"
+ #include "ortools/base/helpers.h"
+ #include "ortools/base/options.h"
++#if defined(USE_GUROBI)
+ #include "ortools/linear_solver/gurobi_util.h"
++#include "ortools/linear_solver/proto_solver/gurobi_proto_solver.h"
++#endif  // defined(USE_GUROBI)
+ #include "ortools/linear_solver/linear_solver.h"
+ #include "ortools/linear_solver/linear_solver.pb.h"
+ #include "ortools/linear_solver/model_exporter.h"
+ #include "ortools/linear_solver/proto_solver/glop_proto_solver.h"
+-#include "ortools/linear_solver/proto_solver/gurobi_proto_solver.h"
+ #include "ortools/linear_solver/proto_solver/sat_proto_solver.h"
+ #include "ortools/linear_solver/solve_mp_model.h"
+ #if defined(USE_SCIP)
+@@ -550,10 +552,12 @@ bool ModelSolverHelper::SolverIsSupported() const {
+     return true;
+   }
+ #endif  // USE_HIGHS
++#if defined(USE_GUROBI)
+   if (solver_type_.value() ==
+           MPModelRequest::GUROBI_MIXED_INTEGER_PROGRAMMING ||
+       solver_type_.value() == MPModelRequest::GUROBI_LINEAR_PROGRAMMING) {
+     return GurobiIsCorrectlyInstalled();
+   }
++#endif  // defined(USE_GUROBI)
+   return false;
+ }
+@@ -607,5 +611,6 @@ void ModelSolverHelper::Solve(const ModelBuilderHelper& model) {
+     }
+ #endif  // defined(USE_PDLP)
++#if defined(USE_GUROBI)
+     case MPModelRequest::
+         GUROBI_LINEAR_PROGRAMMING:  // ABSL_FALLTHROUGH_INTENDED
+     case MPModelRequest::GUROBI_MIXED_INTEGER_PROGRAMMING: {
+@@ -616,6 +621,7 @@ void ModelSolverHelper::Solve(const ModelBuilderHelper& model) {
+       }
+       break;
+     }
++#endif  // defined(USE_GUROBI)
+ #if defined(USE_HIGHS)
+     case MPModelRequest::HIGHS_LINEAR_PROGRAMMING:  // ABSL_FALLTHROUGH_INTENDED
+     case MPModelRequest::HIGHS_MIXED_INTEGER_PROGRAMMING: {
+diff --git a/patches/bzip2.patch b/patches/bzip2.patch
+--- a/patches/bzip2.patch
++++ b/patches/bzip2.patch
+@@ -172,3 +172,11 @@ index c4b0b6e..ee39341 100644
+  if(ENABLE_APP AND Python3_FOUND)
+      enable_testing()
+      add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND})
++
++diff --git a/libbz2.def b/libbz2.def
++--- a/libbz2.def
+++++ b/libbz2.def
++@@ -1,2 +1,2 @@
++-LIBRARY			bz2-1
+++LIBRARY			bz2
++ EXPORTS
+diff --git a/cmake/dependencies/CMakeLists.txt b/cmake/dependencies/CMakeLists.txt
+--- a/cmake/dependencies/CMakeLists.txt
++++ b/cmake/dependencies/CMakeLists.txt
+@@ -89,7 +89,7 @@ if(BUILD_BZip2)
+   FetchContent_Declare(
+     BZip2
+     GIT_REPOSITORY "https://gitlab.com/bzip2/bzip2.git"
+-    GIT_TAG "master"
++    GIT_TAG "66c46b8c9436613fd81bc5d03f63a61933a4dcc3"
+     # GIT_TAG "bzip2-1.0.8" # CMake support not available
+-    GIT_SHALLOW TRUE
++    GIT_SHALLOW FALSE
+     UPDATE_COMMAND git reset --hard

@@ -100,6 +100,16 @@ impl SolveDispatchBudget {
         self.backend_limit
     }
 
+    /// Parent-measured elapsed time since backend dispatch.
+    #[must_use]
+    pub fn elapsed_milliseconds(&self) -> DurationMillis {
+        let remaining = self.parent_view.snapshot().remaining_milliseconds;
+        match DurationMillis::new(self.elapsed_milliseconds_value(remaining)) {
+            Ok(elapsed) => elapsed,
+            Err(_) => DurationMillis::MAX,
+        }
+    }
+
     /// Distinguishes cancellation, the parent deadline, and a shorter backend cap.
     #[must_use]
     pub fn stop_reason(&self) -> Option<BackendStopReason> {
@@ -108,7 +118,7 @@ impl SolveDispatchBudget {
             Some(BackendStopReason::Cancelled)
         } else if snapshot.expired || snapshot.remaining_milliseconds == DurationMillis::ZERO {
             Some(BackendStopReason::DeadlineExceeded)
-        } else if self.elapsed_milliseconds(snapshot.remaining_milliseconds)
+        } else if self.elapsed_milliseconds_value(snapshot.remaining_milliseconds)
             >= self.backend_limit.value()
         {
             Some(BackendStopReason::BackendLimitExceeded)
@@ -121,11 +131,11 @@ impl SolveDispatchBudget {
     #[must_use]
     pub fn remaining_backend_duration(&self) -> Duration {
         let remaining = self.parent_view.snapshot().remaining_milliseconds;
-        let elapsed = self.elapsed_milliseconds(remaining);
+        let elapsed = self.elapsed_milliseconds_value(remaining);
         Duration::from_millis(self.backend_limit.value().saturating_sub(elapsed))
     }
 
-    fn elapsed_milliseconds(&self, remaining: DurationMillis) -> u64 {
+    fn elapsed_milliseconds_value(&self, remaining: DurationMillis) -> u64 {
         self.remaining_at_dispatch
             .value()
             .saturating_sub(remaining.value())
@@ -455,6 +465,94 @@ pub enum BackendTerminationReason {
     Failed,
 }
 
+/// Parent-measured adapter and worker lifecycle spans for one backend invocation.
+///
+/// Worker-native solver timings are kept separately because they come from an untrusted backend
+/// clock and must not be used to enforce the parent deadline.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendTimingEvidence {
+    /// Planning-IR translation plus bounded request framing and streaming.
+    pub translation_serialization_milliseconds: DurationMillis,
+    pub worker_startup_milliseconds: Option<DurationMillis>,
+    pub handshake_milliseconds: Option<DurationMillis>,
+    pub solver_milliseconds: Option<DurationMillis>,
+    pub protocol_decode_milliseconds: Option<DurationMillis>,
+}
+
+/// Redacted Planning-IR and translated-backend model sizes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendModelCountEvidence {
+    pub planning_variable_count: u64,
+    pub planning_constraint_count: u64,
+    pub translated_variable_count: u64,
+    pub translated_constraint_count: u64,
+}
+
+/// Largest worker statistic exactly representable by every JSON/TypeScript client.
+pub const BACKEND_STATISTIC_MAX_V1: u64 = 9_007_199_254_740_991;
+
+/// Bounded worker-native timing and search counters.
+///
+/// These values are diagnostic quality evidence only. They are not authoritative scores, proof,
+/// or parent-deadline measurements.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendWorkerStatistics {
+    pub wall_time_milliseconds: Option<DurationMillis>,
+    pub user_time_milliseconds: Option<DurationMillis>,
+    pub deterministic_time_milliseconds: Option<DurationMillis>,
+    pub conflicts: Option<u64>,
+    pub branches: Option<u64>,
+    pub binary_propagations: Option<u64>,
+    pub integer_propagations: Option<u64>,
+}
+
+/// Fully resolved worker allowlist values for one dispatch.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendAppliedParameterEvidence {
+    pub wall_time_milliseconds: Option<DurationMillis>,
+    pub memory_limit_bytes: Option<u64>,
+    pub worker_threads: u32,
+    pub random_seed: i32,
+    pub stop_after_first_feasible: bool,
+    pub emit_intermediate_solutions: bool,
+    pub log_search_progress: bool,
+    pub deterministic_test_profile: bool,
+}
+
+/// Complete reproducibility inputs and corroborated worker hashes for one invocation.
+///
+/// `applied_parameters_sha256` is absent when the worker failed before a corroborated terminal
+/// parameters hash. Candidate assignments and domain acceptance never enter this metadata.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendReproducibilityEvidence {
+    pub backend_version: String,
+    pub adapter_version: String,
+    pub worker_version: String,
+    pub engine_version: String,
+    pub protocol_major: u32,
+    pub protocol_minor: u32,
+    pub applied_options: SolveOptions,
+    pub applied_parameters: BackendAppliedParameterEvidence,
+    pub model_fingerprint_sha256: String,
+    pub applied_parameters_sha256: Option<String>,
+}
+
+/// Backend-specific execution evidence exposed without granting result authority.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendExecutionEvidence {
+    pub timings: BackendTimingEvidence,
+    pub model_counts: BackendModelCountEvidence,
+    pub worker_statistics: Option<BackendWorkerStatistics>,
+    pub reproducibility: BackendReproducibilityEvidence,
+}
+
 /// Bounded timing/evidence returned by one backend invocation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -462,9 +560,14 @@ pub struct BackendTerminationEvidence {
     pub remaining_at_dispatch_milliseconds: DurationMillis,
     pub backend_limit_milliseconds: DurationMillis,
     pub elapsed_milliseconds: DurationMillis,
+    /// Parent-observed time of the first bounded backend candidate.
+    ///
+    /// This is pre-verification evidence and never means the candidate was accepted.
     pub first_incumbent_milliseconds: Option<DurationMillis>,
     pub objective: Option<BackendObjectiveEvidence>,
     pub evidence_refs: Vec<BackendEvidenceRef>,
+    /// Optional adapter-specific operational evidence; it conveys no solver-result authority.
+    pub execution: Option<BackendExecutionEvidence>,
 }
 
 /// Backend outcome before projection or independent verification.

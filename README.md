@@ -4,7 +4,7 @@
 
 The planned platform will validate those requirements, translate them into a solver-neutral planning model, route the model to a compatible backend, independently verify every candidate against the original domain meaning, and present the result in human language.
 
-> **Project status:** [Phases 00–02](docs/roadmap/README.md) have established reproducible tooling, the core application shell and persistence, domain-pack contracts, solver-neutral planning IR, and solver/backend contracts. [Phase 03](docs/roadmap/03-ortools-worker-vertical-slice.md), the isolated OR-Tools worker vertical slice, is the active scope; production domains, independently verified product results, and release artifacts remain unimplemented.
+> **Project status:** [Phases 00–03](docs/roadmap/README.md) have established reproducible tooling, the core application shell and persistence, domain-pack contracts, solver-neutral planning IR, solver/backend contracts, and the isolated bundled OR-Tools worker. [Phase 04](docs/roadmap/04-independent-verifier-and-explanations.md), independent verification and explanation evidence, is the active scope; production domains, accepted product results, and release artifacts remain unimplemented.
 
 ## Product direction
 
@@ -154,7 +154,7 @@ checked-in generated and protocol artifacts, while `just licenses` and
 
 Read [`AGENTS.md`](AGENTS.md) before changing the repository. It defines source authority, phase discipline, architecture boundaries, generated-code rules, security and privacy constraints, and verification expectations for human and automated contributors.
 
-Implementation now proceeds through Phase 03. Changes must preserve the
+Implementation now proceeds through Phase 04. Changes must preserve the
 applicable roadmap issue IDs and exit gates and avoid claiming later-phase
 production behavior. Contributions should prefer complete vertical paths over
 mocks, stubs, or speculative infrastructure.

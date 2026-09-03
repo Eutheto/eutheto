@@ -4,9 +4,9 @@
 
 ## Current support status
 
-`eutheto` has entered Phase 03, the isolated OR-Tools worker vertical slice. There is no public product release and therefore no supported release series, security-update branch, solver service, updater, hosted account system, or production security response commitment. Source on the current development branch is unreleased work, not a supported binary.
+`eutheto` has entered Phase 04, the independent verifier and explanation foundation. There is no public product release and therefore no supported release series, security-update branch, solver service, updater, hosted account system, or production security response commitment. Source on the current development branch is unreleased work, not a supported binary.
 
-Security and data integrity remain release constraints now. The [roadmap index](docs/roadmap/README.md), [active Phase 03 document](docs/roadmap/03-ortools-worker-vertical-slice.md), and approved security/data-integrity ADRs govern work in the authority order described there. Phase gates cannot be waived by labeling incomplete behavior experimental.
+Security and data integrity remain release constraints now. The [roadmap index](docs/roadmap/README.md), [active Phase 04 document](docs/roadmap/04-independent-verifier-and-explanations.md), and approved security/data-integrity ADRs govern work in the authority order described there. Phase gates cannot be waived by labeling incomplete behavior experimental.
 
 When releases become supported, this section must list exact supported versions, update channels, and end-of-support rules. Until then, do not infer support from a tag, artifact, branch, package name, or local build.
 

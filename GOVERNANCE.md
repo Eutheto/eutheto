@@ -4,9 +4,9 @@
 
 ## Purpose and present state
 
-This document defines how repository changes and project decisions are reviewed. `eutheto` has entered Phase 03, the isolated OR-Tools worker vertical slice. Governance must not be used to waive phase prerequisites, security invariants, compatibility obligations, or exit evidence, and it must not imply that a later product capability or a public release exists.
+This document defines how repository changes and project decisions are reviewed. `eutheto` has entered Phase 04, the independent verifier and explanation foundation. Governance must not be used to waive phase prerequisites, security invariants, compatibility obligations, or exit evidence, and it must not imply that a later product capability or a public release exists.
 
-The [roadmap index](docs/roadmap/README.md) and [active Phase 03 document](docs/roadmap/03-ortools-worker-vertical-slice.md) are binding. The authority order is:
+The [roadmap index](docs/roadmap/README.md) and [active Phase 04 document](docs/roadmap/04-independent-verifier-and-explanations.md) are binding. The authority order is:
 
 1. approved security and data-integrity ADRs;
 2. current schemas and conformance tests;

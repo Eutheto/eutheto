@@ -11,7 +11,10 @@ pub use decision::*;
 pub use execution::*;
 pub use profile::*;
 
-/// Constructs the safe Phase-02 production registry. Its generated backend set is empty.
+/// Constructs the production metadata registry before platform artifact discovery.
+///
+/// The generated matrix remains visible, while runnable backends are injected only
+/// after their packaged artifacts pass startup validation.
 ///
 /// # Errors
 /// Returns a registry error if the generated support-matrix contract is inconsistent.

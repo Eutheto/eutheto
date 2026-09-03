@@ -178,14 +178,196 @@
       "gate": "unconditional"
     }
   ],
-  "registeredBackends": [],
-  "deferredCandidateGates": [
+  "registeredBackends": [
     {
-      "backendId": "solver.ortools-cp-sat",
-      "candidateVersion": "9.15",
-      "claimStatus": "unclaimed",
-      "owningPhase": 3
-    },
+      "id": "solver.ortools-cp-sat",
+      "version": "9.15.6755",
+      "adapterVersion": "0.1.0",
+      "support": {
+        "ir.absolute-difference": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.all-different": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.allowed-table": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.assumptions": {
+          "support": "unsupported",
+          "reason": "Assumption translation is disabled because OR-Tools 9.15 may return incomplete infeasibility-assumption indexes (upstream issue #5141).",
+          "remediation": "Remove assumptions or choose a backend with tested assumption support.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.at-most-one": {
+          "support": "supported",
+          "fixtureId": "translation::tests::one_of_constraints_preserve_empty_and_literal_semantics"
+        },
+        "ir.bool-and": {
+          "support": "supported",
+          "fixtureId": "translation::tests::boolean_relations_have_exact_clause_encodings"
+        },
+        "ir.bool-or": {
+          "support": "supported",
+          "fixtureId": "translation::tests::bool_or_clauses_preserve_exact_cp_sat_literal_semantics"
+        },
+        "ir.cardinality-range": {
+          "support": "supported",
+          "fixtureId": "translation::tests::cardinality_ranges_shift_negative_literals_and_combine_variables"
+        },
+        "ir.cumulative": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.element": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.equality": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.equivalence": {
+          "support": "supported",
+          "fixtureId": "translation::tests::boolean_relations_have_exact_clause_encodings"
+        },
+        "ir.exactly-one": {
+          "support": "supported",
+          "fixtureId": "translation::tests::one_of_constraints_preserve_empty_and_literal_semantics"
+        },
+        "ir.forbidden-table": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.implication": {
+          "support": "supported",
+          "fixtureId": "translation::tests::boolean_relations_have_exact_clause_encodings"
+        },
+        "ir.integer-linear": {
+          "support": "supported",
+          "fixtureId": "translation::tests::integer_linear_comparisons_preserve_constants_coefficients_and_bounds"
+        },
+        "ir.maximum": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.minimum": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.multipass-objectives": {
+          "support": "unsupported",
+          "reason": "The Phase 03 adapter supports only objectives with a proven exact scalarization.",
+          "remediation": "Use an exactly scalarizable objective or choose a backend with multipass support.",
+          "fixtureId": "translation::tests::objective_requiring_multipass_is_rejected_before_dispatch"
+        },
+        "ir.no-overlap": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.objective-penalty": {
+          "support": "supported",
+          "fixtureId": "translation::tests::bounded_objective_terms_preserve_coefficients_constants_and_kinds"
+        },
+        "ir.objective-reward": {
+          "support": "supported",
+          "fixtureId": "translation::tests::bounded_objective_terms_preserve_coefficients_constants_and_kinds"
+        },
+        "ir.optional-interval": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.reified-linear-comparison": {
+          "support": "unsupported",
+          "reason": "The Phase 03 OR-Tools adapter does not translate this planning-IR primitive.",
+          "remediation": "Reformulate the model using supported primitives or choose a compatible backend.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "ir.scalarized-objectives": {
+          "support": "supported",
+          "fixtureId": "translation::tests::exact_lexicographic_objective_normalizes_mixed_directions"
+        },
+        "projection.absent": {
+          "support": "supported",
+          "fixtureId": "translation::tests::candidate_projection_requests_include_only_projection_and_objective_inputs"
+        },
+        "projection.boolean": {
+          "support": "supported",
+          "fixtureId": "candidate::tests::decodes_typed_values_and_recomputes_exact_objectives"
+        },
+        "projection.integer": {
+          "support": "supported",
+          "fixtureId": "candidate::tests::decodes_typed_values_and_recomputes_exact_objectives"
+        },
+        "projection.interval": {
+          "support": "unsupported",
+          "reason": "The adapter cannot reconstruct general interval projections from the current worker protocol.",
+          "remediation": "Request scalar projections or choose a backend with interval projection support.",
+          "fixtureId": "translation::tests::matrix_primitive_claims_match_translation_preflight_gate"
+        },
+        "solve.cancellation": {
+          "support": "supported",
+          "fixtureId": "supervisor::deadline_and_explicit_cancellation_remain_distinct"
+        },
+        "solve.deterministic-mode": {
+          "support": "supported",
+          "fixtureId": "workers/ortools/tests/native_tests.cc::TestRealSolveOrderingAndMapping"
+        },
+        "solve.infeasibility-evidence": {
+          "support": "unsupported",
+          "reason": "Infeasibility evidence is disabled with OR-Tools 9.15 because assumption indexes may be incomplete (upstream issue #5141).",
+          "remediation": "Solve without explanations or choose a backend with tested infeasibility evidence.",
+          "fixtureId": "compatibility::tests::report_accepts_only_the_exact_advertised_phase03_surface"
+        },
+        "solve.intermediate-candidates": {
+          "support": "unsupported",
+          "reason": "The production adapter does not expose intermediate candidates through the shared backend contract.",
+          "remediation": "Disable intermediate-solution collection.",
+          "fixtureId": "compatibility::tests::report_accepts_only_the_exact_advertised_phase03_surface"
+        },
+        "solve.proof-and-bounds": {
+          "support": "degraded",
+          "restrictionId": "single-objective-level-bound",
+          "reason": "Exact bound progress is available only for a single objective level; a scalar bound cannot reconstruct a multi-level lexicographic vector.",
+          "remediation": "Use one objective level or choose a backend with exact multi-level bound evidence.",
+          "fixtureId": "progress::tests::bound_progress_emits_only_exact_single_level_evidence"
+        },
+        "solve.resource-limits": {
+          "support": "degraded",
+          "restrictionId": "wall-time-and-worker-count-only",
+          "reason": "Wall-clock and worker-thread limits are enforced, but process-memory and candidate-count limits are not implemented.",
+          "remediation": "Leave memoryLimitBytes and solutionLimit unset or choose a backend that enforces them.",
+          "fixtureId": "compatibility::tests::report_accepts_only_the_exact_advertised_phase03_surface"
+        }
+      }
+    }
+  ],
+  "deferredCandidateGates": [
     {
       "backendId": "solver.pumpkin",
       "candidateVersion": "0.5.0",

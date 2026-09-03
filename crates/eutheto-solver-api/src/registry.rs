@@ -15,9 +15,9 @@ impl SolverRegistry {
     ///
     /// # Errors
     ///
-    /// Returns an error if a backend descriptor is invalid, a backend ID is duplicated, a
-    /// descriptor disagrees with the support matrix, or the registered and production backend
-    /// sets differ.
+    /// Returns an error if a backend descriptor is invalid, a backend ID is duplicated, or a
+    /// supplied descriptor disagrees with the support matrix. Production matrix columns may be
+    /// unavailable in a particular runtime until their packaged artifacts pass startup checks.
     pub fn new(
         matrix: CapabilityMatrix,
         backends: impl IntoIterator<Item = Arc<dyn SolverBackend>>,
@@ -39,7 +39,7 @@ impl SolverRegistry {
         }
         let matrix_ids: Vec<_> = matrix.production_backend_ids().cloned().collect();
         let registered_ids: Vec<_> = registered.keys().cloned().collect();
-        if matrix_ids != registered_ids {
+        if !registered_ids.iter().all(|id| matrix_ids.contains(id)) {
             return Err(RegistryError::RegistryMatrixSetMismatch);
         }
         Ok(Self {
@@ -48,12 +48,11 @@ impl SolverRegistry {
         })
     }
 
-    /// Phase-02 production registry. Generated production columns are authoritative and empty.
+    /// Production registry before platform artifact discovery.
     ///
     /// # Errors
     ///
-    /// Returns an error if the generated support matrix is invalid or its production backend set
-    /// cannot form a valid registry.
+    /// Returns an error if the generated support matrix is invalid.
     pub fn production() -> Result<Self, RegistryError> {
         let matrix = CapabilityMatrix::generated()
             .map_err(|error| RegistryError::MatrixMismatch(error.to_string()))?;

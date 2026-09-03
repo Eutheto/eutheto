@@ -95,6 +95,7 @@
         "crates/eutheto-solver-api",
         "crates/eutheto-solver-router",
         "crates/eutheto-protocol",
+        "crates/eutheto-solver-ortools",
         "crates/eutheto-core",
         "crates/eutheto-store",
         "crates/eutheto-command",
@@ -102,6 +103,7 @@
         "crates/eutheto-import",
         "crates/eutheto-cli",
         "apps/desktop/src-tauri",
+        "benchmarks/runner",
         "xtask",
     ]
     assert cargo["workspace"]["package"]["rust-version"] == "1.97.1"
@@ -279,7 +281,7 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 15 and
+      (.workspace_members | length) == 17 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
@@ -289,9 +291,11 @@
         "eutheto-domain-ir",
         "eutheto-export",
         "eutheto-import",
+        "eutheto-phase03-benchmark",
         "eutheto-planning-ir",
         "eutheto-protocol",
         "eutheto-solver-api",
+        "eutheto-solver-ortools",
         "eutheto-solver-router",
         "eutheto-store",
         "eutheto-types",

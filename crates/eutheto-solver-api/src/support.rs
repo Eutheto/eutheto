@@ -1,3 +1,4 @@
+use crate::generated_support_matrix::PRODUCTION_SUPPORT_CELLS;
 use crate::{
     DEFERRED_BACKEND_CANDIDATES, PRODUCTION_BACKENDS, SUPPORT_FEATURES,
     SUPPORT_MATRIX_IR_SCHEMA_VERSION, SUPPORT_MATRIX_SCHEMA_VERSION, SolverCapabilities,
@@ -370,7 +371,7 @@ impl CapabilityMatrix {
         })
     }
 
-    /// Loads the checked-in generated constants. Production has no backend columns in Phase 02.
+    /// Loads the checked-in generated constants, including every complete production column.
     ///
     /// # Errors
     ///
@@ -387,14 +388,53 @@ impl CapabilityMatrix {
                 })
             })
             .collect::<Result<Vec<_>, SupportMatrixError>>()?;
+        let production_backend_ids = PRODUCTION_BACKENDS
+            .iter()
+            .map(|(id, ..)| *id)
+            .collect::<BTreeSet<_>>();
+        if let Some((backend_id, ..)) = PRODUCTION_SUPPORT_CELLS
+            .iter()
+            .find(|(backend_id, ..)| !production_backend_ids.contains(backend_id))
+        {
+            return Err(SupportMatrixError::OrphanGeneratedCell(
+                (*backend_id).to_owned(),
+            ));
+        }
         let mut columns = Vec::new();
         for (id, version, adapter_version) in PRODUCTION_BACKENDS {
+            let cells = PRODUCTION_SUPPORT_CELLS
+                .iter()
+                .filter(|(backend_id, ..)| backend_id == id)
+                .map(
+                    |(_, feature_id, level, restriction_id, reason, remediation, fixture_id)| {
+                        let feature_id = SupportFeatureId::new(*feature_id)?;
+                        let cell = match *level {
+                            "supported" => SupportCell::Supported {
+                                fixture_id: (*fixture_id).to_owned(),
+                            },
+                            "degraded" => SupportCell::Degraded {
+                                restriction_id: (*restriction_id).to_owned(),
+                                reason: (*reason).to_owned(),
+                                remediation: (*remediation).to_owned(),
+                                fixture_id: (*fixture_id).to_owned(),
+                            },
+                            "unsupported" => SupportCell::Unsupported {
+                                reason: (*reason).to_owned(),
+                                remediation: (*remediation).to_owned(),
+                                fixture_id: (*fixture_id).to_owned(),
+                            },
+                            _ => return Err(SupportMatrixError::InvalidCell(feature_id)),
+                        };
+                        Ok((feature_id, cell))
+                    },
+                )
+                .collect::<Result<Vec<_>, SupportMatrixError>>()?;
             columns.push(BackendSupportColumn {
                 backend_id: BackendId::new(id)
                     .map_err(|_| SupportMatrixError::InvalidBackendId((*id).to_owned()))?,
                 backend_version: (*version).to_owned(),
                 adapter_version: (*adapter_version).to_owned(),
-                cells: Vec::new(),
+                cells,
             });
         }
         let deferred_candidates = DEFERRED_BACKEND_CANDIDATES
@@ -524,6 +564,39 @@ impl CapabilityMatrix {
         }
     }
 
+    /// Returns the exact capability sets derived from one authoritative backend column.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend has no production matrix column.
+    pub fn backend_capabilities(
+        &self,
+        backend: &BackendId,
+    ) -> Result<SolverCapabilities, SupportMatrixError> {
+        let column = self
+            .backends
+            .get(backend)
+            .ok_or_else(|| SupportMatrixError::BackendMissing(backend.clone()))?;
+        let supported = column
+            .cells
+            .iter()
+            .filter_map(|(id, cell)| {
+                matches!(cell, SupportCell::Supported { .. }).then_some(id.clone())
+            })
+            .collect();
+        let degraded = column
+            .cells
+            .iter()
+            .filter_map(|(id, cell)| {
+                matches!(cell, SupportCell::Degraded { .. }).then_some(id.clone())
+            })
+            .collect();
+        Ok(SolverCapabilities {
+            supported,
+            degraded,
+        })
+    }
+
     /// Validates a solver descriptor against its authoritative backend column.
     ///
     /// # Errors
@@ -545,26 +618,8 @@ impl CapabilityMatrix {
                 descriptor.id.clone(),
             ));
         }
-        let supported = column
-            .cells
-            .iter()
-            .filter_map(|(id, cell)| {
-                matches!(cell, SupportCell::Supported { .. }).then_some(id.clone())
-            })
-            .collect();
-        let degraded = column
-            .cells
-            .iter()
-            .filter_map(|(id, cell)| {
-                matches!(cell, SupportCell::Degraded { .. }).then_some(id.clone())
-            })
-            .collect();
-        if descriptor.capabilities
-            != (SolverCapabilities {
-                supported,
-                degraded,
-            })
-        {
+        let capabilities = self.backend_capabilities(&descriptor.id)?;
+        if descriptor.capabilities != capabilities {
             return Err(SupportMatrixError::DescriptorCapabilitiesMismatch(
                 descriptor.id.clone(),
             ));
@@ -601,6 +656,7 @@ pub enum SupportMatrixError {
     InvalidFeatureId(String),
     InvalidBackendId(String),
     UnknownGeneratedCategory(String),
+    OrphanGeneratedCell(String),
     InvalidBackendVersion(BackendId),
     InvalidAdapterVersion(BackendId),
     DuplicateFeature(SupportFeatureId),
