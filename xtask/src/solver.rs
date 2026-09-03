@@ -988,7 +988,7 @@ pub(crate) fn build_desktop(repo_root: &Path) -> Result<()> {
     #[cfg(not(windows))]
     let artifact_root = build_pinned_nix_artifact(repo_root)?;
     let (manifest_sha256, mut sidecar_lease) = stage_solver_artifact(repo_root, &artifact_root)?;
-    let mut command = Command::new("pnpm");
+    let mut command = Command::new(if cfg!(windows) { "pnpm.cmd" } else { "pnpm" });
     command
         .args([
             "--filter",

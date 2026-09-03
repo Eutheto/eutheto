@@ -118,7 +118,7 @@ jobs:
           corepack install
           test "$(node --version)" = "v24.20.0"
           test "$(pnpm --version)" = "11.24.0"
-          protoc="$(nix eval --no-update-lock-file --raw ".#devShells.${nix_system}.default.PROTOC")"
+          protoc="$(nix develop --no-update-lock-file --command sh -c 'test -x "$PROTOC"; printf "__EUTHETO_PROTOC__=%s\n" "$PROTOC"' | sed -n 's/^__EUTHETO_PROTOC__=//p')"
           test "$("$protoc" --version)" = "libprotoc 33.1"
           printf 'PROTOC=%s\n' "$protoc" >> "$GITHUB_ENV"
 
