@@ -89,8 +89,13 @@ enum FixturesCommand {
 
 #[derive(Debug, Subcommand)]
 enum SolverCommand {
+    /// Build, validate, publish, and stage the native Windows `x86_64` worker.
     BuildNative,
+    /// Build a desktop bundle from one trusted, manifest-bound sidecar handoff.
+    BuildDesktop,
+    /// Build the pinned Nix worker and atomically stage its Tauri sidecar.
     InstallFromNix,
+    /// Exercise the installed solver worker (not yet available).
     Smoke,
     /// Finalize a pristine target artifact from reviewed repository and build authorities.
     FinalizeArtifact {
@@ -234,13 +239,11 @@ fn run_solver(command: SolverCommand) -> Result<()> {
             &artifact_root,
         ),
         SolverCommand::BuildNative => solver::build_native(&repository_root()?),
-        SolverCommand::InstallFromNix => unavailable_solver(
-            "install-from-nix",
-            "the installed solver manifest and license payload contracts exist",
-        ),
+        SolverCommand::BuildDesktop => solver::build_desktop(&repository_root()?),
+        SolverCommand::InstallFromNix => solver::install_from_nix(&repository_root()?),
         SolverCommand::Smoke => unavailable_solver(
             "smoke",
-            "manifest-validated worker installation is implemented",
+            "the packaged worker launch smoke contract is implemented",
         ),
     }
 }

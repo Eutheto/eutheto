@@ -12,6 +12,9 @@ build = "build.rs"
 [package.metadata.eutheto]
 development-identifier = "dev.eutheto.phase01.desktop"
 
+[features]
+bundled-ortools = ["dep:eutheto-solver-ortools"]
+
 [lints]
 workspace = true
 
@@ -21,11 +24,13 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }
+sha2 = "=0.10.9"
 
 [dependencies]
 eutheto-core = { path = "../../../crates/eutheto-core" }
 eutheto-export = { path = "../../../crates/eutheto-export" }
 eutheto-import = { path = "../../../crates/eutheto-import" }
+eutheto-solver-ortools = { path = "../../../crates/eutheto-solver-ortools", optional = true }
 eutheto-types = { path = "../../../crates/eutheto-types" }
 libc = "=0.2.189"
 tauri = { version = "=2.11.5", features = [] }

@@ -147,6 +147,10 @@ worker-build-native:
 worker-install-from-nix:
     cargo xtask solver install-from-nix
 
+# Build an unsigned desktop package with one trusted bundled-worker handoff.
+worker-build-desktop:
+    cargo xtask solver build-desktop
+
 # Smoke-test the OR-Tools worker once manifest-validated installation exists.
 worker-smoke:
     cargo xtask solver smoke

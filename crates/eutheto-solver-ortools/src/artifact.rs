@@ -37,8 +37,9 @@ pub struct VerifiedWorkerArtifact {
 }
 
 impl VerifiedWorkerArtifact {
-    /// Verifies the fixed installed manifest and every executable runtime payload under one bundle
-    /// root. The expected manifest digest must come from trusted application build metadata.
+    /// Verifies the fixed installed manifest and every executable runtime payload under one
+    /// artifact root. The expected manifest digest must come from trusted application build
+    /// metadata.
     ///
     /// # Errors
     ///
@@ -49,6 +50,53 @@ impl VerifiedWorkerArtifact {
         expected_manifest_sha256: [u8; 32],
     ) -> Result<Self, BundledWorkerArtifactError> {
         let artifact_root = artifact_root.into();
+        let executable_path = artifact_root.join(expected_executable_relative_path());
+        Self::verify_paths(
+            artifact_root,
+            executable_path,
+            expected_manifest_sha256,
+            true,
+        )
+        .await
+    }
+
+    /// Verifies a Tauri-packaged worker whose executable was installed beside the application
+    /// binary while its manifest and runtime closure remain under one resource root.
+    ///
+    /// The executable path must be an absolute path with the fixed packaged worker filename. The
+    /// expected manifest digest must come from trusted application build metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe error under the same conditions as [`Self::verify`], or when the packaged
+    /// executable does not use the fixed filename.
+    pub async fn verify_packaged(
+        artifact_root: impl Into<PathBuf>,
+        executable_path: impl Into<PathBuf>,
+        expected_manifest_sha256: [u8; 32],
+    ) -> Result<Self, BundledWorkerArtifactError> {
+        let executable_path = executable_path.into();
+        let expected_relative = expected_executable_relative_path();
+        if !executable_path.is_absolute()
+            || executable_path.file_name() != expected_relative.file_name()
+        {
+            return Err(BundledWorkerArtifactError::UnexpectedExecutablePath);
+        }
+        Self::verify_paths(
+            artifact_root.into(),
+            executable_path,
+            expected_manifest_sha256,
+            false,
+        )
+        .await
+    }
+
+    async fn verify_paths(
+        artifact_root: PathBuf,
+        executable_path: PathBuf,
+        expected_manifest_sha256: [u8; 32],
+        executable_inside_root: bool,
+    ) -> Result<Self, BundledWorkerArtifactError> {
         verify_artifact_root(&artifact_root).await?;
         let manifest_path = artifact_root.join("solver-manifest.json");
         verify_direct_regular_file(&manifest_path).await?;
@@ -66,8 +114,9 @@ impl VerifiedWorkerArtifact {
             return Err(BundledWorkerArtifactError::UnexpectedExecutablePath);
         }
         let executable_sha256 = decode_sha256(&manifest.worker.executable.sha256)?;
-        let executable_path = artifact_root.join(&executable_relative);
-        verify_no_symlink_components(&artifact_root, &executable_relative).await?;
+        if executable_inside_root {
+            verify_no_symlink_components(&artifact_root, &executable_relative).await?;
+        }
         let executable_len = verify_path_and_digest(&executable_path, &executable_sha256).await?;
 
         if manifest.runtime_libraries.len() > MAX_RUNTIME_FILES {

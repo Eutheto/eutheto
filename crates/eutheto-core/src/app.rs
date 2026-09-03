@@ -526,6 +526,31 @@ impl EuthetoApp {
         ))
     }
 
+    /// Opens the application with a complete host-supplied static solver registry.
+    ///
+    /// Platform adapters use this boundary to add manifest-verified bundled backends while the
+    /// default [`Self::open`] path retains the generated metadata-only registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage or protocol failure under the same conditions as [`Self::open`].
+    pub async fn open_with_solver_registry(
+        dependencies: AppDependencies,
+        solver_registry: SolverRegistry,
+    ) -> Result<Self, AppError> {
+        let (pack_registry, _) = validated_static_registries()?;
+        let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database)
+            .await
+            .map_err(store_error)?;
+        Ok(Self::from_initialized_store_with_registries(
+            Arc::new(store),
+            initialization,
+            dependencies,
+            pack_registry,
+            Arc::new(solver_registry),
+        ))
+    }
+
     /// Constructs the service from an explicitly initialized store.
     ///
     /// # Errors

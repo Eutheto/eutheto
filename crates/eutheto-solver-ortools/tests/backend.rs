@@ -246,11 +246,30 @@ async fn artifact_verification_rejects_untrusted_manifest_and_tampered_worker() 
         VerifiedWorkerArtifact::verify(directory.path().to_owned(), [0_u8; 32]).await,
         Err(BundledWorkerArtifactError::ManifestDigestMismatch)
     ));
-
+    assert!(matches!(
+        VerifiedWorkerArtifact::verify_packaged(
+            directory.path().to_owned(),
+            expected_worker_name(),
+            manifest_sha256,
+        )
+        .await,
+        Err(BundledWorkerArtifactError::UnexpectedExecutablePath)
+    ));
     let worker_path = directory.path().join("bin").join(expected_worker_name());
     let mut worker = tokio::fs::read(&worker_path).await?;
+    let packaged_directory = tempfile::tempdir()?;
+    let packaged_worker = packaged_directory.path().join(expected_worker_name());
+    tokio::fs::copy(&worker_path, &packaged_worker).await?;
+    tokio::fs::remove_file(&worker_path).await?;
+    VerifiedWorkerArtifact::verify_packaged(
+        directory.path().to_owned(),
+        packaged_worker,
+        manifest_sha256,
+    )
+    .await?;
+
     worker[0] ^= 0xff;
-    tokio::fs::write(worker_path, worker).await?;
+    tokio::fs::write(&worker_path, worker).await?;
     assert!(matches!(
         VerifiedWorkerArtifact::verify(directory.path().to_owned(), manifest_sha256).await,
         Err(BundledWorkerArtifactError::Executable(
