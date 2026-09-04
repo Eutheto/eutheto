@@ -14267,10 +14267,10 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-npm--lucide-vue-1.37.0-0626",
+      "SPDXID": "SPDXRef-Package-npm--lucide-vue-1.39.0-0626",
       "name": "@lucide/vue",
-      "versionInfo": "1.37.0",
-      "downloadLocation": "https://registry.npmjs.org/@lucide/vue/-/vue-1.37.0.tgz",
+      "versionInfo": "1.39.0",
+      "downloadLocation": "https://registry.npmjs.org/@lucide/vue/-/vue-1.39.0.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "NOASSERTION",
@@ -14279,13 +14279,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40lucide/vue@1.37.0"
+          "referenceLocator": "pkg:npm/%40lucide/vue@1.39.0"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA512",
-          "checksumValue": "a2eb6a89a0c8820f1250036bf2adbb70707457abc03840740b01037be7f25634ae08302c7159699471fe71195df6734d610e4a27a30146634c202a6ae36a5763"
+          "checksumValue": "74aaa80d3e25018db4d30fa1af36afc70f6aab3c35495b8ee591c103e17be54801243e3235f0e4e95baf16bf0dd3d11e489a952d4f88437982c5b57f65f7b1fc"
         }
       ]
     },
@@ -16314,10 +16314,10 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-npm--vue-language-core-3.2.6-0715",
+      "SPDXID": "SPDXRef-Package-npm--vue-language-core-3.3.11-0715",
       "name": "@vue/language-core",
-      "versionInfo": "3.2.6",
-      "downloadLocation": "https://registry.npmjs.org/@vue/language-core/-/language-core-3.2.6.tgz",
+      "versionInfo": "3.3.11",
+      "downloadLocation": "https://registry.npmjs.org/@vue/language-core/-/language-core-3.3.11.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "NOASSERTION",
@@ -16326,13 +16326,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vue/language-core@3.2.6"
+          "referenceLocator": "pkg:npm/%40vue/language-core@3.3.11"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA512",
-          "checksumValue": "c586185f7fda56ea79efab4fff6dec114a608849ee8eb10d6a83516daa330b5fcc03d23a1061504496f8c6bb7f3265020069714ca2f64664fc24b4cfa9a80292"
+          "checksumValue": "4099a9962c005690bf3b1b9b201c8f021373b103d173cfe0c65376aa757355f20c8cc0f3ffd4675d11687ad8f3e721205d55f2a782ea857ab7579dcf8e637317"
         }
       ]
     },
@@ -25393,10 +25393,10 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-vue-component-type-helpers-3.0.3-1110",
+      "SPDXID": "SPDXRef-Package-npm-vue-component-type-helpers-3.3.11-1110",
       "name": "vue-component-type-helpers",
-      "versionInfo": "3.0.3",
-      "downloadLocation": "https://registry.npmjs.org/vue-component-type-helpers/-/vue-component-type-helpers-3.0.3.tgz",
+      "versionInfo": "3.3.11",
+      "downloadLocation": "https://registry.npmjs.org/vue-component-type-helpers/-/vue-component-type-helpers-3.3.11.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "NOASSERTION",
@@ -25405,13 +25405,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/vue-component-type-helpers@3.0.3"
+          "referenceLocator": "pkg:npm/vue-component-type-helpers@3.3.11"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA512",
-          "checksumValue": "928881bbb94ef1eeb0fd495b6400085b5d6a705428718225ecd87f495c0667cd387a3e4aae7714df66d1c62db37d4d8ac9fe875ae93509e7953f6ae120bfafc9"
+          "checksumValue": "2f0731cde9623bd7e441ca491b43e85fc5f99260212a61fdc24a432f135a6f0ce443d65e89bd98547c05578a5c5a630b7d755f8ebfdd495f83689ddc20f81234"
         }
       ]
     },
@@ -25485,10 +25485,10 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-vue-tsc-3.2.6-1114",
+      "SPDXID": "SPDXRef-Package-npm-vue-tsc-3.3.11-1114",
       "name": "vue-tsc",
-      "versionInfo": "3.2.6",
-      "downloadLocation": "https://registry.npmjs.org/vue-tsc/-/vue-tsc-3.2.6.tgz",
+      "versionInfo": "3.3.11",
+      "downloadLocation": "https://registry.npmjs.org/vue-tsc/-/vue-tsc-3.3.11.tgz",
       "filesAnalyzed": false,
       "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "NOASSERTION",
@@ -25497,13 +25497,13 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/vue-tsc@3.2.6"
+          "referenceLocator": "pkg:npm/vue-tsc@3.3.11"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA512",
-          "checksumValue": "8185bf9162345ebc06cddd0f29ceed541feaa5d78090864b3596f5d3f2278b39108c78e74fcc1e67fbc16ab6688f890729b513653fdb0158283abf31e0db10fd"
+          "checksumValue": "80e6f407daed536f9fd5db33c0fa921f990089e205f5179e2e10f791244d1efe56659510cff25d5575b445376a84d4cc95092a2b3ad34ef8aa2abff815866b69"
         }
       ]
     },
@@ -28959,7 +28959,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-npm--lucide-vue-1.37.0-0626"
+      "relatedSpdxElement": "SPDXRef-Package-npm--lucide-vue-1.39.0-0626"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -29404,7 +29404,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-npm--vue-language-core-3.2.6-0715"
+      "relatedSpdxElement": "SPDXRef-Package-npm--vue-language-core-3.3.11-0715"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -31379,7 +31379,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-npm-vue-component-type-helpers-3.0.3-1110"
+      "relatedSpdxElement": "SPDXRef-Package-npm-vue-component-type-helpers-3.3.11-1110"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -31399,7 +31399,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-npm-vue-tsc-3.2.6-1114"
+      "relatedSpdxElement": "SPDXRef-Package-npm-vue-tsc-3.3.11-1114"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

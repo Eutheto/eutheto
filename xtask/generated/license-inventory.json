@@ -7430,13 +7430,13 @@
     {
       "ecosystem": "npm",
       "name": "@lucide/vue",
-      "version": "1.37.0",
+      "version": "1.39.0",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@lucide/vue/-/vue-1.37.0.tgz",
+      "source": "https://registry.npmjs.org/@lucide/vue/-/vue-1.39.0.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "a2eb6a89a0c8820f1250036bf2adbb70707457abc03840740b01037be7f25634ae08302c7159699471fe71195df6734d610e4a27a30146634c202a6ae36a5763"
+        "value": "74aaa80d3e25018db4d30fa1af36afc70f6aab3c35495b8ee591c103e17be54801243e3235f0e4e95baf16bf0dd3d11e489a952d4f88437982c5b57f65f7b1fc"
       }
     },
     {
@@ -8498,13 +8498,13 @@
     {
       "ecosystem": "npm",
       "name": "@vue/language-core",
-      "version": "3.2.6",
+      "version": "3.3.11",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/@vue/language-core/-/language-core-3.2.6.tgz",
+      "source": "https://registry.npmjs.org/@vue/language-core/-/language-core-3.3.11.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "c586185f7fda56ea79efab4fff6dec114a608849ee8eb10d6a83516daa330b5fcc03d23a1061504496f8c6bb7f3265020069714ca2f64664fc24b4cfa9a80292"
+        "value": "4099a9962c005690bf3b1b9b201c8f021373b103d173cfe0c65376aa757355f20c8cc0f3ffd4675d11687ad8f3e721205d55f2a782ea857ab7579dcf8e637317"
       }
     },
     {
@@ -13234,13 +13234,13 @@
     {
       "ecosystem": "npm",
       "name": "vue-component-type-helpers",
-      "version": "3.0.3",
+      "version": "3.3.11",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/vue-component-type-helpers/-/vue-component-type-helpers-3.0.3.tgz",
+      "source": "https://registry.npmjs.org/vue-component-type-helpers/-/vue-component-type-helpers-3.3.11.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "928881bbb94ef1eeb0fd495b6400085b5d6a705428718225ecd87f495c0667cd387a3e4aae7714df66d1c62db37d4d8ac9fe875ae93509e7953f6ae120bfafc9"
+        "value": "2f0731cde9623bd7e441ca491b43e85fc5f99260212a61fdc24a432f135a6f0ce443d65e89bd98547c05578a5c5a630b7d755f8ebfdd495f83689ddc20f81234"
       }
     },
     {
@@ -13282,13 +13282,13 @@
     {
       "ecosystem": "npm",
       "name": "vue-tsc",
-      "version": "3.2.6",
+      "version": "3.3.11",
       "kind": "dependency",
       "licenseConcluded": "NOASSERTION",
-      "source": "https://registry.npmjs.org/vue-tsc/-/vue-tsc-3.2.6.tgz",
+      "source": "https://registry.npmjs.org/vue-tsc/-/vue-tsc-3.3.11.tgz",
       "checksum": {
         "algorithm": "SHA512",
-        "value": "8185bf9162345ebc06cddd0f29ceed541feaa5d78090864b3596f5d3f2278b39108c78e74fcc1e67fbc16ab6688f890729b513653fdb0158283abf31e0db10fd"
+        "value": "80e6f407daed536f9fd5db33c0fa921f990089e205f5179e2e10f791244d1efe56659510cff25d5575b445376a84d4cc95092a2b3ad34ef8aa2abff815866b69"
       }
     },
     {
