@@ -4,7 +4,7 @@
 
 The planned platform will validate those requirements, translate them into a solver-neutral planning model, route the model to a compatible backend, independently verify every candidate against the original domain meaning, and present the result in human language.
 
-> **Project status:** [Phases 00–03](docs/roadmap/README.md) have established reproducible tooling, the core application shell and persistence, domain-pack contracts, solver-neutral planning IR, solver/backend contracts, and the isolated bundled OR-Tools worker. [Phase 04](docs/roadmap/04-independent-verifier-and-explanations.md), independent verification and explanation evidence, is the active scope; production domains, accepted product results, and release artifacts remain unimplemented.
+> **Project status:** [Phases 00–04](docs/roadmap/README.md) have established reproducible tooling, the core application shell and persistence, domain-pack and solver-neutral Planning IR contracts, the isolated bundled OR-Tools worker, and independent verification, score, persistence, explanation, and counterfactual authority. [Phase 05](docs/roadmap/05-workforce-core-vertical-slice.md), the Workforce domain core and first complete verified production-domain slice, is the active scope; production domains, accepted production results, and release artifacts remain unimplemented.
 
 ## Product direction
 
@@ -92,29 +92,32 @@ See [`docs/roadmap/assumptions.md`](docs/roadmap/assumptions.md) for dated packa
 
 ## Current repository contents
 
-Phases 00–01 established a working, deliberately narrow application foundation:
+Phases 00–04 established a working, deliberately bounded optimization foundation:
 
-- a locked Nix flake with default, full, and release development shells, plus
-  `direnv` integration;
-- a real Cargo workspace with typed values and errors, transactional SQLite
-  persistence, revisioned commands and history, portable import/export and
-  backup/restore services, a working CLI, the Tauri adapter, and `xtask`;
-- a pnpm workspace and Vue 3/Vite/Tauri development application whose project
-  home lists, creates, duplicates, archives, restores, and deletes projects
-  through generated capability-scoped commands backed by the Rust service;
-- a non-final `optimizer` CLI with real Phase 01 project, scenario, portable
-  data, backup, and restore behavior and typed unavailable responses for
-  deferred capabilities;
-- checked-in protocol definitions and fixtures, deterministic generation and
-  drift checks, fixture validation, bounded portable-data fuzz targets, real
-  unbundled Linux Tauri persistence E2E, license inventory generation, and SPDX
-  SBOM generation owned by repository commands;
-- the Apache-2.0 legal and contribution baseline, architecture decisions,
-  security documentation, and pinned CI foundations.
+- locked Nix development and release shells, reproducible Cargo and pnpm
+  workspaces, pinned CI, and deterministic repository commands;
+- typed application values and errors, transactional SQLite persistence,
+  revisioned commands and history, portable import/export, backup/restore,
+  a working CLI, a thin Tauri adapter, and a generated TypeScript API;
+- statically compiled domain-pack contracts, solver-neutral Planning IR,
+  deterministic capability routing, normalized candidate results, and
+  generated schema and capability artifacts;
+- a pinned OR-Tools CP-SAT worker isolated behind a bounded versioned protocol,
+  with verified target manifests and unsigned package smoke on every MVP
+  worker target;
+- independent projection, domain verification, authoritative scoring,
+  candidate quarantine, accepted-result persistence, explanation evidence,
+  comparison, and bounded counterfactual application services;
+- a Vue 3 explanation-component foundation with typed states, keyboard and
+  screen-reader behavior, non-color status cues, and no direct Tauri access;
+- conformance fixtures, compatibility and migration tests, fuzz targets,
+  architecture checks, license inventories, SPDX SBOM generation, and
+  cross-platform hosted validation.
 
-This is a real local application and persistence boundary, not yet an optimizer.
-Domain packs, planning compilation, solver backends, verification, explanations,
-and installable or signed release artifacts remain future roadmap work.
+This is a real generic optimization and acceptance foundation, not yet a
+production planner. Workforce and Seating domain behavior, complete product
+flows, AI integration, and installable or signed release artifacts remain
+future roadmap work.
 
 ## Quick start
 
@@ -154,7 +157,7 @@ checked-in generated and protocol artifacts, while `just licenses` and
 
 Read [`AGENTS.md`](AGENTS.md) before changing the repository. It defines source authority, phase discipline, architecture boundaries, generated-code rules, security and privacy constraints, and verification expectations for human and automated contributors.
 
-Implementation now proceeds through Phase 04. Changes must preserve the
+Implementation now proceeds through Phase 05. Changes must preserve the
 applicable roadmap issue IDs and exit gates and avoid claiming later-phase
 production behavior. Contributions should prefer complete vertical paths over
 mocks, stubs, or speculative infrastructure.

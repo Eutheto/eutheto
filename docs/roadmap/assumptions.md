@@ -333,6 +333,14 @@ Every K item is represented below. “Version selected” does not mean the buil
 - Focused local closure checks passed: `cargo test -p eutheto-solver-ortools --locked` (64 tests), `cargo test -p eutheto-protocol --locked` (53 tests), exact extracted Linux package worker smoke, and `just check`.
 - All package evidence is unsigned development evidence. No executable, installer, signature, notarization, release artifact, or update metadata was uploaded or published. Phase 04 owns authoritative acceptance and quarantine; Phase 11/12 owns signed exact-release artifacts, clean-machine support claims, and publication.
 
+### Phase-04 closure evidence (2026-09-04)
+
+- Phase-04 core implementation evidence head: `fdd77f3786b5f6e25a3231b64a366578dbd4364a`. The stacked explanation-UI and dependency evidence head is `b179f65fdf4a2a4ede745667611959765d5dd047`.
+- Core validation passed canonical locked-Nix run `33879622431`, Portable run `33879622259` on macOS arm64/x86_64, Ubuntu arm64/x86_64, and Windows arm64/x86_64, OR-Tools unsigned package run `33879622266` on macOS arm64/x86_64, Linux x86_64, and Windows x86_64, Security run `33879622338`, and dependency-policy run `33879622267`.
+- The composed UI tree passed canonical locked-Nix run `33880458720`, the same six-target Portable matrix in run `33880458283`, the same four-target unsigned worker/package matrix in run `33880458545`, Security run `33880458547`, and dependency-policy run `33880458331`. The candidate-source matrix entry was correctly skipped because neither stack changed the approved OR-Tools source contract.
+- Focused closure evidence covered deliberate invalid-candidate quarantine; projection, verifier, and score mutation sensitivity; exhaustive small-model compiler/verifier agreement; valid and invalid assumption mapping; verifier-owned score/category breakdown; acceptance timing; optional-explanation independence; backend-contract verification; metamorphic invariants; counterfactual execution/cancellation; compact evidence round trips; stable CLI/Tauri errors and events; and accepted versus quarantined UI states. Local `just check`, release CLI smoke, and Chromium keyboard/visual smoke passed on the composed product tree.
+- DeepReview, security re-review, and UI review reported no remaining blockers. The synthetic conformance pack is excluded from release builds, so this evidence does not claim a production domain or accepted production result. All package evidence is unsigned development evidence; Phase 11/12 still owns signed exact-release artifacts, clean-machine claims, and publication.
+
 ### K.4 — Pumpkin
 
 | Gate | Status | Owner/closure evidence |
