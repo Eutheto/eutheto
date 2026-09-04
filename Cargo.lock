@@ -1010,6 +1010,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "eutheto-explain"
+version = "0.1.0"
+dependencies = [
+ "eutheto-domain-ir",
+ "eutheto-planning-ir",
+ "eutheto-types",
+]
+
+[[package]]
 name = "eutheto-export"
 version = "0.1.0"
 dependencies = [

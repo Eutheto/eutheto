@@ -4,18 +4,20 @@ use crate::generated_official_test_pack_contract::{
 };
 use eutheto_domain_api::{
     AiToolDescriptor, CommandDescriptor, CompileContext, ContractJsonLimits,
-    DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand, DomainCapability, DomainCatalog, DomainChange,
-    DomainExplanation, DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError,
-    DomainShareResult, DomainUiManifest, DomainValidationReport, HistoricalPortableDomainDocument,
-    KindDescriptor, LicenseMetadata, LocalizedText, PortableDomainDocument, PortableImportContext,
-    ScenarioVersionDescriptor, ScoreDescriptor, ShareResultOptions, TransferDescriptor,
-    validate_contract_value,
+    CounterfactualCompileContext, DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand,
+    DomainCapability, DomainCatalog, DomainChange, DomainMutation, DomainPack,
+    DomainPackDescriptor, DomainPackError, DomainShareResult, DomainUiManifest,
+    DomainValidationReport, HistoricalPortableDomainDocument, KindDescriptor, LicenseMetadata,
+    LocalizedText, PortableDomainDocument, PortableImportContext, ScenarioVersionDescriptor,
+    ScoreDescriptor, ShareResultOptions, TransferDescriptor, validate_contract_value,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
-    DomainEntityRef, DomainEvidenceId, NormalizedSolution, OptimizationDirection,
-    RequiredRuleBinding, RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue,
-    ScoreVector, VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
+    AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
+    DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef, DomainEvidenceId,
+    EvidenceMessageV1, EvidenceRenderRequestV1, EvidenceRenderResultV1, ExplanationCapability,
+    ExplanationKind, NormalizedSolution, OptimizationDirection, RequiredRuleBinding,
+    RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue, ScoreVector,
+    VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
     VerificationValue, blake3_hex,
 };
 use eutheto_planning_ir::{
@@ -25,8 +27,8 @@ use eutheto_planning_ir::{
     ObjectiveLevelId, ObjectivePlan, ObjectiveTerm, ObjectiveTermId, ObjectiveTermKind,
     PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningConstraintId, PlanningMetadata,
     PlanningProblem, ProjectionExpression, ProjectionId, ProvenanceId, ProvenanceParameter,
-    ProvenanceRecord, ProvenanceSourceKind, SolutionProjection, Variable, project_candidate,
-    validate,
+    ProvenanceRecord, ProvenanceSourceKind, SolutionProjection, Variable, canonical_ir_hash,
+    project_candidate, validate,
 };
 use eutheto_types::{
     DomainCommandEnvelope, DomainPackRef, PackId, PersonId, RuleId, ScenarioDocument,
@@ -177,6 +179,17 @@ impl DomainPack for crate::OfficialTestPack {
             .into_iter()
             .collect(),
             portable_schema_version: 1,
+            explanation_capabilities: [
+                ExplanationCapability::Validation,
+                ExplanationCapability::Infeasibility,
+                ExplanationCapability::Assignment,
+                ExplanationCapability::Counterfactual,
+                ExplanationCapability::SolutionDifference,
+                ExplanationCapability::Repair,
+                ExplanationCapability::OptimalityStatus,
+            ]
+            .into_iter()
+            .collect(),
             portable_capabilities: [PORTABLE_CAPABILITY.to_owned()].into_iter().collect(),
             share_result_schema_version: 1,
             documentation_url: None,
@@ -618,32 +631,276 @@ impl DomainPack for crate::OfficialTestPack {
         })
     }
 
-    fn explain(
+    fn render_evidence(
         &self,
         document: &ScenarioDocument,
-        solution: Option<&NormalizedSolution>,
-        request_id: &str,
-    ) -> Result<DomainExplanation, DomainPackError> {
-        require_pack(document)?;
-        if request_id.is_empty() || request_id.len() > 160 {
-            return Err(DomainPackError::InvalidPayload {
-                path: "/requestId".to_owned(),
-                message: "request ID must contain 1..=160 bytes".to_owned(),
-            });
-        }
-        Ok(DomainExplanation {
-            message_key: "official.test.explanation.summary".to_owned(),
-            parameters: [
-                ("requestId".to_owned(), Value::String(request_id.to_owned())),
-                (
-                    "assignmentCount".to_owned(),
-                    Value::from(solution.map_or(0, |value| value.assignments.len())),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        })
+        request: &EvidenceRenderRequestV1,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        parse_entities(document)?;
+        request.validate().map_err(contract)?;
+        require_explanation_capability(explanation_capability(request.kind))?;
+        EvidenceRenderResultV1::new(request, vec![evidence_message(request)?]).map_err(contract)
     }
+
+    fn compile_counterfactual(
+        &self,
+        document: &ScenarioDocument,
+        condition: &CounterfactualConditionV1,
+        context: &CounterfactualCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        require_explanation_capability(ExplanationCapability::Counterfactual)?;
+        compile_counterfactual_problem(document, condition, context)
+    }
+}
+
+fn explanation_capability(kind: ExplanationKind) -> ExplanationCapability {
+    match kind {
+        ExplanationKind::Validation => ExplanationCapability::Validation,
+        ExplanationKind::Infeasibility => ExplanationCapability::Infeasibility,
+        ExplanationKind::Assignment => ExplanationCapability::Assignment,
+        ExplanationKind::Counterfactual => ExplanationCapability::Counterfactual,
+        ExplanationKind::SolutionDifference => ExplanationCapability::SolutionDifference,
+        ExplanationKind::Repair => ExplanationCapability::Repair,
+        ExplanationKind::OptimalityStatus => ExplanationCapability::OptimalityStatus,
+    }
+}
+
+fn require_explanation_capability(
+    capability: ExplanationCapability,
+) -> Result<(), DomainPackError> {
+    if crate::OfficialTestPack
+        .descriptor()?
+        .explanation_capabilities
+        .contains(&capability)
+    {
+        Ok(())
+    } else {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            capability,
+        ))
+    }
+}
+
+fn evidence_message(
+    request: &EvidenceRenderRequestV1,
+) -> Result<EvidenceMessageV1, DomainPackError> {
+    evidence_message_for_kind(request.kind, &request.evidence.checksum)
+}
+
+fn evidence_message_for_kind(
+    kind: ExplanationKind,
+    evidence_checksum: &str,
+) -> Result<EvidenceMessageV1, DomainPackError> {
+    let (message_key, kind_name) = match kind {
+        ExplanationKind::Validation => ("official.test.explanation.validation", "validation"),
+        ExplanationKind::Infeasibility => {
+            ("official.test.explanation.infeasibility", "infeasibility")
+        }
+        ExplanationKind::Assignment => ("official.test.explanation.assignment", "assignment"),
+        ExplanationKind::Counterfactual => {
+            ("official.test.explanation.counterfactual", "counterfactual")
+        }
+        ExplanationKind::SolutionDifference => (
+            "official.test.explanation.solution_difference",
+            "solutionDifference",
+        ),
+        ExplanationKind::Repair => ("official.test.explanation.repair", "repair"),
+        ExplanationKind::OptimalityStatus => (
+            "official.test.explanation.optimality_status",
+            "optimalityStatus",
+        ),
+    };
+    let parameters = [
+        (
+            VerificationFactId::new("official.test.explanation.kind").map_err(contract)?,
+            VerificationValue::Text(kind_name.to_owned()),
+        ),
+        (
+            VerificationFactId::new("official.test.explanation.evidence_checksum")
+                .map_err(contract)?,
+            VerificationValue::Text(evidence_checksum.to_owned()),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    Ok(EvidenceMessageV1 {
+        message_key: message_key.to_owned(),
+        parameters,
+        entities: Vec::new(),
+        rules: Vec::new(),
+        assignments: Vec::new(),
+        evidence: Vec::new(),
+    })
+}
+
+fn check_counterfactual_budget(
+    context: &CounterfactualCompileContext<'_>,
+) -> Result<(), DomainPackError> {
+    if context.budget.is_cancelled() {
+        Err(DomainPackError::Cancelled)
+    } else if context.budget.is_expired() {
+        Err(DomainPackError::BudgetExpired)
+    } else {
+        Ok(())
+    }
+}
+
+fn counterfactual_payload_error(path: &str, message: &str) -> DomainPackError {
+    DomainPackError::InvalidPayload {
+        path: path.to_owned(),
+        message: message.to_owned(),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn compile_counterfactual_problem(
+    document: &ScenarioDocument,
+    condition: &CounterfactualConditionV1,
+    context: &CounterfactualCompileContext<'_>,
+) -> Result<PlanningProblem, DomainPackError> {
+    check_counterfactual_budget(context)?;
+    if context.compile_context.cancellation.is_cancelled() {
+        return Err(DomainPackError::Cancelled);
+    }
+    let entities = parse_entities(document)?;
+    condition.validate().map_err(contract)?;
+    validate(
+        context.base_problem,
+        context.compile_context.planning_limits,
+    )
+    .map_err(contract)?;
+
+    let (assignment_id, value, force) = match &condition.condition {
+        CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id,
+            value,
+        } => (assignment_id, value, true),
+        CounterfactualConditionPayloadV1::ForbidAssignmentValue {
+            assignment_id,
+            value,
+        } => (assignment_id, value, false),
+    };
+    let projection = context
+        .base_problem
+        .projections
+        .iter()
+        .find(|projection| &projection.assignment_id == assignment_id)
+        .ok_or_else(|| {
+            counterfactual_payload_error(
+                "/condition/assignmentId",
+                "assignment projection is not supported by official.test",
+            )
+        })?;
+    check_counterfactual_budget(context)?;
+
+    let body = match (&projection.expression, value, force) {
+        (ProjectionExpression::Boolean(variable), AssignmentValue::Boolean(value), force) => {
+            let required = if force { *value } else { !*value };
+            Constraint::bool_and(vec![if required {
+                eutheto_planning_ir::Literal::positive(variable.clone())
+            } else {
+                eutheto_planning_ir::Literal::negative(variable.clone())
+            }])
+        }
+        (ProjectionExpression::Integer(variable), AssignmentValue::Integer(value), true) => {
+            Constraint::LinearComparison(LinearComparison {
+                expression: target_expression(variable)?,
+                op: ComparisonOp::Equal,
+                rhs: *value,
+            })
+        }
+        (ProjectionExpression::Integer(variable), AssignmentValue::Integer(value), false) => {
+            Constraint::forbidden_table(vec![variable.clone()], vec![vec![*value]])
+                .map_err(contract)?
+        }
+        (ProjectionExpression::Boolean(_) | ProjectionExpression::Integer(_), _, _) => {
+            return Err(counterfactual_payload_error(
+                "/condition/value",
+                "condition value kind does not match the assignment projection",
+            ));
+        }
+        (
+            ProjectionExpression::Linear(_)
+            | ProjectionExpression::Interval(_)
+            | ProjectionExpression::Constant(_),
+            _,
+            _,
+        ) => {
+            return Err(counterfactual_payload_error(
+                "/condition/assignmentId",
+                "projection kind is not supported by official.test counterfactual compilation",
+            ));
+        }
+    };
+    let recompiled = build_problem(document, context.compile_context, &entities)?;
+    check_counterfactual_budget(context)?;
+    let base_hash = canonical_ir_hash(
+        context.base_problem,
+        context.compile_context.planning_limits,
+    )
+    .map_err(contract)?;
+    let recompiled_hash = canonical_ir_hash(&recompiled, context.compile_context.planning_limits)
+        .map_err(contract)?;
+    if base_hash != recompiled_hash {
+        return Err(counterfactual_payload_error(
+            "/context/baseProblem",
+            "base planning problem does not match deterministic recompilation",
+        ));
+    }
+
+    let metadata_key =
+        MetadataKey::new("eutheto.counterfactual.condition_hash").map_err(contract)?;
+    let provenance_id = ProvenanceId::new(format!(
+        "official_test.counterfactual.provenance.{}",
+        condition.checksum
+    ))
+    .map_err(contract)?;
+    let constraint_id = PlanningConstraintId::new(format!(
+        "official_test.counterfactual.constraint.{}",
+        condition.checksum
+    ))
+    .map_err(contract)?;
+    let mut derived = context.base_problem.clone();
+    if derived
+        .metadata
+        .compile_metadata
+        .insert(
+            metadata_key,
+            ProvenanceParameter::Text(condition.checksum.clone()),
+        )
+        .is_some()
+    {
+        return Err(counterfactual_payload_error(
+            "/context/baseProblem/metadata/compileMetadata",
+            "base planning problem already contains counterfactual condition metadata",
+        ));
+    }
+    derived.provenance.push(ProvenanceRecord {
+        id: provenance_id.clone(),
+        source_kind: ProvenanceSourceKind::Derived,
+        source_id: "official.test.counterfactual.condition".to_owned(),
+        entity_refs: vec![projection.entity.clone()],
+        message_key: "official.test.provenance.counterfactual_condition".to_owned(),
+        parameters: BTreeMap::from([(
+            "conditionChecksum".to_owned(),
+            ProvenanceParameter::Text(condition.checksum.clone()),
+        )]),
+        parent: Some(projection.provenance.clone()),
+    });
+    derived.constraints.push(ConstraintRecord {
+        id: constraint_id,
+        body,
+        enforcement: Vec::new(),
+        provenance: provenance_id,
+        tags: vec![ConstraintTag::new("official_test.counterfactual.condition").map_err(contract)?],
+    });
+    derived.canonicalize().map_err(contract)?;
+    derived
+        .declared_capabilities
+        .insert(Capability::ForbiddenTable);
+    validate(&derived, context.compile_context.planning_limits).map_err(contract)?;
+    check_counterfactual_budget(context)?;
+    Ok(derived)
 }
 
 fn generated_catalog() -> Result<DomainCatalog, DomainPackError> {
@@ -1229,6 +1486,9 @@ fn build_problem(
         split_authorization: None,
     };
     problem.canonicalize().map_err(contract)?;
+    problem
+        .declared_capabilities
+        .insert(Capability::ForbiddenTable);
     validate(&problem, context.planning_limits).map_err(contract)?;
     Ok(problem)
 }
@@ -1468,4 +1728,36 @@ fn payload(path: &str, error: impl std::fmt::Display) -> DomainPackError {
 
 fn contract(error: impl std::fmt::Display) -> DomainPackError {
     DomainPackError::Contract(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DomainPackError, ExplanationKind, VerificationValue, evidence_message_for_kind};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn all_seven_evidence_kinds_render_to_distinct_typed_messages() -> Result<(), DomainPackError> {
+        let kinds = [
+            ExplanationKind::Validation,
+            ExplanationKind::Infeasibility,
+            ExplanationKind::Assignment,
+            ExplanationKind::Counterfactual,
+            ExplanationKind::SolutionDifference,
+            ExplanationKind::Repair,
+            ExplanationKind::OptimalityStatus,
+        ];
+        let mut keys = BTreeSet::new();
+        for kind in kinds {
+            let message = evidence_message_for_kind(kind, &"a".repeat(64))?;
+            message.validate().map_err(super::contract)?;
+            assert!(keys.insert(message.message_key));
+            assert!(
+                message
+                    .parameters
+                    .values()
+                    .all(|value| matches!(value, VerificationValue::Text(_)))
+            );
+        }
+        Ok(())
+    }
 }

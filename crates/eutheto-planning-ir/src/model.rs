@@ -1,12 +1,12 @@
 //! Version-1 solver-neutral mathematical model and shape-safe constructors.
 
 use crate::ids::{
-    AssumptionId, BoolVariableId, CompilerId, ConstraintTag, IntVariableId, IntervalVariableId,
-    MetadataKey, ObjectiveLevelId, ObjectiveTermId, PlanningConstraintId, ProjectionId,
-    ProvenanceId,
+    BoolVariableId, CompilerId, ConstraintTag, IntVariableId, IntervalVariableId, MetadataKey,
+    ObjectiveLevelId, ObjectiveTermId, PlanningConstraintId, ProjectionId, ProvenanceId,
 };
 use eutheto_domain_ir::{
-    AssignmentValue, DomainAssignmentId, DomainEntityRef, OptimizationDirection, ScoreCategoryId,
+    AssignmentValue, AssumptionGroupId, DomainAssignmentId, DomainEntityRef, OptimizationDirection,
+    ScoreCategoryId,
 };
 use eutheto_types::{PackId, RuleId, ScenarioId};
 use serde::{Deserialize, Serialize};
@@ -666,7 +666,7 @@ pub struct ObjectivePlan {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Assumption {
     /// Stable identity of the explainable group.
-    pub id: AssumptionId,
+    pub id: AssumptionGroupId,
     /// Boolean literal that activates every listed required rule.
     pub literal: Literal,
     /// Canonically sorted, non-empty required rules controlled by the literal.

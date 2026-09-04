@@ -81,6 +81,18 @@ fn unsupported<T>() -> Result<T, DomainPackError> {
     ))
 }
 
+fn explanation_capability(kind: ExplanationKind) -> ExplanationCapability {
+    match kind {
+        ExplanationKind::Validation => ExplanationCapability::Validation,
+        ExplanationKind::Infeasibility => ExplanationCapability::Infeasibility,
+        ExplanationKind::Assignment => ExplanationCapability::Assignment,
+        ExplanationKind::Counterfactual => ExplanationCapability::Counterfactual,
+        ExplanationKind::SolutionDifference => ExplanationCapability::SolutionDifference,
+        ExplanationKind::Repair => ExplanationCapability::Repair,
+        ExplanationKind::OptimalityStatus => ExplanationCapability::OptimalityStatus,
+    }
+}
+
 impl DomainPack for TestPack {
     fn descriptor(&self) -> Result<DomainPackDescriptor, DomainPackError> {
         unsupported()
@@ -362,13 +374,25 @@ impl DomainPack for TestPack {
         unsupported()
     }
 
-    fn explain(
+    fn render_evidence(
         &self,
         _document: &ScenarioDocument,
-        _solution: Option<&NormalizedSolution>,
-        _request_id: &str,
-    ) -> Result<DomainExplanation, DomainPackError> {
-        unsupported()
+        request: &EvidenceRenderRequestV1,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            explanation_capability(request.kind),
+        ))
+    }
+
+    fn compile_counterfactual(
+        &self,
+        _document: &ScenarioDocument,
+        _condition: &CounterfactualConditionV1,
+        _context: &CounterfactualCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            ExplanationCapability::Counterfactual,
+        ))
     }
 }
 

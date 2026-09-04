@@ -48,6 +48,13 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-explain",
+      "version": "0.1.0",
+      "path": "crates/eutheto-explain",
+      "license": "Apache-2.0"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-export",
       "version": "0.1.0",
       "path": "crates/eutheto-export",

@@ -1,11 +1,15 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# `eutheto-explain` (reserved)
+# `eutheto-explain`
 
-This directory reserves the roadmap boundary for **future explanation services over verified domain facts and provenance.** No `Cargo.toml` is present, so this is not a Cargo workspace member, implemented crate, or published API.
+Pure, deterministic explanation algorithms over validated domain and planning IR.
 
 ## Boundary
 
-It must not invent feasibility, scoring, or mutation authority and must not depend on presentation frameworks.
+The crate maps solver-neutral assumption literals, performs budget-aware conflict shrinking,
+compares independently accepted results, validates additive counterfactual compilations, and
+interprets counterfactual terminal records. It has no solver API, persistence, async runtime,
+backend launcher, clock implementation, or presentation authority.
 
-The owning roadmap phase must confirm that this boundary still warrants a separate crate, choose its dependencies, and add implementation and tests. The exact future crate inventory is an explicit architecture gate; the reserved name alone does not settle it.
+It depends only on `eutheto-types`, `eutheto-domain-ir`, and `eutheto-planning-ir`. Backend claims
+must first be converted into the validated contracts owned by those crates.

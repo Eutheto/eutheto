@@ -1,8 +1,8 @@
 use crate::test_evaluator::evaluate_record;
 use crate::*;
 use eutheto_domain_ir::{
-    AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef,
-    DomainEvidenceId, OptimizationDirection, ScoreCategoryId,
+    AssignmentValue, AssumptionGroupId, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
+    DomainEntityRef, DomainEvidenceId, OptimizationDirection, ScoreCategoryId,
 };
 use eutheto_types::{PackId, RuleId, ScenarioId, SolutionId};
 use proptest::prelude::*;
@@ -68,9 +68,9 @@ fn assumption(
     literal: Literal,
     required_rules: Vec<RuleId>,
     provenance: ProvenanceId,
-) -> Result<Assumption, PlanningIdError> {
+) -> Result<Assumption, Box<dyn Error>> {
     Ok(Assumption {
-        id: AssumptionId::new(format!("assumption.{name}"))?,
+        id: AssumptionGroupId::new(format!("assumption.{name}"))?,
         literal,
         required_rules,
         provenance,
@@ -879,6 +879,24 @@ fn assumption_rule_order_is_canonical_and_hash_stable() -> Result<(), Box<dyn Er
     assert_eq!(
         canonical_ir_hash(&first, PlanningIrLimitsV1::DEFAULT)?,
         canonical_ir_hash(&second, PlanningIrLimitsV1::DEFAULT)?
+    );
+
+    let json = serde_json::to_vec(&first)?;
+    let round_trip: PlanningProblem = serde_json::from_slice(&json)?;
+    assert_eq!(
+        round_trip.assumptions[0].id,
+        AssumptionGroupId::new("assumption.stable")?
+    );
+    assert_eq!(
+        canonical_ir_hash(&round_trip, PlanningIrLimitsV1::DEFAULT)?,
+        canonical_ir_hash(&first, PlanningIrLimitsV1::DEFAULT)?
+    );
+
+    let mut renamed = round_trip;
+    renamed.assumptions[0].id = AssumptionGroupId::new("assumption.renamed")?;
+    assert_ne!(
+        canonical_ir_hash(&renamed, PlanningIrLimitsV1::DEFAULT)?,
+        canonical_ir_hash(&first, PlanningIrLimitsV1::DEFAULT)?
     );
     Ok(())
 }

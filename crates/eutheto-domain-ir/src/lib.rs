@@ -7,15 +7,20 @@
 //! orchestrator, or source of production authority.
 
 use eutheto_types::{
-    BackendId, BackendSelection, DurationMillis, IanaTimeZone, PackId, PortableJsonLimits,
-    REVISION_MAX_V1, RequestId, Rfc3339Timestamp, RuleId, ScenarioId, ScenarioSnapshotId,
-    SolutionId, SolveOptions, SolveRunId, SolveStatus, validate_nonsecret_portable_json_bytes,
+    BackendId, BackendSelection, CounterfactualJobId, DurationMillis, IanaTimeZone, PackId,
+    PortableJsonLimits, REVISION_MAX_V1, RequestId, Rfc3339Timestamp, RuleId, ScenarioId,
+    ScenarioSnapshotId, SolutionId, SolveOptions, SolveRunId, SolveStatus,
+    validate_nonsecret_portable_json_bytes,
 };
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
+
+mod explanation;
+
+pub use explanation::*;
 
 /// Current normalized-solution wire schema.
 pub const NORMALIZED_SOLUTION_SCHEMA_VERSION: u32 = 1;
@@ -168,6 +173,10 @@ domain_id!(
 domain_id!(
     DomainEvidenceId,
     "Stable identity of optional backend or verifier evidence."
+);
+domain_id!(
+    AssumptionGroupId,
+    "Stable identity of one explainable planning-assumption group."
 );
 domain_id!(
     ScoreLevelId,
@@ -2187,6 +2196,10 @@ pub enum DomainContractError {
     VerificationBindingMismatch,
     /// Verification did not establish acceptance with zero feasibility.
     NotVerifiedFeasible,
+    /// A versioned explanation or counterfactual record violates its semantic contract.
+    InvalidExplanationContract(&'static str),
+    /// A bounded explanation collection is not in canonical strict order.
+    NonCanonicalExplanationCollection(&'static str),
 }
 
 impl fmt::Display for DomainContractError {

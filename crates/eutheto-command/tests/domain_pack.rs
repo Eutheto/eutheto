@@ -1,25 +1,32 @@
 use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack, official_registry};
 use eutheto_domain_api::{
-    CompileContext, ContractJsonLimits, DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand,
-    DomainPack, DomainPackError, DomainPackRegistry, DomainShareResult,
+    CompileContext, ContractJsonLimits, CounterfactualCompileContext, DOMAIN_BATCH_SCHEMA_VERSION,
+    DomainBatchCommand, DomainPack, DomainPackError, DomainPackRegistry, DomainShareResult,
     HistoricalPortableDomainDocument, PortableImportContext, ShareResultOptions,
     validate_contract_value,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, NormalizedSolution, VerificationContextV1, blake3_hex,
+    AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
+    DomainAssignmentId, EvidenceRenderRequestV1, ExplanationCapability,
+    ExplanationEvidencePayloadV1, ExplanationEvidenceV1, ExplanationValidationSeverity,
+    NormalizedSolution, ValidationIssueEvidenceV1, VerificationContextV1, VerificationIssueId,
+    VerificationValue, blake3_hex,
 };
 use eutheto_planning_ir::{
-    CandidateValues, PlanningIrLimitsV1, PlanningProblem, ProvenanceSourceKind, Variable,
+    CandidateValues, Capability, ComparisonOp, Constraint, MetadataKey, PlanningIrLimitsV1,
+    PlanningProblem, ProjectionExpression, ProvenanceParameter, ProvenanceSourceKind, Variable,
     canonical_ir_hash, summarize, validate,
 };
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, PackId, PersonId, RuleId, ScenarioDocument,
-    SolutionId,
+    CancellationToken, DomainCommandEnvelope, DurationMillis, FixedMonotonicClock, PackId,
+    ParentSolveBudget, PersonId, RuleId, ScenarioDocument, SolutionId,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 const SCENARIO_ID: &str = "0195a5e4-7c00-7000-8000-000000000001";
 const ENTITY_ID: &str = "018f25a7-8b3c-7d11-8000-000000000001";
@@ -101,6 +108,65 @@ fn verification_context(
         solution.canonical_hash()?,
         scope.checksum,
     )?)
+}
+
+#[test]
+fn descriptor_declares_exact_explanation_capabilities() -> Result<(), Box<dyn Error>> {
+    let descriptor = OfficialTestPack.descriptor()?;
+    let expected: BTreeSet<_> = [
+        ExplanationCapability::Validation,
+        ExplanationCapability::Infeasibility,
+        ExplanationCapability::Assignment,
+        ExplanationCapability::Counterfactual,
+        ExplanationCapability::SolutionDifference,
+        ExplanationCapability::Repair,
+        ExplanationCapability::OptimalityStatus,
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(descriptor.explanation_capabilities, expected);
+    assert_eq!(
+        serde_json::to_value(&descriptor)?["explanationCapabilities"],
+        json!([
+            "validation",
+            "infeasibility",
+            "assignment",
+            "counterfactual",
+            "solutionDifference",
+            "repair",
+            "optimalityStatus"
+        ])
+    );
+    Ok(())
+}
+#[test]
+fn rendering_validates_and_returns_typed_message_parameters() -> Result<(), Box<dyn Error>> {
+    let evidence = ExplanationEvidenceV1::new(ExplanationEvidencePayloadV1::Validation {
+        issue: ValidationIssueEvidenceV1 {
+            issue_id: VerificationIssueId::new("official.test.issue.validation")?,
+            severity: ExplanationValidationSeverity::MustFix,
+            message_key: "official.test.validation.target".to_owned(),
+            parameters: BTreeMap::new(),
+            field_path: None,
+            entity: None,
+            rule_id: None,
+        },
+    })?;
+    let request = EvidenceRenderRequestV1::new(evidence)?;
+    let rendered = OfficialTestPack.render_evidence(&document()?, &request)?;
+    assert_eq!(rendered.kind, request.kind);
+    assert_eq!(rendered.messages.len(), 1);
+    assert_eq!(
+        rendered.messages[0].message_key,
+        "official.test.explanation.validation"
+    );
+    assert!(
+        rendered.messages[0]
+            .parameters
+            .values()
+            .all(|value| matches!(value, VerificationValue::Text(_)))
+    );
+    Ok(())
 }
 
 #[test]
@@ -462,9 +528,16 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
         required_provenance.source_id,
         verification_scope.required_rules[0].rule_id.to_string()
     );
-    assert_eq!(
-        first.declared_capabilities,
-        first_summary.manifest.required_capabilities()
+    assert!(
+        first_summary
+            .manifest
+            .required_capabilities()
+            .is_subset(&first.declared_capabilities)
+    );
+    assert!(
+        first
+            .declared_capabilities
+            .contains(&Capability::ForbiddenTable)
     );
     assert_eq!(first.objectives.levels[0].lower_bound, 0);
     assert_eq!(first.objectives.levels[0].upper_bound, 10);
@@ -578,6 +651,336 @@ fn unknown_internal_and_portable_fields_are_rejected() -> Result<(), Box<dyn Err
             }
         )
         .is_err()
+    );
+    Ok(())
+}
+
+fn parent_budget(
+    milliseconds: u64,
+    clock: Arc<FixedMonotonicClock>,
+    cancellation: CancellationToken,
+) -> Result<ParentSolveBudget, Box<dyn Error>> {
+    Ok(ParentSolveBudget::new(
+        DurationMillis::new(milliseconds)?,
+        clock,
+        cancellation,
+    )?)
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn counterfactual_compilation_adds_only_typed_condition_semantics() -> Result<(), Box<dyn Error>> {
+    let pack = OfficialTestPack;
+    let source = document()?;
+    let compile_context = context();
+    let base = pack.compile(&source, &compile_context)?;
+    let bool_projection = base
+        .projections
+        .iter()
+        .find(|projection| matches!(&projection.expression, ProjectionExpression::Boolean(_)))
+        .ok_or("Boolean projection missing")?;
+    let int_projection = base
+        .projections
+        .iter()
+        .find(|projection| matches!(&projection.expression, ProjectionExpression::Integer(_)))
+        .ok_or("integer projection missing")?;
+    let clock = Arc::new(FixedMonotonicClock::default());
+    let budget = parent_budget(1_000, clock, CancellationToken::new())?;
+    let compile_counterfactual = |condition: &CounterfactualConditionV1| {
+        pack.compile_counterfactual(
+            &source,
+            condition,
+            &CounterfactualCompileContext {
+                base_problem: &base,
+                compile_context: &compile_context,
+                budget: budget.phase_view(),
+            },
+        )
+    };
+
+    let force_boolean =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id: bool_projection.assignment_id.clone(),
+            value: AssignmentValue::Boolean(false),
+        })?;
+    let forced = compile_counterfactual(&force_boolean)?;
+    validate(&forced, compile_context.planning_limits)?;
+    assert_eq!(
+        forced.metadata.compile_metadata.len(),
+        base.metadata.compile_metadata.len() + 1
+    );
+    assert!(
+        base.metadata
+            .compile_metadata
+            .iter()
+            .all(|(key, value)| forced.metadata.compile_metadata.get(key) == Some(value))
+    );
+    assert_eq!(forced.variables, base.variables);
+    assert_eq!(forced.objectives, base.objectives);
+    assert_eq!(forced.assumptions, base.assumptions);
+    assert_eq!(forced.projections, base.projections);
+    assert_eq!(forced.constraints.len(), base.constraints.len() + 1);
+    assert_eq!(forced.provenance.len(), base.provenance.len() + 1);
+    assert!(
+        base.constraints
+            .iter()
+            .all(|constraint| forced.constraints.contains(constraint))
+    );
+    assert!(
+        base.provenance
+            .iter()
+            .all(|provenance| forced.provenance.contains(provenance))
+    );
+    assert_eq!(
+        forced
+            .metadata
+            .compile_metadata
+            .get(&MetadataKey::new("eutheto.counterfactual.condition_hash")?),
+        Some(&ProvenanceParameter::Text(force_boolean.checksum.clone()))
+    );
+    let forced_constraint = forced
+        .constraints
+        .iter()
+        .find(|constraint| !base.constraints.contains(constraint))
+        .ok_or("counterfactual constraint missing")?;
+    let Constraint::BoolAnd { literals } = &forced_constraint.body else {
+        return Err("Boolean force did not add a Boolean condition".into());
+    };
+    assert_eq!(literals.len(), 1);
+    assert!(!literals[0].positive);
+    let derived_provenance = forced
+        .provenance
+        .iter()
+        .find(|record| !base.provenance.contains(record))
+        .ok_or("counterfactual provenance missing")?;
+    assert_eq!(
+        derived_provenance.source_kind,
+        ProvenanceSourceKind::Derived
+    );
+    assert_eq!(
+        derived_provenance.parent.as_ref(),
+        Some(&bool_projection.provenance)
+    );
+    assert_eq!(forced_constraint.provenance, derived_provenance.id);
+
+    let forbid_boolean =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForbidAssignmentValue {
+            assignment_id: bool_projection.assignment_id.clone(),
+            value: AssignmentValue::Boolean(false),
+        })?;
+    let forbidden = compile_counterfactual(&forbid_boolean)?;
+    let forbidden_constraint = forbidden
+        .constraints
+        .iter()
+        .find(|constraint| !base.constraints.contains(constraint))
+        .ok_or("Boolean forbid constraint missing")?;
+    let Constraint::BoolAnd { literals } = &forbidden_constraint.body else {
+        return Err("Boolean forbid did not add a Boolean condition".into());
+    };
+    assert_eq!(literals.len(), 1);
+    assert!(literals[0].positive);
+
+    let force_integer =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id: int_projection.assignment_id.clone(),
+            value: AssignmentValue::Integer(4),
+        })?;
+    let integer = compile_counterfactual(&force_integer)?;
+    let integer_constraint = integer
+        .constraints
+        .iter()
+        .find(|constraint| !base.constraints.contains(constraint))
+        .ok_or("integer force constraint missing")?;
+    let Constraint::LinearComparison(comparison) = &integer_constraint.body else {
+        return Err("integer force did not add an integer condition".into());
+    };
+    assert_eq!(comparison.op, ComparisonOp::Equal);
+    assert_eq!(comparison.rhs, 4);
+    Ok(())
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn counterfactual_compilation_rejects_mismatch_and_unsupported_conditions()
+-> Result<(), Box<dyn Error>> {
+    let pack = OfficialTestPack;
+    let source = document()?;
+    let compile_context = context();
+    let base = pack.compile(&source, &compile_context)?;
+    let bool_projection = base
+        .projections
+        .iter()
+        .find(|projection| matches!(&projection.expression, ProjectionExpression::Boolean(_)))
+        .ok_or("Boolean projection missing")?;
+    let int_projection = base
+        .projections
+        .iter()
+        .find(|projection| matches!(&projection.expression, ProjectionExpression::Integer(_)))
+        .ok_or("integer projection missing")?;
+    let condition = |payload| CounterfactualConditionV1::new(payload);
+    let compile = |base_problem: &PlanningProblem, condition: &CounterfactualConditionV1| {
+        let clock = Arc::new(FixedMonotonicClock::default());
+        let budget = parent_budget(1_000, clock, CancellationToken::new())?;
+        Ok::<_, Box<dyn Error>>(pack.compile_counterfactual(
+            &source,
+            condition,
+            &CounterfactualCompileContext {
+                base_problem,
+                compile_context: &compile_context,
+                budget: budget.phase_view(),
+            },
+        ))
+    };
+
+    let integer_forbid = condition(CounterfactualConditionPayloadV1::ForbidAssignmentValue {
+        assignment_id: int_projection.assignment_id.clone(),
+        value: AssignmentValue::Integer(3),
+    })?;
+    let integer_forbidden = compile(&base, &integer_forbid)??;
+    validate(&integer_forbidden, compile_context.planning_limits)?;
+    assert_eq!(
+        integer_forbidden
+            .metadata
+            .compile_metadata
+            .get(&MetadataKey::new("eutheto.counterfactual.condition_hash")?),
+        Some(&ProvenanceParameter::Text(integer_forbid.checksum.clone()))
+    );
+    let forbidden_constraint = integer_forbidden
+        .constraints
+        .iter()
+        .find(|constraint| !base.constraints.contains(constraint))
+        .ok_or("integer forbid constraint missing")?;
+    let Constraint::ForbiddenTable { variables, rows } = &forbidden_constraint.body else {
+        return Err("integer forbid did not add a forbidden table".into());
+    };
+    let ProjectionExpression::Integer(projected_variable) = &int_projection.expression else {
+        return Err("integer projection changed kind".into());
+    };
+    assert_eq!(variables, &vec![projected_variable.clone()]);
+    assert_eq!(rows, &vec![vec![3]]);
+    let forbidden_provenance = integer_forbidden
+        .provenance
+        .iter()
+        .find(|record| !base.provenance.contains(record))
+        .ok_or("integer forbid provenance missing")?;
+    assert_eq!(forbidden_constraint.provenance, forbidden_provenance.id);
+    assert_eq!(
+        forbidden_provenance.parent.as_ref(),
+        Some(&int_projection.provenance)
+    );
+
+    let wrong_value = condition(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+        assignment_id: bool_projection.assignment_id.clone(),
+        value: AssignmentValue::Integer(1),
+    })?;
+    assert_eq!(
+        compile(&base, &wrong_value)?,
+        Err(DomainPackError::InvalidPayload {
+            path: "/condition/value".to_owned(),
+            message: "condition value kind does not match the assignment projection".to_owned(),
+        })
+    );
+
+    let unknown_projection = condition(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+        assignment_id: DomainAssignmentId::new("official.test.assignment.unknown")?,
+        value: AssignmentValue::Boolean(true),
+    })?;
+    assert_eq!(
+        compile(&base, &unknown_projection)?,
+        Err(DomainPackError::InvalidPayload {
+            path: "/condition/assignmentId".to_owned(),
+            message: "assignment projection is not supported by official.test".to_owned(),
+        })
+    );
+
+    let mut unsupported_base = base.clone();
+    unsupported_base
+        .projections
+        .iter_mut()
+        .find(|projection| projection.assignment_id == bool_projection.assignment_id)
+        .ok_or("Boolean projection missing from clone")?
+        .expression = ProjectionExpression::Constant(AssignmentValue::Boolean(true));
+    unsupported_base.canonicalize()?;
+    let unsupported_kind = condition(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+        assignment_id: bool_projection.assignment_id.clone(),
+        value: AssignmentValue::Boolean(true),
+    })?;
+    assert_eq!(
+        compile(&unsupported_base, &unsupported_kind)?,
+        Err(DomainPackError::InvalidPayload {
+            path: "/condition/assignmentId".to_owned(),
+            message: "projection kind is not supported by official.test counterfactual compilation"
+                .to_owned(),
+        })
+    );
+
+    let mut mismatched_base = base.clone();
+    mismatched_base.metadata.compiler_version = "mismatched-test-compiler".to_owned();
+    let mismatch = condition(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+        assignment_id: bool_projection.assignment_id.clone(),
+        value: AssignmentValue::Boolean(true),
+    })?;
+    assert_eq!(
+        compile(&mismatched_base, &mismatch)?,
+        Err(DomainPackError::InvalidPayload {
+            path: "/context/baseProblem".to_owned(),
+            message: "base planning problem does not match deterministic recompilation".to_owned(),
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn counterfactual_compilation_observes_shared_cancellation_and_expiry() -> Result<(), Box<dyn Error>>
+{
+    let pack = OfficialTestPack;
+    let source = document()?;
+    let compile_context = context();
+    let base = pack.compile(&source, &compile_context)?;
+    let assignment_id = base
+        .projections
+        .iter()
+        .find(|projection| matches!(&projection.expression, ProjectionExpression::Boolean(_)))
+        .ok_or("Boolean projection missing")?
+        .assignment_id
+        .clone();
+    let condition =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id,
+            value: AssignmentValue::Boolean(true),
+        })?;
+
+    let cancellation = CancellationToken::new();
+    let cancelled_clock = Arc::new(FixedMonotonicClock::default());
+    let cancelled_budget = parent_budget(1_000, cancelled_clock, cancellation.clone())?;
+    cancellation.cancel();
+    assert_eq!(
+        pack.compile_counterfactual(
+            &source,
+            &condition,
+            &CounterfactualCompileContext {
+                base_problem: &base,
+                compile_context: &compile_context,
+                budget: cancelled_budget.phase_view(),
+            },
+        ),
+        Err(DomainPackError::Cancelled)
+    );
+
+    let expired_clock = Arc::new(FixedMonotonicClock::default());
+    let expired_budget = parent_budget(1, Arc::clone(&expired_clock), CancellationToken::new())?;
+    expired_clock.advance(Duration::from_millis(1))?;
+    assert_eq!(
+        pack.compile_counterfactual(
+            &source,
+            &condition,
+            &CounterfactualCompileContext {
+                base_problem: &base,
+                compile_context: &compile_context,
+                budget: expired_budget.phase_view(),
+            },
+        ),
+        Err(DomainPackError::BudgetExpired)
     );
     Ok(())
 }

@@ -1,13 +1,14 @@
 use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack};
 use eutheto_domain_api::{
-    CompileContext, DomainBatchCommand, DomainCatalog, DomainExplanation, DomainMutation,
-    DomainPack, DomainPackDescriptor, DomainPackError, DomainShareResult, DomainValidationReport,
-    HistoricalPortableDomainDocument, PortableDomainDocument, PortableImportContext,
-    ShareResultOptions,
+    CompileContext, CounterfactualCompileContext, DomainBatchCommand, DomainCatalog,
+    DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainShareResult,
+    DomainValidationReport, HistoricalPortableDomainDocument, PortableDomainDocument,
+    PortableImportContext, ShareResultOptions,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
-    DomainEntityRef, DomainEvidenceId, NormalizedSolution, OptimizationDirection,
+    AcceptedResult, AssignmentValue, CounterfactualConditionV1, DomainAssignmentId, DomainEntityId,
+    DomainEntityKindId, DomainEntityRef, DomainEvidenceId, EvidenceRenderRequestV1,
+    EvidenceRenderResultV1, ExplanationCapability, NormalizedSolution, OptimizationDirection,
     RequiredRuleBinding, RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue,
     ScoreVector, VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
     VerificationValue, blake3_hex,
@@ -204,7 +205,9 @@ struct IntervalFixturePack {
 
 impl DomainPack for IntervalFixturePack {
     fn descriptor(&self) -> Result<DomainPackDescriptor, DomainPackError> {
-        OfficialTestPack.descriptor()
+        let mut descriptor = OfficialTestPack.descriptor()?;
+        descriptor.explanation_capabilities.clear();
+        Ok(descriptor)
     }
 
     fn catalog(&self) -> Result<DomainCatalog, DomainPackError> {
@@ -337,13 +340,25 @@ impl DomainPack for IntervalFixturePack {
         OfficialTestPack.build_view(document, solution, view_id)
     }
 
-    fn explain(
+    fn render_evidence(
         &self,
-        document: &ScenarioDocument,
-        solution: Option<&NormalizedSolution>,
-        request_id: &str,
-    ) -> Result<DomainExplanation, DomainPackError> {
-        OfficialTestPack.explain(document, solution, request_id)
+        _document: &ScenarioDocument,
+        request: &EvidenceRenderRequestV1,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            explanation_capability(request.kind),
+        ))
+    }
+
+    fn compile_counterfactual(
+        &self,
+        _document: &ScenarioDocument,
+        _condition: &CounterfactualConditionV1,
+        _context: &CounterfactualCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            ExplanationCapability::Counterfactual,
+        ))
     }
 }
 
@@ -1572,6 +1587,21 @@ fn assert_fixture_conformance(
 
 fn projected_schedule(solution: &NormalizedSolution) -> Result<String, serde_json::Error> {
     serde_json::to_string(&solution.assignments)
+}
+fn explanation_capability(kind: eutheto_domain_ir::ExplanationKind) -> ExplanationCapability {
+    match kind {
+        eutheto_domain_ir::ExplanationKind::Validation => ExplanationCapability::Validation,
+        eutheto_domain_ir::ExplanationKind::Infeasibility => ExplanationCapability::Infeasibility,
+        eutheto_domain_ir::ExplanationKind::Assignment => ExplanationCapability::Assignment,
+        eutheto_domain_ir::ExplanationKind::Counterfactual => ExplanationCapability::Counterfactual,
+        eutheto_domain_ir::ExplanationKind::SolutionDifference => {
+            ExplanationCapability::SolutionDifference
+        }
+        eutheto_domain_ir::ExplanationKind::Repair => ExplanationCapability::Repair,
+        eutheto_domain_ir::ExplanationKind::OptimalityStatus => {
+            ExplanationCapability::OptimalityStatus
+        }
+    }
 }
 
 fn contract(error: impl std::fmt::Display) -> DomainPackError {

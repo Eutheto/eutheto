@@ -264,6 +264,15 @@ export type DomainCapability =
   | "uiManifest"
   | "aiTools";
 
+export type ExplanationCapability =
+  | "validation"
+  | "infeasibility"
+  | "assignment"
+  | "counterfactual"
+  | "solutionDifference"
+  | "repair"
+  | "optimalityStatus";
+
 export interface DomainPackDescriptorDto {
   readonly id: string;
   readonly displayName: LocalizedTextDto;
@@ -275,6 +284,7 @@ export interface DomainPackDescriptorDto {
   };
   readonly iconId: string;
   readonly capabilities: readonly DomainCapability[];
+  readonly explanationCapabilities: readonly ExplanationCapability[];
   readonly portableSchemaVersion: number;
   readonly portableCapabilities: readonly string[];
   readonly shareResultSchemaVersion: number;

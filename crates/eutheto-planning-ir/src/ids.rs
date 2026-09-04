@@ -116,7 +116,6 @@ planning_id!(
     "Stable identity of an ordered objective level."
 );
 planning_id!(ObjectiveTermId, "Stable identity of an objective term.");
-planning_id!(AssumptionId, "Stable identity of an assumption group.");
 planning_id!(ProjectionId, "Stable identity of a solution projection.");
 planning_id!(ProvenanceId, "Stable identity of a provenance record.");
 planning_id!(ConstraintTag, "Stable identity of a constraint tag.");

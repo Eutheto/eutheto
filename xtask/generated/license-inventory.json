@@ -1245,6 +1245,14 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "eutheto-explain",
+      "version": "0.1.0",
+      "kind": "workspace",
+      "licenseConcluded": "Apache-2.0",
+      "source": "crates/eutheto-explain"
+    },
+    {
+      "ecosystem": "cargo",
       "name": "eutheto-export",
       "version": "0.1.0",
       "kind": "workspace",
