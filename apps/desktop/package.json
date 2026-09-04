@@ -19,7 +19,7 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@lucide/vue": "1.37.0",
+    "@lucide/vue": "1.39.0",
     "@tauri-apps/api": "2.11.1",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
@@ -46,7 +46,7 @@
     "typescript-eslint": "8.68.0",
     "vite": "8.2.2",
     "vitest": "4.1.11",
-    "vue-component-type-helpers": "3.0.3",
-    "vue-tsc": "3.2.6"
+    "vue-component-type-helpers": "3.3.11",
+    "vue-tsc": "3.3.11"
   }
 }

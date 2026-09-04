@@ -614,7 +614,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `@jridgewell/resolve-uri` | `3.1.2` | `NOASSERTION` | `https://registry.npmjs.org/@jridgewell/resolve-uri/-/resolve-uri-3.1.2.tgz` |
 | npm | `@jridgewell/sourcemap-codec` | `1.6.0` | `NOASSERTION` | `https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.6.0.tgz` |
 | npm | `@jridgewell/trace-mapping` | `0.3.31` | `NOASSERTION` | `https://registry.npmjs.org/@jridgewell/trace-mapping/-/trace-mapping-0.3.31.tgz` |
-| npm | `@lucide/vue` | `1.37.0` | `NOASSERTION` | `https://registry.npmjs.org/@lucide/vue/-/vue-1.37.0.tgz` |
+| npm | `@lucide/vue` | `1.39.0` | `NOASSERTION` | `https://registry.npmjs.org/@lucide/vue/-/vue-1.39.0.tgz` |
 | npm | `@modelcontextprotocol/sdk` | `1.30.0` | `NOASSERTION` | `https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz` |
 | npm | `@nodelib/fs.scandir` | `2.1.5` | `NOASSERTION` | `https://registry.npmjs.org/@nodelib/fs.scandir/-/fs.scandir-2.1.5.tgz` |
 | npm | `@nodelib/fs.stat` | `2.0.5` | `NOASSERTION` | `https://registry.npmjs.org/@nodelib/fs.stat/-/fs.stat-2.0.5.tgz` |
@@ -703,7 +703,7 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `@vue/compiler-sfc` | `3.5.42` | `NOASSERTION` | `https://registry.npmjs.org/@vue/compiler-sfc/-/compiler-sfc-3.5.42.tgz` |
 | npm | `@vue/compiler-ssr` | `3.5.42` | `NOASSERTION` | `https://registry.npmjs.org/@vue/compiler-ssr/-/compiler-ssr-3.5.42.tgz` |
 | npm | `@vue/eslint-config-typescript` | `14.9.0` | `NOASSERTION` | `https://registry.npmjs.org/@vue/eslint-config-typescript/-/eslint-config-typescript-14.9.0.tgz` |
-| npm | `@vue/language-core` | `3.2.6` | `NOASSERTION` | `https://registry.npmjs.org/@vue/language-core/-/language-core-3.2.6.tgz` |
+| npm | `@vue/language-core` | `3.3.11` | `NOASSERTION` | `https://registry.npmjs.org/@vue/language-core/-/language-core-3.3.11.tgz` |
 | npm | `@vue/reactivity` | `3.5.42` | `NOASSERTION` | `https://registry.npmjs.org/@vue/reactivity/-/reactivity-3.5.42.tgz` |
 | npm | `@vue/runtime-core` | `3.5.42` | `NOASSERTION` | `https://registry.npmjs.org/@vue/runtime-core/-/runtime-core-3.5.42.tgz` |
 | npm | `@vue/runtime-dom` | `3.5.42` | `NOASSERTION` | `https://registry.npmjs.org/@vue/runtime-dom/-/runtime-dom-3.5.42.tgz` |
@@ -1097,11 +1097,11 @@ This deterministic Phase-00 inventory is derived from `Cargo.lock`, `pnpm-lock.y
 | npm | `vitest` | `4.1.11` | `NOASSERTION` | `https://registry.npmjs.org/vitest/-/vitest-4.1.11.tgz` |
 | npm | `vscode-uri` | `3.2.0` | `NOASSERTION` | `https://registry.npmjs.org/vscode-uri/-/vscode-uri-3.2.0.tgz` |
 | npm | `vue` | `3.5.42` | `NOASSERTION` | `https://registry.npmjs.org/vue/-/vue-3.5.42.tgz` |
-| npm | `vue-component-type-helpers` | `3.0.3` | `NOASSERTION` | `https://registry.npmjs.org/vue-component-type-helpers/-/vue-component-type-helpers-3.0.3.tgz` |
+| npm | `vue-component-type-helpers` | `3.3.11` | `NOASSERTION` | `https://registry.npmjs.org/vue-component-type-helpers/-/vue-component-type-helpers-3.3.11.tgz` |
 | npm | `vue-demi` | `0.14.10` | `NOASSERTION` | `https://registry.npmjs.org/vue-demi/-/vue-demi-0.14.10.tgz` |
 | npm | `vue-eslint-parser` | `10.4.1` | `NOASSERTION` | `https://registry.npmjs.org/vue-eslint-parser/-/vue-eslint-parser-10.4.1.tgz` |
 | npm | `vue-metamorph` | `3.3.4` | `NOASSERTION` | `https://registry.npmjs.org/vue-metamorph/-/vue-metamorph-3.3.4.tgz` |
-| npm | `vue-tsc` | `3.2.6` | `NOASSERTION` | `https://registry.npmjs.org/vue-tsc/-/vue-tsc-3.2.6.tgz` |
+| npm | `vue-tsc` | `3.3.11` | `NOASSERTION` | `https://registry.npmjs.org/vue-tsc/-/vue-tsc-3.3.11.tgz` |
 | npm | `web-worker` | `1.5.0` | `NOASSERTION` | `https://registry.npmjs.org/web-worker/-/web-worker-1.5.0.tgz` |
 | npm | `which` | `2.0.2` | `NOASSERTION` | `https://registry.npmjs.org/which/-/which-2.0.2.tgz` |
 | npm | `why-is-node-running` | `2.3.0` | `NOASSERTION` | `https://registry.npmjs.org/why-is-node-running/-/why-is-node-running-2.3.0.tgz` |
