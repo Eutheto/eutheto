@@ -1,4 +1,4 @@
-use eutheto_domain_ir::{
+use crate::{
     AcceptedResult, AcceptedResultRefV1, AssignmentComparisonV1, AssignmentLockStateV1,
     ComparisonBindingV1, ComparisonOrdering, DomainContractError, ExplanationCertainty,
     LockComparisonV1, MetricComparisonV1, RuleComparisonV1, RunComparisonSideV1, RunComparisonV1,
@@ -23,7 +23,7 @@ pub enum ComparisonSide {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComparisonLockPair {
     /// Assignment to which both observations apply.
-    pub assignment_id: eutheto_domain_ir::DomainAssignmentId,
+    pub assignment_id: crate::DomainAssignmentId,
     /// Base lock state.
     pub before: AssignmentLockStateV1,
     /// Candidate lock state.
@@ -192,7 +192,7 @@ fn assignment_deltas(
     candidate: &AcceptedResult,
 ) -> (
     Vec<AssignmentComparisonV1>,
-    BTreeSet<eutheto_domain_ir::DomainEntityRef>,
+    BTreeSet<crate::DomainEntityRef>,
 ) {
     let before = &base.solution.assignments;
     let after = &candidate.solution.assignments;
@@ -249,10 +249,7 @@ fn assignment_deltas(
 fn rule_deltas(
     base: &AcceptedResult,
     candidate: &AcceptedResult,
-) -> (
-    Vec<RuleComparisonV1>,
-    BTreeSet<eutheto_domain_ir::DomainEntityRef>,
-) {
+) -> (Vec<RuleComparisonV1>, BTreeSet<crate::DomainEntityRef>) {
     let before = &base.verification.required_rule_results;
     let after = &candidate.verification.required_rule_results;
     let mut left = 0;
@@ -547,7 +544,7 @@ fn ordering(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eutheto_domain_ir::{
+    use crate::{
         DomainAssignment, DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef,
         MetricId, MetricValue, NORMALIZED_SOLUTION_SCHEMA_VERSION, NormalizedSolution,
         OptimizationDirection, RuleEvaluation, RunPhaseTimingsV1, ScoreCategoryId, ScoreLevelId,
@@ -573,7 +570,7 @@ mod tests {
         Ok(DomainAssignment {
             id: DomainAssignmentId::new(format!("tests.{name}"))?,
             entity: entity(name)?,
-            value: eutheto_domain_ir::AssignmentValue::Integer(value),
+            value: crate::AssignmentValue::Integer(value),
             evidence: Vec::new(),
         })
     }
@@ -748,10 +745,10 @@ mod tests {
         let locks = [ComparisonLockPair {
             assignment_id: DomainAssignmentId::new("tests.b")?,
             before: AssignmentLockStateV1::Locked {
-                value: eutheto_domain_ir::AssignmentValue::Integer(2),
+                value: crate::AssignmentValue::Integer(2),
             },
             after: AssignmentLockStateV1::Locked {
-                value: eutheto_domain_ir::AssignmentValue::Integer(3),
+                value: crate::AssignmentValue::Integer(3),
             },
         }];
         let context = ComparisonContext {

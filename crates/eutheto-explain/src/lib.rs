@@ -5,11 +5,14 @@
 //! identities, and accepted candidates are compared only through independently verified domain IR.
 
 mod assumption;
-mod comparison;
 mod counterfactual;
 mod shrink;
 
+pub use eutheto_domain_ir::{
+    ComparisonContext, ComparisonError, ComparisonLockPair, ComparisonRunManifests, ComparisonSide,
+    compare_accepted_results,
+};
+
 pub use assumption::*;
-pub use comparison::*;
 pub use counterfactual::*;
 pub use shrink::*;

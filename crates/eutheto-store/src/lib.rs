@@ -5,9 +5,12 @@
 //! transaction and therefore cannot accidentally bypass revision checks.
 
 use eutheto_domain_ir::{
-    AcceptedResult, DomainEvidenceId, NormalizedSolution, PortableAcceptedResultV2,
-    RUN_REQUEST_SEMANTICS_SCHEMA_VERSION, RunInputV1, RunManifestV1, RunPhaseTimingsV1,
-    RunRequestSemanticsV1, RunTerminalOutcomeV1, VerificationReport, VerificationValue,
+    AcceptedResult, ComparisonContext, ComparisonRunManifests, CounterfactualConclusionV1,
+    CounterfactualJobErrorV1, CounterfactualJobRecordV1, CounterfactualJobRequestV1,
+    CounterfactualJobState, CounterfactualResultV1, DomainEvidenceId, NormalizedSolution,
+    PortableAcceptedResultV2, RUN_REQUEST_SEMANTICS_SCHEMA_VERSION, RunInputV1, RunManifestV1,
+    RunPhaseTimingsV1, RunRequestSemanticsV1, RunTerminalOutcomeV1, VerificationReport,
+    VerificationValue, compare_accepted_results,
 };
 use eutheto_export::{
     ApplicationMetadata, PortableScenario, SemanticCapability, collect_scenario_owned_uuids,
@@ -19,7 +22,7 @@ use eutheto_import::{
     StagedDisposition, StagedImport,
 };
 use eutheto_types::{
-    ActorRef, BackendId, BundleId, CommandId, CommandSource, IanaTimeZone,
+    ActorRef, BackendId, BundleId, CommandId, CommandSource, CounterfactualJobId, IanaTimeZone,
     MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset, PortableJsonLimits, ProjectMetadataDto,
     ProjectSummaryDto, RequestId, Revision, Rfc3339Timestamp, SafeDiagnosticValue,
     ScenarioDocument, ScenarioId, ScenarioRevisionReference, ScenarioSnapshotId, SolutionId,
@@ -45,16 +48,19 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-const CURRENT_SCHEMA_VERSION: u32 = 2;
+const CURRENT_SCHEMA_VERSION: u32 = 3;
 const INITIAL_MIGRATION: &str = include_str!("../../../migrations/V1_initial_schema.sql");
 const INDEPENDENT_VERIFICATION_MIGRATION: &str =
     include_str!("../../../migrations/V2_independent_verification.sql");
+const COUNTERFACTUAL_JOB_REQUESTS_MIGRATION: &str =
+    include_str!("../../../migrations/V3_counterfactual_job_requests.sql");
 const SQLITE_LENGTH_LIMIT_BYTES: i32 = 128 * 1024 * 1024;
 // Allows one SQLite busy-timeout interval for worker cleanup and one for the
 // owning process to persist its terminal timeout/cancellation outcome.
 const SOLVE_TERMINAL_PERSISTENCE_GRACE_MILLISECONDS: u64 = 10_000;
 const V1_MIGRATION_NAME: &str = "V1_initial_schema.sql";
 const V2_MIGRATION_NAME: &str = "V2_independent_verification.sql";
+const V3_MIGRATION_NAME: &str = "V3_counterfactual_job_requests.sql";
 const PRE_V2_BACKUP_SUFFIX: &str = ".pre-v2-backup.sqlite3";
 const MAX_SNAPSHOT_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 const IMPORT_PROVENANCE_RETENTION_POLICY_VERSION: u32 = 1;
@@ -154,6 +160,18 @@ pub enum StoreError {
     InvalidPersistedDiagnostic(String),
     #[error("scenario snapshot {0} does not match its solve input")]
     SnapshotMismatch(ScenarioSnapshotId),
+    #[error("counterfactual request {request_id} conflicts with an existing request")]
+    CounterfactualRequestIdConflict { request_id: RequestId },
+    #[error("counterfactual job {0} collides with an existing job")]
+    CounterfactualJobCollision(CounterfactualJobId),
+    #[error("counterfactual job {0} was not found")]
+    CounterfactualJobNotFound(CounterfactualJobId),
+    #[error("counterfactual cancellation request {request_id} conflicts with persisted state")]
+    CounterfactualCancelRequestIdConflict { request_id: RequestId },
+    #[error("counterfactual job {0} cannot make the requested transition")]
+    CounterfactualTransitionConflict(CounterfactualJobId),
+    #[error("persisted counterfactual job is invalid: {0}")]
+    InvalidPersistedCounterfactual(String),
     #[cfg(debug_assertions)]
     #[error("injected persistence failure")]
     InjectedFailure,
@@ -238,6 +256,8 @@ pub struct OpenOptions {
     pub failpoint: Option<Failpoint>,
     #[cfg(debug_assertions)]
     v2_migration_begin_test_hook: Option<V2MigrationBeginTestHook>,
+    #[cfg(debug_assertions)]
+    v3_migration_begin_test_hook: Option<V3MigrationBeginTestHook>,
 }
 
 /// One-shot test failure locations. This API is absent from optimized builds.
@@ -246,11 +266,15 @@ pub struct OpenOptions {
 pub enum Failpoint {
     AfterMigrationSql,
     AfterV2MigrationSql,
+    AfterV3MigrationSql,
     AfterDocumentWrite,
     AfterSupplementalWrite,
     AfterSolveRunInsert,
     AfterAcceptedSolutionInsert,
     AfterQuarantineWrite,
+    AfterCounterfactualJobInsert,
+    AfterCounterfactualTransition,
+    AfterCounterfactualCancelWrite,
 }
 
 /// Debug-only synchronization immediately before the V2 writer transaction.
@@ -294,6 +318,48 @@ impl Default for V2MigrationBeginTestHook {
         Self::new()
     }
 }
+
+/// Debug-only synchronization immediately before the V3 writer transaction.
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug)]
+pub struct V3MigrationBeginTestHook {
+    reached: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+}
+
+#[cfg(debug_assertions)]
+impl V3MigrationBeginTestHook {
+    /// Creates a hook shared by one test thread and the migration actor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            reached: Arc::new(std::sync::Barrier::new(2)),
+            release: Arc::new(std::sync::Barrier::new(2)),
+        }
+    }
+
+    /// Blocks until the migration actor is immediately before V3 `BEGIN`.
+    pub fn wait_before_begin(&self) {
+        self.reached.wait();
+    }
+
+    /// Releases the migration actor to acquire its writer lock.
+    pub fn release(&self) {
+        self.release.wait();
+    }
+
+    fn actor_wait_before_begin(&self) {
+        self.reached.wait();
+        self.release.wait();
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Default for V3MigrationBeginTestHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl OpenOptions {
     /// Uses a validated snapshot policy with no injected failure.
     #[must_use]
@@ -304,6 +370,8 @@ impl OpenOptions {
             failpoint: None,
             #[cfg(debug_assertions)]
             v2_migration_begin_test_hook: None,
+            #[cfg(debug_assertions)]
+            v3_migration_begin_test_hook: None,
         }
     }
 
@@ -320,6 +388,14 @@ impl OpenOptions {
     #[must_use]
     pub fn with_v2_migration_begin_test_hook(mut self, hook: V2MigrationBeginTestHook) -> Self {
         self.v2_migration_begin_test_hook = Some(hook);
+        self
+    }
+
+    /// Pauses an existing-V2 migration immediately before its V3 writer transaction.
+    #[cfg(debug_assertions)]
+    #[must_use]
+    pub fn with_v3_migration_begin_test_hook(mut self, hook: V3MigrationBeginTestHook) -> Self {
+        self.v3_migration_begin_test_hook = Some(hook);
         self
     }
 }
@@ -489,6 +565,45 @@ pub struct LoadedSolveInputV1 {
     pub input: RunInputV1,
     /// Exact scenario document referenced by the input snapshot.
     pub document: ScenarioDocument,
+}
+
+/// Result of atomically creating or reusing a counterfactual request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartedCounterfactualJobV1 {
+    /// Exact persisted lifecycle record.
+    pub record: CounterfactualJobRecordV1,
+    /// Whether an existing semantically identical request was reused.
+    pub reused: bool,
+}
+
+/// One legal requested counterfactual lifecycle transition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CounterfactualJobTransitionV1 {
+    /// Mark queued work as started.
+    Running { started_at: Rfc3339Timestamp },
+    /// Persist a locally authorized counterfactual result.
+    Completed { result: Box<CounterfactualResultV1> },
+    /// Persist a safe typed failure.
+    Failed {
+        finished_at: Rfc3339Timestamp,
+        error: CounterfactualJobErrorV1,
+    },
+    /// Finish cleanup after a durable cancellation request.
+    Cancelled { finished_at: Rfc3339Timestamp },
+    /// Record that started work ended without a result.
+    Interrupted { finished_at: Rfc3339Timestamp },
+}
+
+/// Result of linearizing a cancellation request against terminal completion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CounterfactualCancelOutcomeV1 {
+    /// Cancellation was durably requested or the same request was reused.
+    Requested {
+        record: CounterfactualJobRecordV1,
+        reused: bool,
+    },
+    /// A non-cancel terminal state won before this request and was not mutated.
+    AlreadyTerminal { record: CounterfactualJobRecordV1 },
 }
 
 /// Redacted, nonsecret candidate diagnostics retained for a quarantined run.
@@ -789,6 +904,8 @@ impl SqliteScenarioStore {
         let actor_failpoint = Arc::clone(&failpoint);
         #[cfg(debug_assertions)]
         let actor_v2_migration_begin_test_hook = options.v2_migration_begin_test_hook.clone();
+        #[cfg(debug_assertions)]
+        let actor_v3_migration_begin_test_hook = options.v3_migration_begin_test_hook.clone();
 
         let actor_thread = thread::Builder::new()
             .name("eutheto-sqlite-store".to_owned())
@@ -804,6 +921,8 @@ impl SqliteScenarioStore {
                                 &guard.file,
                                 #[cfg(debug_assertions)]
                                 actor_v2_migration_begin_test_hook.as_ref(),
+                                #[cfg(debug_assertions)]
+                                actor_v3_migration_begin_test_hook.as_ref(),
                                 #[cfg(debug_assertions)]
                                 &actor_failpoint,
                             )
@@ -1260,6 +1379,99 @@ impl SqliteScenarioStore {
     pub async fn finalize_terminal_run(&self, manifest: RunManifestV1) -> Result<(), StoreError> {
         self.call(move |connection| finalize_terminal_run_transaction(connection, &manifest))
             .await
+    }
+
+    /// Atomically creates or reuses an exact counterfactual job request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed identity, authority, persisted-data, revision, actor, or
+    /// database error. No partial job or portable-library revision mutation is committed.
+    pub async fn start_counterfactual_job(
+        &self,
+        request: CounterfactualJobRequestV1,
+    ) -> Result<StartedCounterfactualJobV1, StoreError> {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        self.call(move |connection| {
+            start_counterfactual_job_transaction(
+                connection,
+                &request,
+                #[cfg(debug_assertions)]
+                &failpoint,
+            )
+        })
+        .await
+    }
+
+    /// Loads and cross-checks one exact typed counterfactual lifecycle record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found error, or rejects invalid, oversized, secret-like,
+    /// noncanonical, or column-inconsistent persisted data.
+    pub async fn load_counterfactual_job(
+        &self,
+        job_id: CounterfactualJobId,
+    ) -> Result<CounterfactualJobRecordV1, StoreError> {
+        self.call(move |connection| load_counterfactual_job_row(connection, job_id))
+            .await
+    }
+
+    /// Applies one legal counterfactual lifecycle transition using an explicit database CAS.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found or transition conflict, rejects invalid local
+    /// completion authority and persisted data, or returns an actor/database error.
+    pub async fn transition_counterfactual_job(
+        &self,
+        job_id: CounterfactualJobId,
+        transition: CounterfactualJobTransitionV1,
+    ) -> Result<CounterfactualJobRecordV1, StoreError> {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        self.call(move |connection| {
+            transition_counterfactual_job_transaction(
+                connection,
+                job_id,
+                &transition,
+                #[cfg(debug_assertions)]
+                &failpoint,
+            )
+        })
+        .await
+    }
+
+    /// Linearizes a cancellation request against counterfactual completion.
+    ///
+    /// Queued jobs become cancelled immediately; running jobs retain the durable
+    /// cancellation pair until cleanup transitions them to cancelled. A prior
+    /// non-cancel terminal state is returned without mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed not-found or cancel-identity conflict, rejects invalid
+    /// timestamps and persisted data, or returns an actor/database error.
+    pub async fn request_counterfactual_cancel(
+        &self,
+        job_id: CounterfactualJobId,
+        cancel_request_id: RequestId,
+        requested_at: Rfc3339Timestamp,
+    ) -> Result<CounterfactualCancelOutcomeV1, StoreError> {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        self.call(move |connection| {
+            request_counterfactual_cancel_transaction(
+                connection,
+                job_id,
+                cancel_request_id,
+                requested_at,
+                #[cfg(debug_assertions)]
+                &failpoint,
+            )
+        })
+        .await
     }
 
     /// Records that a project was opened and returns its authoritative view.
@@ -2556,6 +2768,892 @@ fn finalize_terminal_run_transaction(
     Ok(())
 }
 
+struct PersistedCounterfactualRow {
+    id: String,
+    request_id: String,
+    request_hash: String,
+    cancel_request_id: Option<String>,
+    scenario_id: String,
+    scenario_revision: i64,
+    snapshot_id: String,
+    base_solution_id: String,
+    base_result_checksum: String,
+    condition_json: String,
+    total_budget_ms: i64,
+    state: String,
+    cancel_requested_at: Option<String>,
+    created_at: String,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    result_json: Option<String>,
+    evidence_json: Option<String>,
+    error_json: Option<String>,
+    request_json: String,
+}
+
+fn invalid_counterfactual(message: impl Into<String>) -> StoreError {
+    StoreError::InvalidPersistedCounterfactual(message.into())
+}
+
+fn parse_counterfactual_state(value: &str) -> Result<CounterfactualJobState, StoreError> {
+    match value {
+        "queued" => Ok(CounterfactualJobState::Queued),
+        "running" => Ok(CounterfactualJobState::Running),
+        "completed" => Ok(CounterfactualJobState::Completed),
+        "failed" => Ok(CounterfactualJobState::Failed),
+        "cancelled" => Ok(CounterfactualJobState::Cancelled),
+        "interrupted" => Ok(CounterfactualJobState::Interrupted),
+        _ => Err(invalid_counterfactual("invalid lifecycle state")),
+    }
+}
+
+fn counterfactual_state_name(state: CounterfactualJobState) -> &'static str {
+    match state {
+        CounterfactualJobState::Queued => "queued",
+        CounterfactualJobState::Running => "running",
+        CounterfactualJobState::Completed => "completed",
+        CounterfactualJobState::Failed => "failed",
+        CounterfactualJobState::Cancelled => "cancelled",
+        CounterfactualJobState::Interrupted => "interrupted",
+    }
+}
+
+fn parse_checked_json<T: DeserializeOwned>(bytes: &[u8], context: &str) -> Result<T, StoreError> {
+    if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(invalid_counterfactual(format!(
+            "{context} exceeds the JSON byte limit"
+        )));
+    }
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|error| invalid_counterfactual(error.to_string()))?;
+    validate_stored_portable_json(&value, context)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    serde_json::from_value(value).map_err(|error| invalid_counterfactual(error.to_string()))
+}
+
+fn parse_counterfactual_request(bytes: &[u8]) -> Result<CounterfactualJobRequestV1, StoreError> {
+    if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(invalid_counterfactual(
+            "counterfactual request exceeds the JSON byte limit",
+        ));
+    }
+    CounterfactualJobRequestV1::from_json(bytes)
+        .map_err(|error| invalid_counterfactual(error.to_string()))
+}
+
+fn parse_counterfactual_result(bytes: &[u8]) -> Result<CounterfactualResultV1, StoreError> {
+    if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(invalid_counterfactual(
+            "counterfactual result exceeds the JSON byte limit",
+        ));
+    }
+    CounterfactualResultV1::from_json(bytes)
+        .map_err(|error| invalid_counterfactual(error.to_string()))
+}
+
+#[allow(clippy::too_many_lines)]
+fn load_counterfactual_job_row(
+    connection: &Connection,
+    job_id: CounterfactualJobId,
+) -> Result<CounterfactualJobRecordV1, StoreError> {
+    let row = connection
+        .query_row(
+            "SELECT id, request_id, request_hash, cancel_request_id, scenario_id, scenario_revision, snapshot_id, base_solution_id, base_result_checksum, condition_json, total_budget_ms, state, cancel_requested_at, created_at, started_at, finished_at, result_json, evidence_json, error_json, request_json FROM counterfactual_jobs WHERE id = ?1",
+            [job_id.to_string()],
+            |row| {
+                Ok(PersistedCounterfactualRow {
+                    id: row.get(0)?,
+                    request_id: row.get(1)?,
+                    request_hash: row.get(2)?,
+                    cancel_request_id: row.get(3)?,
+                    scenario_id: row.get(4)?,
+                    scenario_revision: row.get(5)?,
+                    snapshot_id: row.get(6)?,
+                    base_solution_id: row.get(7)?,
+                    base_result_checksum: row.get(8)?,
+                    condition_json: row.get(9)?,
+                    total_budget_ms: row.get(10)?,
+                    state: row.get(11)?,
+                    cancel_requested_at: row.get(12)?,
+                    created_at: row.get(13)?,
+                    started_at: row.get(14)?,
+                    finished_at: row.get(15)?,
+                    result_json: row.get(16)?,
+                    evidence_json: row.get(17)?,
+                    error_json: row.get(18)?,
+                    request_json: row.get(19)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(StoreError::CounterfactualJobNotFound(job_id))?;
+    if row.request_json.is_empty() {
+        return Err(invalid_counterfactual("counterfactual request is missing"));
+    }
+    if row.evidence_json.is_some() {
+        return Err(invalid_counterfactual(
+            "counterfactual evidence has no typed persistence contract",
+        ));
+    }
+    let request = parse_counterfactual_request(row.request_json.as_bytes())?;
+    let condition =
+        eutheto_domain_ir::CounterfactualConditionV1::from_json(row.condition_json.as_bytes())
+            .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let stored_job_id: CounterfactualJobId = row
+        .id
+        .parse()
+        .map_err(|error| invalid_counterfactual(format!("invalid job identity: {error}")))?;
+    let request_id: RequestId = row
+        .request_id
+        .parse()
+        .map_err(|error| invalid_counterfactual(format!("invalid request identity: {error}")))?;
+    let scenario_id: ScenarioId = row
+        .scenario_id
+        .parse()
+        .map_err(|error| invalid_counterfactual(format!("invalid scenario identity: {error}")))?;
+    let snapshot_id: ScenarioSnapshotId = row
+        .snapshot_id
+        .parse()
+        .map_err(|error| invalid_counterfactual(format!("invalid snapshot identity: {error}")))?;
+    let base_solution_id: SolutionId = row.base_solution_id.parse().map_err(|error| {
+        invalid_counterfactual(format!("invalid base solution identity: {error}"))
+    })?;
+    let cancel_request_id = row
+        .cancel_request_id
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .map_err(|error| invalid_counterfactual(format!("invalid cancel identity: {error}")))?;
+    let created_at = parse_timestamp(&row.created_at, "counterfactual created_at")
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let started_at = row
+        .started_at
+        .as_deref()
+        .map(|value| parse_timestamp(value, "counterfactual started_at"))
+        .transpose()
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let finished_at = row
+        .finished_at
+        .as_deref()
+        .map(|value| parse_timestamp(value, "counterfactual finished_at"))
+        .transpose()
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let cancel_requested_at = row
+        .cancel_requested_at
+        .as_deref()
+        .map(|value| parse_timestamp(value, "counterfactual cancel_requested_at"))
+        .transpose()
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let result = row
+        .result_json
+        .as_deref()
+        .map(|value| parse_counterfactual_result(value.as_bytes()))
+        .transpose()?;
+    let error = row
+        .error_json
+        .as_deref()
+        .map(|value| parse_checked_json(value.as_bytes(), "counterfactual error"))
+        .transpose()?;
+    let state = parse_counterfactual_state(&row.state)?;
+    let record = CounterfactualJobRecordV1::new(
+        request,
+        state,
+        started_at,
+        finished_at,
+        cancel_request_id,
+        cancel_requested_at,
+        result,
+        error,
+    )
+    .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let semantics = &record.request.semantics;
+    if stored_job_id != job_id
+        || record.request.job_id != stored_job_id
+        || record.request.request_id != request_id
+        || record.request.request_hash != row.request_hash
+        || semantics.scenario_id != scenario_id
+        || semantics.scenario_revision != i64_to_u64(row.scenario_revision)?
+        || semantics.snapshot_id != snapshot_id
+        || semantics.base.solution_id != base_solution_id
+        || semantics.base.result_checksum != row.base_result_checksum
+        || record.request.condition != condition
+        || semantics.total_budget_milliseconds.value() != i64_to_u64(row.total_budget_ms)?
+        || record.request.created_at != created_at
+        || counterfactual_state_name(record.state) != row.state
+        || serialize_checked_json(&record.request, "counterfactual request")
+            .map_err(invalid_counterfactual)?
+            != row.request_json
+        || serialize_checked_json(&record.request.condition, "counterfactual condition")
+            .map_err(invalid_counterfactual)?
+            != row.condition_json
+        || record
+            .result
+            .as_ref()
+            .map(|value| serialize_checked_json(value, "counterfactual result"))
+            .transpose()
+            .map_err(invalid_counterfactual)?
+            != row.result_json
+        || record
+            .error
+            .as_ref()
+            .map(|value| serialize_checked_json(value, "counterfactual error"))
+            .transpose()
+            .map_err(invalid_counterfactual)?
+            != row.error_json
+    {
+        return Err(invalid_counterfactual(
+            "counterfactual columns disagree with the typed record",
+        ));
+    }
+    Ok(record)
+}
+
+struct PersistedAcceptedAuthorityRow {
+    run_id: String,
+    scenario_id: String,
+    scenario_revision: i64,
+    solution_json: String,
+    score_json: String,
+    report_json: String,
+    evidence_json: Option<String>,
+}
+
+#[allow(clippy::too_many_lines)]
+fn load_local_accepted_authority(
+    connection: &Connection,
+    solution_id: SolutionId,
+) -> Result<PortableAcceptedResultV2, StoreError> {
+    let row: Option<PersistedAcceptedAuthorityRow> = connection
+        .query_row(
+            "SELECT solve_run_id, scenario_id, scenario_revision, normalized_solution_json, score_json, verification_report_json, evidence_json FROM solutions WHERE id = ?1 AND accepted = 1 AND status = 'verified'",
+            [solution_id.to_string()],
+            |row| {
+                Ok(PersistedAcceptedAuthorityRow {
+                    run_id: row.get(0)?,
+                    scenario_id: row.get(1)?,
+                    scenario_revision: row.get(2)?,
+                    solution_json: row.get(3)?,
+                    score_json: row.get(4)?,
+                    report_json: row.get(5)?,
+                    evidence_json: row.get(6)?,
+                })
+            },
+        )
+        .optional()?;
+    let Some(row) = row else {
+        return Err(invalid_counterfactual(
+            "accepted solution authority is unavailable",
+        ));
+    };
+    let run_id: SolveRunId = row
+        .run_id
+        .parse()
+        .map_err(|error| invalid_counterfactual(format!("invalid solve-run identity: {error}")))?;
+    let scenario_id: ScenarioId = row
+        .scenario_id
+        .parse()
+        .map_err(|error| invalid_counterfactual(format!("invalid scenario identity: {error}")))?;
+    let loaded = load_solve_input_row(connection, run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let (input, status, manifest_json, started_at) = load_run_input_record(connection, run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if loaded.input != input {
+        return Err(invalid_counterfactual(
+            "accepted run input changed while loading",
+        ));
+    }
+    let manifest_json =
+        manifest_json.ok_or_else(|| invalid_counterfactual("accepted run manifest is missing"))?;
+    let manifest = RunManifestV1::from_json(manifest_json.as_bytes())
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let solution = NormalizedSolution::from_json(row.solution_json.as_bytes())
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let report = VerificationReport::from_json(row.report_json.as_bytes())
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let accepted_result = AcceptedResult::new(solution, report)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let score: eutheto_domain_ir::ScoreVector =
+        parse_checked_json(row.score_json.as_bytes(), "accepted score")?;
+    let evidence_json = row
+        .evidence_json
+        .ok_or_else(|| invalid_counterfactual("accepted result evidence is missing"))?;
+    let evidence: BTreeMap<DomainEvidenceId, VerificationValue> =
+        parse_checked_json(evidence_json.as_bytes(), "accepted evidence")?;
+    if accepted_result.solution.solution_id != solution_id
+        || accepted_result.solution.scenario_id != scenario_id
+        || accepted_result.solution.scenario_revision != i64_to_u64(row.scenario_revision)?
+        || accepted_result.verification.score != score
+        || manifest.run_id != run_id
+        || manifest.started_at != started_at
+        || status != terminal_status(&manifest.outcome)?
+    {
+        return Err(invalid_counterfactual(
+            "accepted solution columns disagree with local authority",
+        ));
+    }
+    PortableAcceptedResultV2::new(input, manifest, accepted_result, evidence)
+        .map_err(|error| invalid_counterfactual(error.to_string()))
+}
+
+fn validate_counterfactual_base_authority(
+    connection: &Connection,
+    request: &CounterfactualJobRequestV1,
+) -> Result<(), StoreError> {
+    let semantics = &request.semantics;
+    let base = load_local_accepted_authority(connection, semantics.base.solution_id)?;
+    if base.accepted_result.checksum != semantics.base.result_checksum
+        || base.run_input.run_id != semantics.base_run_id
+        || base.run_input.checksum != semantics.base_run_input_checksum
+        || base.run_input.scenario_id != semantics.scenario_id
+        || base.run_input.scenario_revision != semantics.scenario_revision
+        || base.run_input.snapshot_id != semantics.snapshot_id
+        || base.run_input.snapshot_document_hash != semantics.snapshot_document_hash
+        || base.run_input.model_hash != semantics.base_model_hash
+        || base.run_input.objective_policy_hash != semantics.objective_policy_hash
+        || base.run_input.temporary_condition_hash.is_some()
+    {
+        return Err(invalid_counterfactual(
+            "counterfactual request disagrees with local base authority",
+        ));
+    }
+    let actual_revision = scenario_revision(connection, semantics.scenario_id)?;
+    ensure_revision(
+        checked_revision(semantics.scenario_revision)?,
+        actual_revision.value(),
+    )
+}
+
+fn start_counterfactual_job_transaction(
+    connection: &mut Connection,
+    request: &CounterfactualJobRequestV1,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+) -> Result<StartedCounterfactualJobV1, StoreError> {
+    request
+        .validate()
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let request_json = serialize_checked_json(request, "counterfactual request")
+        .map_err(invalid_counterfactual)?;
+    let condition_json = serialize_checked_json(&request.condition, "counterfactual condition")
+        .map_err(invalid_counterfactual)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing_job: Option<String> = transaction
+        .query_row(
+            "SELECT id FROM counterfactual_jobs WHERE request_id = ?1",
+            [request.request_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(existing_job) = existing_job {
+        let existing_job_id = existing_job
+            .parse()
+            .map_err(|error| invalid_counterfactual(format!("invalid job identity: {error}")))?;
+        let record = load_counterfactual_job_row(&transaction, existing_job_id)?;
+        if record.request.request_hash != request.request_hash
+            || record.request.semantics != request.semantics
+            || record.request.condition != request.condition
+        {
+            return Err(StoreError::CounterfactualRequestIdConflict {
+                request_id: request.request_id,
+            });
+        }
+        transaction.commit()?;
+        return Ok(StartedCounterfactualJobV1 {
+            record,
+            reused: true,
+        });
+    }
+    let job_collision: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM counterfactual_jobs WHERE id = ?1)",
+        [request.job_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if job_collision {
+        return Err(StoreError::CounterfactualJobCollision(request.job_id));
+    }
+    let occupied = authoritative_occupied_uuids(&transaction)?;
+    for identity in [request.job_id.as_uuid(), request.request_id.as_uuid()] {
+        if occupied.contains(&identity) {
+            return Err(StoreError::IdentityCollision(identity));
+        }
+    }
+    validate_counterfactual_base_authority(&transaction, request)?;
+    let queued = CounterfactualJobRecordV1::new(
+        request.clone(),
+        CounterfactualJobState::Queued,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let semantics = &request.semantics;
+    transaction.execute(
+        "INSERT INTO counterfactual_jobs (id, request_id, request_hash, cancel_request_id, scenario_id, scenario_revision, snapshot_id, base_solution_id, base_result_checksum, condition_json, total_budget_ms, state, cancel_requested_at, created_at, started_at, finished_at, result_json, evidence_json, error_json, request_json) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', NULL, ?11, NULL, NULL, NULL, NULL, NULL, ?12)",
+        params![
+            request.job_id.to_string(),
+            request.request_id.to_string(),
+            request.request_hash,
+            semantics.scenario_id.to_string(),
+            u64_to_i64(semantics.scenario_revision)?,
+            semantics.snapshot_id.to_string(),
+            semantics.base.solution_id.to_string(),
+            semantics.base.result_checksum,
+            condition_json,
+            u64_to_i64(semantics.total_budget_milliseconds.value())?,
+            request.created_at.to_string(),
+            request_json,
+        ],
+    )?;
+    let stored = load_counterfactual_job_row(&transaction, request.job_id)?;
+    if stored != queued {
+        return Err(invalid_counterfactual(
+            "inserted counterfactual record changed before commit",
+        ));
+    }
+    validate_global_identity_ownership(&transaction)?;
+    #[cfg(debug_assertions)]
+    consume_failpoint(failpoint, Failpoint::AfterCounterfactualJobInsert)?;
+    transaction.commit()?;
+    Ok(StartedCounterfactualJobV1 {
+        record: stored,
+        reused: false,
+    })
+}
+
+fn load_local_terminal_run(
+    connection: &Connection,
+    run_id: SolveRunId,
+) -> Result<(RunInputV1, RunManifestV1), StoreError> {
+    let loaded = load_solve_input_row(connection, run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let (input, status, manifest_json, started_at) = load_run_input_record(connection, run_id)
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let manifest_json =
+        manifest_json.ok_or_else(|| invalid_counterfactual("derived run is not terminal"))?;
+    let manifest = RunManifestV1::from_json(manifest_json.as_bytes())
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if loaded.input != input
+        || manifest.run_id != run_id
+        || manifest.run_input_checksum != input.checksum
+        || manifest.started_at != started_at
+        || status != terminal_status(&manifest.outcome)?
+        || status == "quarantined"
+    {
+        return Err(invalid_counterfactual(
+            "derived run columns disagree with local terminal authority",
+        ));
+    }
+    Ok((input, manifest))
+}
+
+fn validate_counterfactual_completion_authority(
+    connection: &Connection,
+    result: &CounterfactualResultV1,
+) -> Result<(), StoreError> {
+    result
+        .validate()
+        .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let base =
+        load_local_accepted_authority(connection, result.request.semantics.base.solution_id)?;
+    if base.run_input != result.base_run_input
+        || base.run_manifest != result.base_run_manifest
+        || base.accepted_result.solution.solution_id != result.request.semantics.base.solution_id
+        || base.accepted_result.checksum != result.request.semantics.base.result_checksum
+        || base.run_input.checksum != result.request.semantics.base_run_input_checksum
+    {
+        return Err(invalid_counterfactual(
+            "counterfactual result disagrees with local base authority",
+        ));
+    }
+    let (derived_input, derived_manifest) =
+        load_local_terminal_run(connection, result.run_input.run_id)?;
+    if derived_input != result.run_input || derived_manifest != result.run_manifest {
+        return Err(invalid_counterfactual(
+            "counterfactual result disagrees with local derived-run authority",
+        ));
+    }
+    match &result.conclusion {
+        CounterfactualConclusionV1::VerifiedAlternative {
+            alternative,
+            comparison,
+            ..
+        } => {
+            let accepted = load_local_accepted_authority(connection, alternative.solution_id)?;
+            if accepted.run_input != result.run_input
+                || accepted.run_manifest != result.run_manifest
+                || accepted.accepted_result.solution.solution_id != alternative.solution_id
+                || accepted.accepted_result.checksum != alternative.result_checksum
+            {
+                return Err(invalid_counterfactual(
+                    "counterfactual alternative disagrees with local acceptance authority",
+                ));
+            }
+            let expected = compare_accepted_results(
+                &base.accepted_result,
+                &accepted.accepted_result,
+                Some(&ComparisonContext {
+                    locks: &[],
+                    manifests: Some(ComparisonRunManifests {
+                        base: &base.run_manifest,
+                        candidate: &accepted.run_manifest,
+                    }),
+                }),
+            )
+            .map_err(|error| invalid_counterfactual(error.to_string()))?;
+            if comparison.as_ref() != &expected {
+                return Err(invalid_counterfactual(
+                    "counterfactual comparison disagrees with local accepted results",
+                ));
+            }
+        }
+        CounterfactualConclusionV1::ProvenImpossible
+        | CounterfactualConclusionV1::NotDistinguishedWithinBudget => {
+            let has_accepted_solution: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM solutions WHERE solve_run_id = ?1 AND accepted = 1 AND status = 'verified')",
+                [result.run_input.run_id.to_string()],
+                |row| row.get(0),
+            )?;
+            if has_accepted_solution {
+                return Err(invalid_counterfactual(
+                    "no-result counterfactual run has accepted-solution authority",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+// Keeping the exhaustive lifecycle matrix together makes legal edges and idempotency auditable.
+#[allow(clippy::too_many_lines)]
+fn build_counterfactual_transition_target(
+    connection: &Connection,
+    current: &CounterfactualJobRecordV1,
+    transition: &CounterfactualJobTransitionV1,
+) -> Result<CounterfactualJobRecordV1, StoreError> {
+    let target = match transition {
+        CounterfactualJobTransitionV1::Running { started_at } => {
+            if current.state == CounterfactualJobState::Running
+                && current.started_at == Some(*started_at)
+            {
+                return Ok(current.clone());
+            }
+            if current.state != CounterfactualJobState::Queued {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            CounterfactualJobRecordV1::new(
+                current.request.clone(),
+                CounterfactualJobState::Running,
+                Some(*started_at),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        CounterfactualJobTransitionV1::Completed { result } => {
+            if current.state != CounterfactualJobState::Running
+                && current.state != CounterfactualJobState::Completed
+            {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            if current.cancel_request_id.is_some() {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            validate_counterfactual_completion_authority(connection, result)?;
+            CounterfactualJobRecordV1::new(
+                current.request.clone(),
+                CounterfactualJobState::Completed,
+                current.started_at,
+                Some(result.run_manifest.finished_at),
+                None,
+                None,
+                Some(result.as_ref().clone()),
+                None,
+            )
+        }
+        CounterfactualJobTransitionV1::Failed { finished_at, error } => {
+            if current.state != CounterfactualJobState::Queued
+                && current.state != CounterfactualJobState::Running
+                && current.state != CounterfactualJobState::Failed
+            {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            if current.cancel_request_id.is_some() {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            CounterfactualJobRecordV1::new(
+                current.request.clone(),
+                CounterfactualJobState::Failed,
+                current.started_at,
+                Some(*finished_at),
+                None,
+                None,
+                None,
+                Some(*error),
+            )
+        }
+        CounterfactualJobTransitionV1::Cancelled { finished_at } => {
+            if current.state != CounterfactualJobState::Running
+                && current.state != CounterfactualJobState::Cancelled
+            {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            if current.cancel_request_id.is_none() {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            CounterfactualJobRecordV1::new(
+                current.request.clone(),
+                CounterfactualJobState::Cancelled,
+                current.started_at,
+                Some(*finished_at),
+                current.cancel_request_id,
+                current.cancel_requested_at,
+                None,
+                None,
+            )
+        }
+        CounterfactualJobTransitionV1::Interrupted { finished_at } => {
+            if current.state != CounterfactualJobState::Running
+                && current.state != CounterfactualJobState::Interrupted
+            {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            if current.cancel_request_id.is_some() {
+                return Err(StoreError::CounterfactualTransitionConflict(
+                    current.request.job_id,
+                ));
+            }
+            CounterfactualJobRecordV1::new(
+                current.request.clone(),
+                CounterfactualJobState::Interrupted,
+                current.started_at,
+                Some(*finished_at),
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+    }
+    .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    if current.state == target.state {
+        if current == &target {
+            return Ok(current.clone());
+        }
+        return Err(StoreError::CounterfactualTransitionConflict(
+            current.request.job_id,
+        ));
+    }
+    Ok(target)
+}
+
+fn transition_counterfactual_job_transaction(
+    connection: &mut Connection,
+    job_id: CounterfactualJobId,
+    transition: &CounterfactualJobTransitionV1,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+) -> Result<CounterfactualJobRecordV1, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current = load_counterfactual_job_row(&transaction, job_id)?;
+    let target = build_counterfactual_transition_target(&transaction, &current, transition)?;
+    if target == current {
+        transaction.commit()?;
+        return Ok(current);
+    }
+    let result_json = target
+        .result
+        .as_ref()
+        .map(|value| serialize_checked_json(value, "counterfactual result"))
+        .transpose()
+        .map_err(invalid_counterfactual)?;
+    let error_json = target
+        .error
+        .as_ref()
+        .map(|value| serialize_checked_json(value, "counterfactual error"))
+        .transpose()
+        .map_err(invalid_counterfactual)?;
+    let changed = match target.state {
+        CounterfactualJobState::Running
+        | CounterfactualJobState::Completed
+        | CounterfactualJobState::Failed
+        | CounterfactualJobState::Interrupted => transaction.execute(
+            "UPDATE counterfactual_jobs SET state = ?2, started_at = ?3, finished_at = ?4, result_json = ?5, evidence_json = NULL, error_json = ?6 WHERE id = ?1 AND state = ?7 AND cancel_request_id IS NULL AND cancel_requested_at IS NULL",
+            params![
+                job_id.to_string(),
+                counterfactual_state_name(target.state),
+                target.started_at.map(|value| value.to_string()),
+                target.finished_at.map(|value| value.to_string()),
+                result_json,
+                error_json,
+                counterfactual_state_name(current.state),
+            ],
+        )?,
+        CounterfactualJobState::Cancelled => transaction.execute(
+            "UPDATE counterfactual_jobs SET state = 'cancelled', started_at = ?2, finished_at = ?3, result_json = NULL, evidence_json = NULL, error_json = NULL WHERE id = ?1 AND state = 'running' AND cancel_request_id = ?4 AND cancel_requested_at = ?5",
+            params![
+                job_id.to_string(),
+                target.started_at.map(|value| value.to_string()),
+                target.finished_at.map(|value| value.to_string()),
+                target.cancel_request_id.map(|value| value.to_string()),
+                target.cancel_requested_at.map(|value| value.to_string()),
+            ],
+        )?,
+        CounterfactualJobState::Queued => 0,
+    };
+    if changed != 1 {
+        return Err(StoreError::CounterfactualTransitionConflict(job_id));
+    }
+    let stored = load_counterfactual_job_row(&transaction, job_id)?;
+    if stored != target {
+        return Err(invalid_counterfactual(
+            "transitioned counterfactual record changed before commit",
+        ));
+    }
+    #[cfg(debug_assertions)]
+    consume_failpoint(failpoint, Failpoint::AfterCounterfactualTransition)?;
+    transaction.commit()?;
+    Ok(stored)
+}
+
+#[allow(clippy::too_many_lines)]
+fn request_counterfactual_cancel_transaction(
+    connection: &mut Connection,
+    job_id: CounterfactualJobId,
+    cancel_request_id: RequestId,
+    requested_at: Rfc3339Timestamp,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+) -> Result<CounterfactualCancelOutcomeV1, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current = load_counterfactual_job_row(&transaction, job_id)?;
+    if matches!(
+        current.state,
+        CounterfactualJobState::Completed
+            | CounterfactualJobState::Failed
+            | CounterfactualJobState::Interrupted
+    ) {
+        transaction.commit()?;
+        return Ok(CounterfactualCancelOutcomeV1::AlreadyTerminal { record: current });
+    }
+    if let Some(recorded_id) = current.cancel_request_id {
+        if recorded_id == cancel_request_id {
+            transaction.commit()?;
+            return Ok(CounterfactualCancelOutcomeV1::Requested {
+                record: current,
+                reused: true,
+            });
+        }
+        return Err(StoreError::CounterfactualCancelRequestIdConflict {
+            request_id: cancel_request_id,
+        });
+    }
+    if current.state == CounterfactualJobState::Running
+        && current
+            .started_at
+            .is_some_and(|started_at| requested_at < started_at)
+    {
+        return Err(invalid_counterfactual(
+            "cancellation request precedes counterfactual start",
+        ));
+    }
+    if authoritative_occupied_uuids(&transaction)?.contains(&cancel_request_id.as_uuid()) {
+        return Err(StoreError::CounterfactualCancelRequestIdConflict {
+            request_id: cancel_request_id,
+        });
+    }
+    let target = match current.state {
+        CounterfactualJobState::Queued => CounterfactualJobRecordV1::new(
+            current.request.clone(),
+            CounterfactualJobState::Cancelled,
+            None,
+            Some(requested_at),
+            Some(cancel_request_id),
+            Some(requested_at),
+            None,
+            None,
+        ),
+        CounterfactualJobState::Running => CounterfactualJobRecordV1::new(
+            current.request.clone(),
+            CounterfactualJobState::Running,
+            current.started_at,
+            None,
+            Some(cancel_request_id),
+            Some(requested_at),
+            None,
+            None,
+        ),
+        CounterfactualJobState::Cancelled => {
+            return Err(StoreError::CounterfactualCancelRequestIdConflict {
+                request_id: cancel_request_id,
+            });
+        }
+        CounterfactualJobState::Completed
+        | CounterfactualJobState::Failed
+        | CounterfactualJobState::Interrupted => unreachable!(),
+    }
+    .map_err(|error| invalid_counterfactual(error.to_string()))?;
+    let changed = match current.state {
+        CounterfactualJobState::Queued => transaction.execute(
+            "UPDATE counterfactual_jobs SET cancel_request_id = ?2, cancel_requested_at = ?3, state = 'cancelled', finished_at = ?3 WHERE id = ?1 AND state = 'queued' AND cancel_request_id IS NULL AND cancel_requested_at IS NULL AND started_at IS NULL AND finished_at IS NULL",
+            params![
+                job_id.to_string(),
+                cancel_request_id.to_string(),
+                requested_at.to_string()
+            ],
+        )?,
+        CounterfactualJobState::Running => transaction.execute(
+            "UPDATE counterfactual_jobs SET cancel_request_id = ?2, cancel_requested_at = ?3 WHERE id = ?1 AND state = 'running' AND cancel_request_id IS NULL AND cancel_requested_at IS NULL AND finished_at IS NULL",
+            params![
+                job_id.to_string(),
+                cancel_request_id.to_string(),
+                requested_at.to_string()
+            ],
+        )?,
+        _ => 0,
+    };
+    if changed != 1 {
+        return Err(StoreError::CounterfactualTransitionConflict(job_id));
+    }
+    let stored = load_counterfactual_job_row(&transaction, job_id)?;
+    if stored != target {
+        return Err(invalid_counterfactual(
+            "cancelled counterfactual record changed before commit",
+        ));
+    }
+    validate_global_identity_ownership(&transaction)?;
+    #[cfg(debug_assertions)]
+    consume_failpoint(failpoint, Failpoint::AfterCounterfactualCancelWrite)?;
+    transaction.commit()?;
+    Ok(CounterfactualCancelOutcomeV1::Requested {
+        record: stored,
+        reused: false,
+    })
+}
+
 struct StagedApplyParts {
     import: StagedImport,
     remove_scenario_ids: BTreeSet<ScenarioId>,
@@ -3178,6 +4276,7 @@ fn initialize_connection(
     database_path: &Path,
     authoritative_file: &File,
     #[cfg(debug_assertions)] v2_migration_begin_test_hook: Option<&V2MigrationBeginTestHook>,
+    #[cfg(debug_assertions)] v3_migration_begin_test_hook: Option<&V3MigrationBeginTestHook>,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<InitializationOutcome, StoreError> {
     let (applied_migrations, retained_backup_path) = initialize_schema(
@@ -3186,6 +4285,8 @@ fn initialize_connection(
         authoritative_file,
         #[cfg(debug_assertions)]
         v2_migration_begin_test_hook,
+        #[cfg(debug_assertions)]
+        v3_migration_begin_test_hook,
         #[cfg(debug_assertions)]
         failpoint,
     )?;
@@ -3300,11 +4401,14 @@ fn initialize_scenario_identity_owners(connection: &mut Connection) -> Result<()
     Ok(())
 }
 
+// Each version's under-lock reread, registry verification, SQL, and commit stay visibly coupled.
+#[allow(clippy::too_many_lines)]
 fn initialize_schema(
     connection: &mut Connection,
     database_path: &Path,
     authoritative_file: &File,
     #[cfg(debug_assertions)] v2_migration_begin_test_hook: Option<&V2MigrationBeginTestHook>,
+    #[cfg(debug_assertions)] v3_migration_begin_test_hook: Option<&V3MigrationBeginTestHook>,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<(Vec<u32>, Option<PathBuf>), StoreError> {
     let initial_version: u32 =
@@ -3322,61 +4426,113 @@ fn initialize_schema(
         blake3::hash(INDEPENDENT_VERIFICATION_MIGRATION.as_bytes())
             .to_hex()
             .to_string(),
+        blake3::hash(COUNTERFACTUAL_JOB_REQUESTS_MIGRATION.as_bytes())
+            .to_hex()
+            .to_string(),
     ];
     let mut applied = Vec::new();
-    if initial_version == 0 {
-        let has_registry: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations')",
-            [],
-            |row| row.get(0),
-        )?;
-        if has_registry {
-            return Err(StoreError::Integrity(
-                "database migration registry disagrees with user_version".to_owned(),
-            ));
-        }
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(
-            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, checksum TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;",
-        )?;
-        transaction.execute_batch(INITIAL_MIGRATION)?;
-        #[cfg(debug_assertions)]
-        consume_failpoint(failpoint, Failpoint::AfterMigrationSql)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (1, ?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-            params![V1_MIGRATION_NAME, checksums[0]],
-        )?;
-        transaction.pragma_update(None, "user_version", 1)?;
-        transaction.commit()?;
-        applied.push(1);
-    } else {
-        verify_migration_registry(connection, initial_version, &checksums)?;
-    }
-
-    let current_version: u32 =
-        connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let mut retained_backup_path = None;
-    if current_version == 1 {
+    loop {
+        let observed_version: u32 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if observed_version > CURRENT_SCHEMA_VERSION {
+            return Err(StoreError::NewerSchema {
+                found: observed_version,
+                supported: CURRENT_SCHEMA_VERSION,
+            });
+        }
+        if observed_version == CURRENT_SCHEMA_VERSION {
+            verify_migration_registry(connection, observed_version, &checksums)?;
+            break;
+        }
         #[cfg(debug_assertions)]
-        if let Some(hook) = v2_migration_begin_test_hook {
+        if observed_version == 1
+            && let Some(hook) = v2_migration_begin_test_hook
+        {
+            hook.actor_wait_before_begin();
+        }
+        #[cfg(debug_assertions)]
+        if observed_version == 2
+            && let Some(hook) = v3_migration_begin_test_hook
+        {
             hook.actor_wait_before_begin();
         }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if initial_version == 1 {
-            let source = open_validated_read_only_source(database_path, authoritative_file)?;
-            retained_backup_path =
-                Some(ensure_pre_v2_backup(&source, database_path, &checksums[0])?);
+        let locked_version: u32 =
+            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if locked_version > CURRENT_SCHEMA_VERSION {
+            return Err(StoreError::NewerSchema {
+                found: locked_version,
+                supported: CURRENT_SCHEMA_VERSION,
+            });
         }
-        transaction.execute_batch(INDEPENDENT_VERIFICATION_MIGRATION)?;
-        #[cfg(debug_assertions)]
-        consume_failpoint(failpoint, Failpoint::AfterV2MigrationSql)?;
+        if locked_version == 0 {
+            let has_registry: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations')",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_registry {
+                return Err(StoreError::Integrity(
+                    "database migration registry disagrees with user_version".to_owned(),
+                ));
+            }
+        } else {
+            verify_migration_registry(&transaction, locked_version, &checksums)?;
+        }
+        if locked_version == CURRENT_SCHEMA_VERSION {
+            transaction.commit()?;
+            break;
+        }
+        let next_version = locked_version.saturating_add(1);
+        match next_version {
+            1 => {
+                transaction.execute_batch(
+                    "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, checksum TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;",
+                )?;
+                transaction.execute_batch(INITIAL_MIGRATION)?;
+                #[cfg(debug_assertions)]
+                consume_failpoint(failpoint, Failpoint::AfterMigrationSql)?;
+            }
+            2 => {
+                if initial_version == 1 {
+                    let source =
+                        open_validated_read_only_source(database_path, authoritative_file)?;
+                    retained_backup_path =
+                        Some(ensure_pre_v2_backup(&source, database_path, &checksums[0])?);
+                }
+                transaction.execute_batch(INDEPENDENT_VERIFICATION_MIGRATION)?;
+                #[cfg(debug_assertions)]
+                consume_failpoint(failpoint, Failpoint::AfterV2MigrationSql)?;
+            }
+            3 => {
+                transaction.execute_batch(COUNTERFACTUAL_JOB_REQUESTS_MIGRATION)?;
+                #[cfg(debug_assertions)]
+                consume_failpoint(failpoint, Failpoint::AfterV3MigrationSql)?;
+            }
+            _ => {
+                return Err(StoreError::Integrity(
+                    "database migration sequence is invalid".to_owned(),
+                ));
+            }
+        }
+        let migration_name = match next_version {
+            1 => V1_MIGRATION_NAME,
+            2 => V2_MIGRATION_NAME,
+            3 => V3_MIGRATION_NAME,
+            _ => unreachable!(),
+        };
         transaction.execute(
-            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (2, ?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-            params![V2_MIGRATION_NAME, checksums[1]],
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![
+                next_version,
+                migration_name,
+                checksums[usize::try_from(locked_version).map_err(|_| StoreError::NumericRange)?],
+            ],
         )?;
-        transaction.pragma_update(None, "user_version", 2)?;
+        transaction.pragma_update(None, "user_version", next_version)?;
         transaction.commit()?;
-        applied.push(2);
+        applied.push(next_version);
     }
     verify_migration_registry(connection, CURRENT_SCHEMA_VERSION, &checksums)?;
     Ok((applied, retained_backup_path))
@@ -3385,7 +4541,7 @@ fn initialize_schema(
 fn verify_migration_registry(
     connection: &Connection,
     pragma_version: u32,
-    checksums: &[String; 2],
+    checksums: &[String; 3],
 ) -> Result<(), StoreError> {
     let has_registry: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations')",
@@ -3428,6 +4584,7 @@ fn verify_migration_registry(
             "database migration registry disagrees with user_version".to_owned(),
         ));
     }
+    let names = [V1_MIGRATION_NAME, V2_MIGRATION_NAME, V3_MIGRATION_NAME];
     for (index, (version, name, checksum)) in rows.iter().enumerate() {
         let expected_version = u32::try_from(index + 1).map_err(|_| StoreError::NumericRange)?;
         if *version != expected_version {
@@ -3435,12 +4592,7 @@ fn verify_migration_registry(
                 "database migration registry is not contiguous".to_owned(),
             ));
         }
-        let expected_name = if *version == 1 {
-            V1_MIGRATION_NAME
-        } else {
-            V2_MIGRATION_NAME
-        };
-        if name != expected_name {
+        if name != names[index] {
             return Err(StoreError::Integrity(
                 "database migration registry name is invalid".to_owned(),
             ));
@@ -4440,7 +5592,10 @@ fn load_authoritative_solve_identities(
         "SELECT id FROM scenario_snapshots
          UNION ALL SELECT id FROM solve_runs
          UNION ALL SELECT request_id FROM solve_runs WHERE request_id IS NOT NULL
-         UNION ALL SELECT id FROM solutions",
+         UNION ALL SELECT id FROM solutions
+         UNION ALL SELECT id FROM counterfactual_jobs
+         UNION ALL SELECT request_id FROM counterfactual_jobs
+         UNION ALL SELECT cancel_request_id FROM counterfactual_jobs WHERE cancel_request_id IS NOT NULL",
     )?;
     let mut identities = BTreeSet::new();
     let rows = statement

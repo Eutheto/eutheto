@@ -18,8 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+mod comparison;
 mod explanation;
 
+pub use comparison::*;
 pub use explanation::*;
 
 /// Current normalized-solution wire schema.

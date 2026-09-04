@@ -1,7 +1,13 @@
 use eutheto_domain_ir::{
-    AcceptedResult, NORMALIZED_SOLUTION_SCHEMA_VERSION, NormalizedSolution,
-    PortableAcceptedResultV2, RunManifestV1, RunPhaseTimingsV1, RunTerminalOutcomeV1, ScoreVector,
-    VerificationContextV1, VerificationReport, VerificationScope, blake3_hex,
+    AcceptedResult, AcceptedResultRefV1, AssignmentValue,
+    COUNTERFACTUAL_REQUEST_SEMANTICS_SCHEMA_VERSION, ComparisonContext, ComparisonRunManifests,
+    CounterfactualCompilationBindingV1, CounterfactualConclusionV1,
+    CounterfactualConditionPayloadV1, CounterfactualConditionV1, CounterfactualFailureKind,
+    CounterfactualJobErrorV1, CounterfactualJobRequestV1, CounterfactualJobState,
+    CounterfactualRequestSemanticsV1, CounterfactualResultV1, DomainAssignmentId,
+    NORMALIZED_SOLUTION_SCHEMA_VERSION, NormalizedSolution, PortableAcceptedResultV2,
+    RunManifestV1, RunPhaseTimingsV1, RunTerminalOutcomeV1, ScoreVector, VerificationContextV1,
+    VerificationReport, VerificationScope, blake3_hex, compare_accepted_results,
 };
 use eutheto_export::{
     ApplicationMetadata, PortableProjectMetadata, PortableScenario, SemanticCapability,
@@ -12,16 +18,17 @@ use eutheto_import::{
     StagedBackupRestore, StagedDisposition, StagedImport, StagedScenario,
 };
 use eutheto_store::{
-    AppSetting, CandidateDiagnosticsV1, CommandWrite, JournalWrite, NewProject, NewSolveRunV1,
-    OpenOptions, ProjectListScope, RedoBranchPolicy, SafetyBackupFailureReceipt, SnapshotPolicy,
+    AppSetting, CandidateDiagnosticsV1, CommandWrite, CounterfactualCancelOutcomeV1,
+    CounterfactualJobTransitionV1, JournalWrite, NewProject, NewSolveRunV1, OpenOptions,
+    ProjectListScope, RedoBranchPolicy, SafetyBackupFailureReceipt, SnapshotPolicy,
     SqliteScenarioStore, StagedLibraryApply, StoreError, StoredProject,
     ensure_private_application_directory,
 };
 #[cfg(debug_assertions)]
-use eutheto_store::{Failpoint, V2MigrationBeginTestHook};
+use eutheto_store::{Failpoint, V2MigrationBeginTestHook, V3MigrationBeginTestHook};
 use eutheto_types::{
-    ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, DomainPackRef,
-    DurationMillis, ExplanationMode, GapPolicy, Horizon, IanaTimeZone, LocaleTag,
+    ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, CounterfactualJobId,
+    DomainPackRef, DurationMillis, ExplanationMode, GapPolicy, Horizon, IanaTimeZone, LocaleTag,
     MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId, PersonId, PortableAsset,
     PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
     RuleId, ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings,
@@ -209,6 +216,217 @@ fn terminal_manifest(
     )?)
 }
 
+fn counterfactual_job_id(suffix: u16) -> Result<CounterfactualJobId, uuid::Error> {
+    Uuid::parse_str(&format!("018f47f2-e880-7000-8004-{suffix:012x}"))
+        .map(CounterfactualJobId::from_uuid)
+}
+
+fn counterfactual_request_id(suffix: u16) -> Result<RequestId, uuid::Error> {
+    Uuid::parse_str(&format!("018f47f2-e880-7000-8005-{suffix:012x}")).map(RequestId::from_uuid)
+}
+
+struct CounterfactualStoreFixture {
+    request: CounterfactualJobRequestV1,
+    base_input: eutheto_domain_ir::RunInputV1,
+    base_manifest: RunManifestV1,
+    base_accepted: AcceptedResult,
+}
+
+async fn counterfactual_store_fixture(
+    store: &SqliteScenarioStore,
+    suffix: u16,
+) -> Result<CounterfactualStoreFixture, Box<dyn Error>> {
+    let scenario_id = scenario_id(700_u16.saturating_add(suffix))?;
+    store
+        .create_project(NewProject {
+            document: document(scenario_id)?,
+        })
+        .await?;
+    let base = store
+        .start_solve_run(solve_request(
+            scenario_id,
+            700_u16.saturating_add(suffix),
+            700_u16.saturating_add(suffix),
+        )?)
+        .await?;
+    let accepted = accepted_result_for(&base.input, 700_u16.saturating_add(suffix))?;
+    let base_manifest = terminal_manifest(
+        &base.input,
+        base.started_at,
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            solution_id: accepted.solution.solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+    )?;
+    store
+        .finalize_accepted_run(accepted.clone(), base_manifest.clone(), BTreeMap::new())
+        .await?;
+    let condition =
+        CounterfactualConditionV1::new(CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id: DomainAssignmentId::new("assignment.target")?,
+            value: AssignmentValue::Boolean(true),
+        })?;
+    let semantics = CounterfactualRequestSemanticsV1 {
+        schema_version: COUNTERFACTUAL_REQUEST_SEMANTICS_SCHEMA_VERSION,
+        scenario_id,
+        scenario_revision: base.input.scenario_revision,
+        snapshot_id: base.input.snapshot_id,
+        snapshot_document_hash: base.input.snapshot_document_hash.clone(),
+        base: AcceptedResultRefV1::from_result(&accepted)?,
+        base_run_id: base.input.run_id,
+        base_run_input_checksum: base.input.checksum.clone(),
+        base_model_hash: base.input.model_hash.clone(),
+        objective_policy_hash: base.input.objective_policy_hash.clone(),
+        condition_checksum: condition.checksum.clone(),
+        total_budget_milliseconds: base.input.solve_options.time_limit_milliseconds,
+    };
+    let request = CounterfactualJobRequestV1::new(
+        counterfactual_job_id(suffix)?,
+        counterfactual_request_id(suffix)?,
+        semantics,
+        condition,
+        base_manifest.finished_at,
+    )?;
+    Ok(CounterfactualStoreFixture {
+        request,
+        base_input: base.input,
+        base_manifest,
+        base_accepted: accepted,
+    })
+}
+
+fn retry_counterfactual_request(
+    fixture: &CounterfactualStoreFixture,
+    suffix: u16,
+) -> Result<CounterfactualJobRequestV1, Box<dyn Error>> {
+    Ok(CounterfactualJobRequestV1::new(
+        counterfactual_job_id(suffix)?,
+        counterfactual_request_id(suffix)?,
+        fixture.request.semantics.clone(),
+        fixture.request.condition.clone(),
+        fixture.request.created_at,
+    )?)
+}
+
+async fn counterfactual_result(
+    store: &SqliteScenarioStore,
+    fixture: &CounterfactualStoreFixture,
+    suffix: u16,
+    persist_terminal: bool,
+) -> Result<CounterfactualResultV1, Box<dyn Error>> {
+    let mut request = solve_request(
+        fixture.request.semantics.scenario_id,
+        800_u16.saturating_add(suffix),
+        800_u16.saturating_add(suffix),
+    )?;
+    request.model_hash = blake3_hex(format!("derived-model-{suffix}").as_bytes());
+    request.objective_policy_hash = fixture.request.semantics.objective_policy_hash.clone();
+    request.temporary_condition_hash = Some(fixture.request.condition.checksum.clone());
+    request.started_at = fixture.request.created_at;
+    let derived = store.start_solve_run(request).await?;
+    let manifest = terminal_manifest(
+        &derived.input,
+        derived.started_at,
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::Infeasible,
+        },
+    )?;
+    if persist_terminal {
+        store.finalize_terminal_run(manifest.clone()).await?;
+    }
+    let compilation = CounterfactualCompilationBindingV1::new(
+        fixture.request.semantics.base_model_hash.clone(),
+        fixture.request.condition.checksum.clone(),
+        derived.input.model_hash.clone(),
+        fixture.request.semantics.objective_policy_hash.clone(),
+    )?;
+    Ok(CounterfactualResultV1::new(
+        fixture.request.clone(),
+        fixture.base_input.clone(),
+        fixture.base_manifest.clone(),
+        compilation,
+        derived.input,
+        manifest,
+        CounterfactualConclusionV1::ProvenImpossible,
+    )?)
+}
+
+async fn accepted_counterfactual_results(
+    store: &SqliteScenarioStore,
+    fixture: &CounterfactualStoreFixture,
+    suffix: u16,
+) -> Result<(CounterfactualResultV1, CounterfactualResultV1), Box<dyn Error>> {
+    let mut request = solve_request(
+        fixture.request.semantics.scenario_id,
+        900_u16.saturating_add(suffix),
+        900_u16.saturating_add(suffix),
+    )?;
+    request.model_hash = blake3_hex(format!("accepted-derived-model-{suffix}").as_bytes());
+    request.objective_policy_hash = fixture.request.semantics.objective_policy_hash.clone();
+    request.temporary_condition_hash = Some(fixture.request.condition.checksum.clone());
+    request.started_at = fixture.request.created_at;
+    let derived = store.start_solve_run(request).await?;
+    let accepted = accepted_result_for(&derived.input, 900_u16.saturating_add(suffix))?;
+    let manifest = terminal_manifest(
+        &derived.input,
+        derived.started_at,
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            solution_id: accepted.solution.solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+    )?;
+    store
+        .finalize_accepted_run(accepted.clone(), manifest.clone(), BTreeMap::new())
+        .await?;
+    let compilation = CounterfactualCompilationBindingV1::new(
+        fixture.request.semantics.base_model_hash.clone(),
+        fixture.request.condition.checksum.clone(),
+        derived.input.model_hash.clone(),
+        fixture.request.semantics.objective_policy_hash.clone(),
+    )?;
+    let exact_comparison = compare_accepted_results(
+        &fixture.base_accepted,
+        &accepted,
+        Some(&ComparisonContext {
+            locks: &[],
+            manifests: Some(ComparisonRunManifests {
+                base: &fixture.base_manifest,
+                candidate: &manifest,
+            }),
+        }),
+    )?;
+    let forged_comparison = compare_accepted_results(
+        &fixture.base_accepted,
+        &accepted,
+        Some(&ComparisonContext {
+            locks: &[],
+            manifests: None,
+        }),
+    )?;
+    let alternative = AcceptedResultRefV1::from_result(&accepted)?;
+    let result = |comparison: eutheto_domain_ir::SolutionComparisonV1| {
+        let ordering = comparison.ordering;
+        CounterfactualResultV1::new(
+            fixture.request.clone(),
+            fixture.base_input.clone(),
+            fixture.base_manifest.clone(),
+            compilation.clone(),
+            derived.input.clone(),
+            manifest.clone(),
+            CounterfactualConclusionV1::VerifiedAlternative {
+                alternative: alternative.clone(),
+                comparison: Box::new(comparison),
+                ordering,
+            },
+        )
+    };
+    Ok((result(forged_comparison)?, result(exact_comparison)?))
+}
+
 fn set_marker(
     mut document: ScenarioDocument,
     marker: Option<i64>,
@@ -305,7 +523,7 @@ async fn project_crud_and_document_survive_reopen() -> Result<(), Box<dyn Error>
     let expected = document(id)?;
 
     let (store, first_start) = SqliteScenarioStore::open(&path).await?;
-    assert_eq!(first_start.applied_migrations, vec![1, 2]);
+    assert_eq!(first_start.applied_migrations, vec![1, 2, 3]);
     let created = store
         .create_project(NewProject {
             document: expected.clone(),
@@ -4447,13 +4665,13 @@ async fn v1_upgrade_backup_observes_the_commit_before_its_writer_lock() -> Resul
     let live_version: u32 = live.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let backup = Connection::open(&backup_path)?;
     let backup_version: u32 = backup.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    assert_eq!(live_version, 2);
+    assert_eq!(live_version, 3);
     assert_eq!(backup_version, 1);
     Ok(())
 }
 
 #[tokio::test]
-async fn released_v1_fixture_is_backed_up_and_upgraded_to_v2() -> Result<(), Box<dyn Error>> {
+async fn released_v1_fixture_is_backed_up_and_upgraded_to_v3() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
     std::fs::write(
@@ -4462,7 +4680,7 @@ async fn released_v1_fixture_is_backed_up_and_upgraded_to_v2() -> Result<(), Box
     )?;
 
     let (store, outcome) = SqliteScenarioStore::open(&path).await?;
-    assert_eq!(outcome.applied_migrations, vec![2]);
+    assert_eq!(outcome.applied_migrations, vec![2, 3]);
     let backup_path = outcome
         .retained_backup_path
         .ok_or_else(|| std::io::Error::other("missing retained V1 backup"))?;
@@ -4476,7 +4694,7 @@ async fn released_v1_fixture_is_backed_up_and_upgraded_to_v2() -> Result<(), Box
     let current = Connection::open(&path)?;
     let current_version: u32 =
         current.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    assert_eq!(current_version, 2);
+    assert_eq!(current_version, 3);
     let backup = Connection::open(&backup_path)?;
     let backup_version: u32 = backup.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let backup_check: String = backup.pragma_query_value(None, "quick_check", |row| row.get(0))?;
@@ -4586,7 +4804,7 @@ async fn v2_migration_classifies_legacy_rows_without_rewriting_payloads()
     drop(connection);
 
     let (store, outcome) = SqliteScenarioStore::open(&path).await?;
-    assert_eq!(outcome.applied_migrations, vec![2]);
+    assert_eq!(outcome.applied_migrations, vec![2, 3]);
     assert!(outcome.recovery.interrupted_solve_run_ids.is_empty());
     drop(store);
     let connection = Connection::open(&path)?;
@@ -4637,7 +4855,7 @@ async fn startup_applies_required_pragmas_schema_and_indexes() -> Result<(), Box
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
     let (store, outcome) = SqliteScenarioStore::open(&path).await?;
-    assert_eq!(outcome.schema_version, 2);
+    assert_eq!(outcome.schema_version, 3);
     let diagnostics = store.diagnostics().await?;
     assert!(diagnostics.foreign_keys);
     assert_eq!(diagnostics.journal_mode, "wal");
@@ -4645,7 +4863,7 @@ async fn startup_applies_required_pragmas_schema_and_indexes() -> Result<(), Box
     assert_eq!(diagnostics.busy_timeout_ms, 5_000);
     assert!(!diagnostics.trusted_schema);
     assert_eq!(diagnostics.sqlite_length_limit_bytes, 128 * 1024 * 1024);
-    assert_eq!(diagnostics.schema_version, 2);
+    assert_eq!(diagnostics.schema_version, 3);
     for table in [
         "app_metadata",
         "scenarios",
@@ -4761,7 +4979,7 @@ async fn newer_database_is_rejected_without_schema_mutation() -> Result<(), Box<
     let path = directory.path().join("library.sqlite3");
     let connection = Connection::open(&path)?;
     connection
-        .execute_batch("CREATE TABLE future_marker (value TEXT); PRAGMA user_version = 3;")?;
+        .execute_batch("CREATE TABLE future_marker (value TEXT); PRAGMA user_version = 4;")?;
     drop(connection);
     let bytes_before = std::fs::read(&path)?;
     let wal_path = directory.path().join("library.sqlite3-wal");
@@ -4773,8 +4991,8 @@ async fn newer_database_is_rejected_without_schema_mutation() -> Result<(), Box<
     assert!(matches!(
         result,
         Err(StoreError::NewerSchema {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         })
     ));
     assert_eq!(std::fs::read(&path)?, bytes_before);
@@ -4861,5 +5079,610 @@ async fn startup_does_not_fabricate_a_manifest_for_an_invalid_or_legacy_run()
     assert!(finished_at.is_none());
     assert!(error_json.is_none());
     drop(reopened);
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn counterfactual_start_load_authority_idempotency_and_identity_are_exact()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("counterfactual-start.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    let fixture = counterfactual_store_fixture(&store, 1).await?;
+    let revision_before = store.library_metadata_snapshot().await?.revision;
+    let started = store
+        .start_counterfactual_job(fixture.request.clone())
+        .await?;
+    assert!(!started.reused);
+    assert_eq!(started.record.state, CounterfactualJobState::Queued);
+    assert_eq!(
+        store
+            .load_counterfactual_job(fixture.request.job_id)
+            .await?,
+        started.record
+    );
+    let retry = CounterfactualJobRequestV1::new(
+        counterfactual_job_id(2)?,
+        fixture.request.request_id,
+        fixture.request.semantics.clone(),
+        fixture.request.condition.clone(),
+        shift_timestamp(fixture.request.created_at, 1)?,
+    )?;
+    let reused = store.start_counterfactual_job(retry).await?;
+    assert!(reused.reused);
+    assert_eq!(reused.record, started.record);
+    assert_eq!(
+        store.library_metadata_snapshot().await?.revision,
+        revision_before
+    );
+    drop(store);
+
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    let reused_after_restart = store
+        .start_counterfactual_job(fixture.request.clone())
+        .await?;
+    assert!(reused_after_restart.reused);
+    assert_eq!(reused_after_restart.record, started.record);
+    let mut conflicting_semantics = fixture.request.semantics.clone();
+    conflicting_semantics.total_budget_milliseconds = DurationMillis::new(
+        conflicting_semantics
+            .total_budget_milliseconds
+            .value()
+            .saturating_add(1),
+    )?;
+    let conflicting_retry = CounterfactualJobRequestV1::new(
+        counterfactual_job_id(5)?,
+        fixture.request.request_id,
+        conflicting_semantics,
+        fixture.request.condition.clone(),
+        fixture.request.created_at,
+    )?;
+    assert!(matches!(
+        store.start_counterfactual_job(conflicting_retry).await,
+        Err(StoreError::CounterfactualRequestIdConflict { request_id })
+            if request_id == fixture.request.request_id
+    ));
+
+    let mut bad_semantics = fixture.request.semantics.clone();
+    bad_semantics.base.result_checksum = blake3_hex(b"not-the-local-base");
+    let invalid_base = CounterfactualJobRequestV1::new(
+        counterfactual_job_id(3)?,
+        counterfactual_request_id(3)?,
+        bad_semantics,
+        fixture.request.condition.clone(),
+        fixture.request.created_at,
+    )?;
+    assert!(matches!(
+        store.start_counterfactual_job(invalid_base).await,
+        Err(StoreError::InvalidPersistedCounterfactual(_))
+    ));
+
+    let colliding_job = CounterfactualJobRequestV1::new(
+        CounterfactualJobId::from_uuid(fixture.request.semantics.snapshot_id.as_uuid()),
+        counterfactual_request_id(4)?,
+        fixture.request.semantics.clone(),
+        fixture.request.condition.clone(),
+        fixture.request.created_at,
+    )?;
+    assert!(matches!(
+        store.start_counterfactual_job(colliding_job).await,
+        Err(StoreError::IdentityCollision(identity))
+            if identity == fixture.request.semantics.snapshot_id.as_uuid()
+    ));
+    drop(store);
+    let connection = Connection::open(&path)?;
+    connection.execute(
+        "UPDATE counterfactual_jobs SET request_json = '{}' WHERE id = ?1",
+        [fixture.request.job_id.to_string()],
+    )?;
+    drop(connection);
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    assert!(matches!(
+        store.load_counterfactual_job(fixture.request.job_id).await,
+        Err(StoreError::InvalidPersistedCounterfactual(_))
+    ));
+    drop(store);
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn counterfactual_transitions_and_cancellation_enforce_the_complete_state_matrix()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("counterfactual-transitions.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    let fixture = counterfactual_store_fixture(&store, 10).await?;
+    let running_request = retry_counterfactual_request(&fixture, 11)?;
+    store
+        .start_counterfactual_job(running_request.clone())
+        .await?;
+    let started_at = shift_timestamp(running_request.created_at, 1_000)?;
+    let running = CounterfactualJobTransitionV1::Running { started_at };
+    assert_eq!(
+        store
+            .transition_counterfactual_job(running_request.job_id, running.clone())
+            .await?
+            .state,
+        CounterfactualJobState::Running
+    );
+    assert_eq!(
+        store
+            .transition_counterfactual_job(running_request.job_id, running)
+            .await?
+            .state,
+        CounterfactualJobState::Running
+    );
+    assert!(matches!(
+        store
+            .transition_counterfactual_job(
+                running_request.job_id,
+                CounterfactualJobTransitionV1::Running {
+                    started_at: shift_timestamp(started_at, 1)?
+                }
+            )
+            .await,
+        Err(StoreError::CounterfactualTransitionConflict(_))
+    ));
+    assert!(matches!(
+        store
+            .request_counterfactual_cancel(
+                running_request.job_id,
+                counterfactual_request_id(12)?,
+                running_request.created_at,
+            )
+            .await,
+        Err(StoreError::InvalidPersistedCounterfactual(_))
+    ));
+    let cancel_id = counterfactual_request_id(12)?;
+    let requested = store
+        .request_counterfactual_cancel(running_request.job_id, cancel_id, started_at)
+        .await?;
+    assert!(matches!(
+        requested,
+        CounterfactualCancelOutcomeV1::Requested {
+            ref record,
+            reused: false
+        } if record.state == CounterfactualJobState::Running
+    ));
+    assert!(matches!(
+        store
+            .request_counterfactual_cancel(
+                running_request.job_id,
+                cancel_id,
+                shift_timestamp(started_at, 1)?,
+            )
+            .await?,
+        CounterfactualCancelOutcomeV1::Requested { reused: true, .. }
+    ));
+    let cancelled = store
+        .transition_counterfactual_job(
+            running_request.job_id,
+            CounterfactualJobTransitionV1::Cancelled {
+                finished_at: shift_timestamp(started_at, 1)?,
+            },
+        )
+        .await?;
+    assert_eq!(cancelled.state, CounterfactualJobState::Cancelled);
+
+    let queued_request = retry_counterfactual_request(&fixture, 13)?;
+    store
+        .start_counterfactual_job(queued_request.clone())
+        .await?;
+    let queued_cancel_id = counterfactual_request_id(14)?;
+    let queued_cancelled = store
+        .request_counterfactual_cancel(
+            queued_request.job_id,
+            queued_cancel_id,
+            queued_request.created_at,
+        )
+        .await?;
+    assert!(matches!(
+        queued_cancelled,
+        CounterfactualCancelOutcomeV1::Requested {
+            ref record,
+            reused: false
+        } if record.state == CounterfactualJobState::Cancelled
+            && record.finished_at == Some(queued_request.created_at)
+    ));
+    assert!(matches!(
+        store
+            .transition_counterfactual_job(
+                queued_request.job_id,
+                CounterfactualJobTransitionV1::Interrupted {
+                    finished_at: shift_timestamp(queued_request.created_at, 1)?
+                }
+            )
+            .await,
+        Err(StoreError::CounterfactualTransitionConflict(_))
+    ));
+    let cross_job_request = retry_counterfactual_request(&fixture, 17)?;
+    store
+        .start_counterfactual_job(cross_job_request.clone())
+        .await?;
+    assert!(matches!(
+        store
+            .request_counterfactual_cancel(
+                cross_job_request.job_id,
+                queued_cancel_id,
+                cross_job_request.created_at,
+            )
+            .await,
+        Err(StoreError::CounterfactualCancelRequestIdConflict { .. })
+    ));
+
+    let interrupted_request = retry_counterfactual_request(&fixture, 18)?;
+    store
+        .start_counterfactual_job(interrupted_request.clone())
+        .await?;
+    store
+        .transition_counterfactual_job(
+            interrupted_request.job_id,
+            CounterfactualJobTransitionV1::Running {
+                started_at: interrupted_request.created_at,
+            },
+        )
+        .await?;
+    let interrupted = store
+        .transition_counterfactual_job(
+            interrupted_request.job_id,
+            CounterfactualJobTransitionV1::Interrupted {
+                finished_at: shift_timestamp(interrupted_request.created_at, 1)?,
+            },
+        )
+        .await?;
+    assert_eq!(interrupted.state, CounterfactualJobState::Interrupted);
+
+    let failed_request = retry_counterfactual_request(&fixture, 15)?;
+    store
+        .start_counterfactual_job(failed_request.clone())
+        .await?;
+    let failed_transition = CounterfactualJobTransitionV1::Failed {
+        finished_at: failed_request.created_at,
+        error: CounterfactualJobErrorV1 {
+            kind: CounterfactualFailureKind::CompilationFailed,
+        },
+    };
+    let failed = store
+        .transition_counterfactual_job(failed_request.job_id, failed_transition.clone())
+        .await?;
+    assert_eq!(failed.state, CounterfactualJobState::Failed);
+    assert_eq!(
+        store
+            .transition_counterfactual_job(failed_request.job_id, failed_transition)
+            .await?,
+        failed
+    );
+    assert!(matches!(
+        store
+            .request_counterfactual_cancel(
+                failed_request.job_id,
+                counterfactual_request_id(16)?,
+                failed_request.created_at,
+            )
+            .await?,
+        CounterfactualCancelOutcomeV1::AlreadyTerminal { record }
+            if record == failed
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn counterfactual_completion_uses_only_local_authority_and_linearizes_with_cancel()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory
+        .path()
+        .join("counterfactual-linearization.sqlite3");
+    let (first, _) = SqliteScenarioStore::open(&path).await?;
+    let fixture = counterfactual_store_fixture(&first, 20).await?;
+    first
+        .start_counterfactual_job(fixture.request.clone())
+        .await?;
+    first
+        .transition_counterfactual_job(
+            fixture.request.job_id,
+            CounterfactualJobTransitionV1::Running {
+                started_at: fixture.request.created_at,
+            },
+        )
+        .await?;
+    let unpersisted = counterfactual_result(&first, &fixture, 20, false).await?;
+    assert!(matches!(
+        first
+            .transition_counterfactual_job(
+                fixture.request.job_id,
+                CounterfactualJobTransitionV1::Completed {
+                    result: Box::new(unpersisted)
+                }
+            )
+            .await,
+        Err(StoreError::InvalidPersistedCounterfactual(_))
+    ));
+
+    let terminal_first_request = retry_counterfactual_request(&fixture, 21)?;
+    let terminal_first_fixture = CounterfactualStoreFixture {
+        request: terminal_first_request.clone(),
+        base_input: fixture.base_input.clone(),
+        base_manifest: fixture.base_manifest.clone(),
+        base_accepted: fixture.base_accepted.clone(),
+    };
+    first
+        .start_counterfactual_job(terminal_first_request.clone())
+        .await?;
+    first
+        .transition_counterfactual_job(
+            terminal_first_request.job_id,
+            CounterfactualJobTransitionV1::Running {
+                started_at: terminal_first_request.created_at,
+            },
+        )
+        .await?;
+    let terminal_result = counterfactual_result(&first, &terminal_first_fixture, 21, true).await?;
+    let completed_transition = CounterfactualJobTransitionV1::Completed {
+        result: Box::new(terminal_result),
+    };
+    let completed = first
+        .transition_counterfactual_job(terminal_first_request.job_id, completed_transition.clone())
+        .await?;
+    assert_eq!(completed.state, CounterfactualJobState::Completed);
+    assert_eq!(
+        first
+            .transition_counterfactual_job(terminal_first_request.job_id, completed_transition,)
+            .await?,
+        completed
+    );
+    let (second, _) = SqliteScenarioStore::open(&path).await?;
+    assert!(matches!(
+        second
+            .request_counterfactual_cancel(
+                terminal_first_request.job_id,
+                counterfactual_request_id(22)?,
+                completed
+                    .finished_at
+                    .ok_or_else(|| std::io::Error::other("missing finish"))?,
+            )
+            .await?,
+        CounterfactualCancelOutcomeV1::AlreadyTerminal { record }
+            if record == completed
+    ));
+
+    let cancel_first_request = retry_counterfactual_request(&fixture, 23)?;
+    let cancel_first_fixture = CounterfactualStoreFixture {
+        request: cancel_first_request.clone(),
+        base_input: fixture.base_input.clone(),
+        base_manifest: fixture.base_manifest.clone(),
+        base_accepted: fixture.base_accepted.clone(),
+    };
+    first
+        .start_counterfactual_job(cancel_first_request.clone())
+        .await?;
+    first
+        .transition_counterfactual_job(
+            cancel_first_request.job_id,
+            CounterfactualJobTransitionV1::Running {
+                started_at: cancel_first_request.created_at,
+            },
+        )
+        .await?;
+    let cancel_first_result =
+        counterfactual_result(&first, &cancel_first_fixture, 23, true).await?;
+    second
+        .request_counterfactual_cancel(
+            cancel_first_request.job_id,
+            counterfactual_request_id(24)?,
+            cancel_first_request.created_at,
+        )
+        .await?;
+    assert!(matches!(
+        first
+            .transition_counterfactual_job(
+                cancel_first_request.job_id,
+                CounterfactualJobTransitionV1::Completed {
+                    result: Box::new(cancel_first_result)
+                }
+            )
+            .await,
+        Err(StoreError::CounterfactualTransitionConflict(_))
+    ));
+
+    let alternative_request = retry_counterfactual_request(&fixture, 25)?;
+    let alternative_fixture = CounterfactualStoreFixture {
+        request: alternative_request.clone(),
+        base_input: fixture.base_input.clone(),
+        base_manifest: fixture.base_manifest.clone(),
+        base_accepted: fixture.base_accepted.clone(),
+    };
+    first
+        .start_counterfactual_job(alternative_request.clone())
+        .await?;
+    first
+        .transition_counterfactual_job(
+            alternative_request.job_id,
+            CounterfactualJobTransitionV1::Running {
+                started_at: alternative_request.created_at,
+            },
+        )
+        .await?;
+    let (forged_alternative, exact_alternative) =
+        accepted_counterfactual_results(&first, &alternative_fixture, 25).await?;
+    assert!(matches!(
+        first
+            .transition_counterfactual_job(
+                alternative_request.job_id,
+                CounterfactualJobTransitionV1::Completed {
+                    result: Box::new(forged_alternative)
+                }
+            )
+            .await,
+        Err(StoreError::InvalidPersistedCounterfactual(_))
+    ));
+    assert_eq!(
+        first
+            .load_counterfactual_job(alternative_request.job_id)
+            .await?
+            .state,
+        CounterfactualJobState::Running
+    );
+    let exact_completed = first
+        .transition_counterfactual_job(
+            alternative_request.job_id,
+            CounterfactualJobTransitionV1::Completed {
+                result: Box::new(exact_alternative),
+            },
+        )
+        .await?;
+    assert_eq!(exact_completed.state, CounterfactualJobState::Completed);
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn counterfactual_insert_failpoint_rolls_back_and_survives_reopen()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("counterfactual-failpoint.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    let fixture = counterfactual_store_fixture(&store, 30).await?;
+    store.set_failpoint(Failpoint::AfterCounterfactualJobInsert)?;
+    assert!(matches!(
+        store
+            .start_counterfactual_job(fixture.request.clone())
+            .await,
+        Err(StoreError::InjectedFailure)
+    ));
+    assert!(matches!(
+        store.load_counterfactual_job(fixture.request.job_id).await,
+        Err(StoreError::CounterfactualJobNotFound(_))
+    ));
+    drop(store);
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    assert!(matches!(
+        store.load_counterfactual_job(fixture.request.job_id).await,
+        Err(StoreError::CounterfactualJobNotFound(_))
+    ));
+    let started = store
+        .start_counterfactual_job(fixture.request.clone())
+        .await?;
+    assert_eq!(started.record.state, CounterfactualJobState::Queued);
+    store.set_failpoint(Failpoint::AfterCounterfactualTransition)?;
+    assert!(matches!(
+        store
+            .transition_counterfactual_job(
+                fixture.request.job_id,
+                CounterfactualJobTransitionV1::Running {
+                    started_at: fixture.request.created_at,
+                },
+            )
+            .await,
+        Err(StoreError::InjectedFailure)
+    ));
+    assert_eq!(
+        store
+            .load_counterfactual_job(fixture.request.job_id)
+            .await?
+            .state,
+        CounterfactualJobState::Queued
+    );
+    store.set_failpoint(Failpoint::AfterCounterfactualCancelWrite)?;
+    assert!(matches!(
+        store
+            .request_counterfactual_cancel(
+                fixture.request.job_id,
+                counterfactual_request_id(31)?,
+                fixture.request.created_at,
+            )
+            .await,
+        Err(StoreError::InjectedFailure)
+    ));
+    assert_eq!(
+        store
+            .load_counterfactual_job(fixture.request.job_id)
+            .await?
+            .state,
+        CounterfactualJobState::Queued
+    );
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn concurrent_v1_and_v2_openers_verify_peer_completed_migrations_under_lock()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let v1_path = directory.path().join("concurrent-v1.sqlite3");
+    std::fs::write(
+        &v1_path,
+        include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3"),
+    )?;
+    let v2_hook = V2MigrationBeginTestHook::new();
+    let actor_hook = v2_hook.clone();
+    let actor_path = v1_path.clone();
+    let first_open = tokio::spawn(async move {
+        SqliteScenarioStore::open_with_options(
+            actor_path,
+            OpenOptions::new(SnapshotPolicy::default())
+                .with_v2_migration_begin_test_hook(actor_hook),
+        )
+        .await
+    });
+    let wait_hook = v2_hook.clone();
+    tokio::task::spawn_blocking(move || wait_hook.wait_before_begin()).await?;
+    let (peer, peer_outcome) = SqliteScenarioStore::open(&v1_path).await?;
+    assert_eq!(peer_outcome.applied_migrations, vec![2, 3]);
+    drop(peer);
+    v2_hook.release();
+    let (first, first_outcome) = first_open.await??;
+    assert!(first_outcome.applied_migrations.is_empty());
+    drop(first);
+
+    let v2_path = directory.path().join("concurrent-v2.sqlite3");
+    std::fs::write(
+        &v2_path,
+        include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3"),
+    )?;
+    assert!(matches!(
+        SqliteScenarioStore::open_with_options(
+            &v2_path,
+            OpenOptions::new(SnapshotPolicy::default())
+                .with_failpoint(Failpoint::AfterV3MigrationSql),
+        )
+        .await,
+        Err(StoreError::InjectedFailure)
+    ));
+    let connection = Connection::open(&v2_path)?;
+    let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    assert_eq!(version, 2);
+    drop(connection);
+
+    let v3_hook = V3MigrationBeginTestHook::new();
+    let actor_hook = v3_hook.clone();
+    let actor_path = v2_path.clone();
+    let first_open = tokio::spawn(async move {
+        SqliteScenarioStore::open_with_options(
+            actor_path,
+            OpenOptions::new(SnapshotPolicy::default())
+                .with_v3_migration_begin_test_hook(actor_hook),
+        )
+        .await
+    });
+    let wait_hook = v3_hook.clone();
+    tokio::task::spawn_blocking(move || wait_hook.wait_before_begin()).await?;
+    let (peer, peer_outcome) = SqliteScenarioStore::open(&v2_path).await?;
+    assert_eq!(peer_outcome.applied_migrations, vec![3]);
+    drop(peer);
+    v3_hook.release();
+    let (first, first_outcome) = first_open.await??;
+    assert!(first_outcome.applied_migrations.is_empty());
+    drop(first);
+    let connection = Connection::open(&v2_path)?;
+    let versions = connection
+        .prepare("SELECT version FROM schema_migrations ORDER BY version")?
+        .query_map([], |row| row.get::<_, u32>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(versions, vec![1, 2, 3]);
     Ok(())
 }
