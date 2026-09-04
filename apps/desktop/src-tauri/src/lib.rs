@@ -3604,7 +3604,7 @@ mod tests {
         let backend_id = BackendId::new("solver.fixture")?;
         let matrix = CapabilityMatrix::new(
             1,
-            1,
+            2,
             vec![
                 SupportFeature {
                     id: degraded_id.clone(),

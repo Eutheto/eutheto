@@ -4,7 +4,7 @@ use eutheto_domain_ir::{
     AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef,
     DomainEvidenceId, OptimizationDirection, ScoreCategoryId,
 };
-use eutheto_types::{PackId, ScenarioId, SolutionId};
+use eutheto_types::{PackId, RuleId, ScenarioId, SolutionId};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -45,6 +45,44 @@ fn provenance() -> Result<ProvenanceRecord, Box<dyn Error>> {
         parameters: BTreeMap::new(),
         parent: None,
     })
+}
+
+fn rule_id(index: u8) -> Result<RuleId, Box<dyn Error>> {
+    Ok(format!("01890a5d-ac96-7b64-9f74-bbfcf30f9f{index:02x}").parse()?)
+}
+
+fn required_rule_provenance() -> Result<ProvenanceRecord, Box<dyn Error>> {
+    Ok(ProvenanceRecord {
+        id: ProvenanceId::new("provenance.required-rule")?,
+        source_kind: ProvenanceSourceKind::RequiredRule,
+        source_id: rule_id(1)?.to_string(),
+        entity_refs: Vec::new(),
+        message_key: "school.required-rule".to_owned(),
+        parameters: BTreeMap::new(),
+        parent: None,
+    })
+}
+
+fn assumption(
+    name: &str,
+    literal: Literal,
+    required_rules: Vec<RuleId>,
+    provenance: ProvenanceId,
+) -> Result<Assumption, PlanningIdError> {
+    Ok(Assumption {
+        id: AssumptionId::new(format!("assumption.{name}"))?,
+        literal,
+        required_rules,
+        provenance,
+    })
+}
+
+fn assumption_problem(assumptions: Vec<Assumption>) -> Result<PlanningProblem, Box<dyn Error>> {
+    let mut problem = base_problem()?;
+    problem.assumptions = assumptions;
+    problem.provenance.push(required_rule_provenance()?);
+    problem.canonicalize()?;
+    Ok(problem)
 }
 
 // This fixture stays cohesive so every shared declaration is initialized in one canonical model.
@@ -788,6 +826,198 @@ fn provenance_rejects_orphans_but_retains_referenced_ancestors() -> Result<(), B
 }
 
 #[test]
+fn assumption_group_accepts_multiple_rules_and_counts_one_literal() -> Result<(), Box<dyn Error>> {
+    let provenance = ProvenanceId::new("provenance.required-rule")?;
+    let mut problem = assumption_problem(vec![assumption(
+        "multi",
+        Literal::positive(bool_id("a")?),
+        vec![rule_id(2)?, rule_id(1)?],
+        provenance,
+    )?])?;
+
+    assert_eq!(
+        problem.assumptions[0].required_rules,
+        vec![rule_id(1)?, rule_id(2)?]
+    );
+    assert_eq!(
+        feature_usage(&problem).literal_reference_count,
+        feature_usage(&base_problem()?).literal_reference_count + 1
+    );
+    validate(&problem, PlanningIrLimitsV1::DEFAULT)?;
+
+    let mut limits = PlanningIrLimitsV1::DEFAULT;
+    limits.max_refs_per_node = 2;
+    assert_eq!(
+        validate(&problem, limits),
+        Err(ValidationError {
+            code: ValidationCode::LimitExceeded,
+            path: "assumptions[0].references".to_owned(),
+        })
+    );
+    problem.assumptions[0].required_rules.pop();
+    assert!(validate(&problem, PlanningIrLimitsV1::DEFAULT).is_ok());
+    Ok(())
+}
+
+#[test]
+fn assumption_rule_order_is_canonical_and_hash_stable() -> Result<(), Box<dyn Error>> {
+    let provenance = ProvenanceId::new("provenance.required-rule")?;
+    let first = assumption_problem(vec![assumption(
+        "stable",
+        Literal::positive(bool_id("a")?),
+        vec![rule_id(1)?, rule_id(2)?],
+        provenance.clone(),
+    )?])?;
+    let second = assumption_problem(vec![assumption(
+        "stable",
+        Literal::positive(bool_id("a")?),
+        vec![rule_id(2)?, rule_id(1)?],
+        provenance,
+    )?])?;
+
+    assert_eq!(first.assumptions, second.assumptions);
+    assert_eq!(
+        canonical_ir_hash(&first, PlanningIrLimitsV1::DEFAULT)?,
+        canonical_ir_hash(&second, PlanningIrLimitsV1::DEFAULT)?
+    );
+    Ok(())
+}
+
+#[test]
+fn assumption_group_rejects_empty_and_duplicate_rule_lists() -> Result<(), Box<dyn Error>> {
+    let provenance = ProvenanceId::new("provenance.required-rule")?;
+    let empty = assumption_problem(vec![assumption(
+        "empty",
+        Literal::positive(bool_id("a")?),
+        Vec::new(),
+        provenance.clone(),
+    )?])?;
+    assert_eq!(
+        validate(&empty, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::InvalidShape,
+            path: "assumptions[0].requiredRules".to_owned(),
+        })
+    );
+
+    let duplicate = assumption_problem(vec![assumption(
+        "duplicate",
+        Literal::positive(bool_id("a")?),
+        vec![rule_id(1)?, rule_id(1)?],
+        provenance,
+    )?])?;
+    assert_eq!(
+        validate(&duplicate, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::NonCanonical,
+            path: "assumptions[0].requiredRules".to_owned(),
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn assumption_groups_reject_reused_rule_and_literal_variable() -> Result<(), Box<dyn Error>> {
+    let provenance = ProvenanceId::new("provenance.required-rule")?;
+    let reused_rule = assumption_problem(vec![
+        assumption(
+            "a",
+            Literal::positive(bool_id("a")?),
+            vec![rule_id(1)?],
+            provenance.clone(),
+        )?,
+        assumption(
+            "b",
+            Literal::positive(bool_id("b")?),
+            vec![rule_id(1)?],
+            provenance.clone(),
+        )?,
+    ])?;
+    assert_eq!(
+        validate(&reused_rule, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::DuplicateId,
+            path: "assumptions[1].requiredRules[0]".to_owned(),
+        })
+    );
+
+    let reused_variable = assumption_problem(vec![
+        assumption(
+            "a",
+            Literal::positive(bool_id("a")?),
+            vec![rule_id(1)?],
+            provenance.clone(),
+        )?,
+        assumption(
+            "b",
+            Literal::negative(bool_id("a")?),
+            vec![rule_id(2)?],
+            provenance,
+        )?,
+    ])?;
+    assert_eq!(
+        validate(&reused_variable, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::DuplicateId,
+            path: "assumptions[1].literal.variable".to_owned(),
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn assumption_group_requires_existing_literal_and_provenance() -> Result<(), Box<dyn Error>> {
+    let provenance = ProvenanceId::new("provenance.required-rule")?;
+    let valid = assumption_problem(vec![assumption(
+        "references",
+        Literal::positive(bool_id("a")?),
+        vec![rule_id(1)?],
+        provenance,
+    )?])?;
+    let mut missing_literal = valid.clone();
+    missing_literal.assumptions[0].literal = Literal::positive(bool_id("missing")?);
+    assert_eq!(
+        validate(&missing_literal, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::MissingReference,
+            path: "assumptions[0].literal".to_owned(),
+        })
+    );
+
+    let mut missing_provenance = valid;
+    missing_provenance.assumptions[0].provenance = ProvenanceId::new("provenance.missing")?;
+    assert_eq!(
+        validate(&missing_provenance, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::MissingProvenance,
+            path: "assumptions[0].provenance".to_owned(),
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn assumption_group_rejects_non_required_rule_provenance() -> Result<(), Box<dyn Error>> {
+    let mut problem = base_problem()?;
+    problem.assumptions.push(assumption(
+        "wrong-provenance",
+        Literal::positive(bool_id("a")?),
+        vec![rule_id(1)?],
+        provenance_id()?,
+    )?);
+    problem.canonicalize()?;
+
+    assert_eq!(
+        validate(&problem, PlanningIrLimitsV1::DEFAULT),
+        Err(ValidationError {
+            code: ValidationCode::InvalidShape,
+            path: "assumptions[0].provenance".to_owned(),
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn serialization_hash_is_canonical_context_sensitive_and_display_independent()
 -> Result<(), Box<dyn Error>> {
     let mut first = base_problem()?;
@@ -829,7 +1059,7 @@ fn serialization_hash_is_canonical_context_sensitive_and_display_independent()
 }
 
 #[test]
-fn strict_parser_rejects_unknown_version_and_field() -> Result<(), Box<dyn Error>> {
+fn strict_parser_rejects_unsupported_versions_and_field() -> Result<(), Box<dyn Error>> {
     let problem = base_problem()?;
     let mut value = serde_json::to_value(&problem)?;
     if let Some(object) = value.as_object_mut() {
@@ -842,15 +1072,20 @@ fn strict_parser_rejects_unknown_version_and_field() -> Result<(), Box<dyn Error
             ..
         })
     ));
-    let mut future = problem;
-    future.schema_version = 2;
-    assert!(matches!(
-        parse_and_validate(&serde_json::to_vec(&future)?, PlanningIrLimitsV1::DEFAULT),
-        Err(ValidationError {
-            code: ValidationCode::UnsupportedVersion,
-            ..
-        })
-    ));
+    for schema_version in [1, PLANNING_IR_SCHEMA_VERSION + 1] {
+        let mut unsupported = problem.clone();
+        unsupported.schema_version = schema_version;
+        assert!(matches!(
+            parse_and_validate(
+                &serde_json::to_vec(&unsupported)?,
+                PlanningIrLimitsV1::DEFAULT
+            ),
+            Err(ValidationError {
+                code: ValidationCode::UnsupportedVersion,
+                ..
+            })
+        ));
+    }
     let tiny = PlanningIrLimitsV1 {
         max_ir_bytes: 1,
         ..PlanningIrLimitsV1::DEFAULT

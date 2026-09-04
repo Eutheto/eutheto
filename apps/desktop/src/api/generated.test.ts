@@ -328,7 +328,7 @@ describe("generated desktop API", () => {
     } satisfies DomainPackDescriptorDto;
     const matrix = {
       schemaVersion: 1,
-      planningIrSchemaVersion: 1,
+      planningIrSchemaVersion: 2,
       features: [
         {
           id: "solve.cancellation",
@@ -377,7 +377,7 @@ describe("generated desktop API", () => {
   it("preserves exact unsupported and degraded solver matrix cells", async () => {
     const matrix = {
       schemaVersion: 1,
-      planningIrSchemaVersion: 1,
+      planningIrSchemaVersion: 2,
       features: [
         {
           id: "primitive.fixture-unsupported",

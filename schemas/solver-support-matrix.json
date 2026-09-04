@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "planningIrSchemaVersion": 1,
+  "planningIrSchemaVersion": 2,
   "features": [
     {
       "id": "ir.absolute-difference",

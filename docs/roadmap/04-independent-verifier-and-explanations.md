@@ -136,7 +136,7 @@ pub struct ProvenanceRecord {
 
 The provenance index must cover every user-relevant variable, constraint, objective contribution, assumption, and projection. Display strings are not identity. Message keys and typed parameters make evidence stable, reviewable, and localization-ready. Missing provenance is a compiler defect and prevents explanation-dependent output.
 
-The schema-v1 planning provenance index is closed: every planning variable, constraint, objective
+The schema-v2 planning provenance index is closed: every planning variable, constraint, objective
 level and term, assumption, and projection references a declared record, and every declared record
 must be reachable from one of those artifacts either directly or through its bounded parent chain.
 An unused record is a compiler defect, not harmless metadata. Generic projection carries the
@@ -144,6 +144,13 @@ projection record's canonical ID into `DomainAssignment.evidence`; packs may app
 non-authoritative evidence without changing projected value identity. Backend adapters retain the
 validated IR-to-native maps outside native payloads under the planning model hash and exact adapter
 version. Native payloads contain neither planning IDs nor domain/display text.
+
+Planning IR schema v2 completes the pre-public assumption contract. Each assumption ID identifies
+one explainable group controlled by one Boolean literal and bound to a non-empty canonical set of
+stable required `RuleId`s. A rule and controlling Boolean variable each belong to at most one group,
+and every group directly references `RequiredRule` provenance. Foundational, fact, preference, and
+derived provenance therefore cannot be exposed as user-relaxable assumptions. This required-field
+change makes schema v1 incompatible; current writers emit only v2 and older input fails safely.
 
 Missing source/IR/projection provenance is acceptance-critical because it invalidates the planning
 problem before solving or projection. Missing optional rendering evidence discovered only after an

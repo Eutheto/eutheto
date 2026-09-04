@@ -1988,9 +1988,11 @@ mod tests {
     #[test]
     fn assumptions_are_reported_as_unsupported_during_preflight() -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
+        problem.provenance[0].source_kind = ProvenanceSourceKind::RequiredRule;
         problem.assumptions.push(Assumption {
             id: AssumptionId::new("translation.assumption")?,
             literal: Literal::positive(BoolVariableId::new("translation.a_bool")?),
+            required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f01".parse()?],
             provenance: ProvenanceId::new("translation.variable")?,
         });
         problem

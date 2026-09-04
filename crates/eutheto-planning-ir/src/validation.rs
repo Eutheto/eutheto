@@ -1,11 +1,11 @@
-//! Strict bounded validation for untrusted schema-v1 planning IR.
+//! Strict bounded validation for the current untrusted planning IR schema.
 
 use crate::analysis::{analyze_components, constraint_nodes, feature_usage, projection_nodes};
 use crate::ids::{BoolVariableId, IntVariableId, IntervalVariableId, ProvenanceId};
 use crate::model::{
     Constraint, IntDomain, LinearComparison, LinearExpression, Literal, PLANNING_IR_SCHEMA_VERSION,
     PlanningMetadata, PlanningProblem, ProjectionExpression, ProvenanceParameter, ProvenanceRecord,
-    Variable,
+    ProvenanceSourceKind, Variable,
 };
 use eutheto_domain_ir::{AssignmentValue, MAX_SCORE_LEVELS};
 use eutheto_types::ResourceLimits;
@@ -154,7 +154,7 @@ pub fn parse_and_validate(
     Ok(problem)
 }
 
-/// Strictly validates canonical schema-v1 IR.
+/// Strictly validates canonical current-schema IR.
 ///
 /// # Errors
 /// Returns the first deterministic validation failure.
@@ -771,10 +771,58 @@ fn validate_assumptions(
     total_refs: &mut u64,
     limits: PlanningIrLimitsV1,
 ) -> Result<(), ValidationError> {
-    for assumption in &problem.assumptions {
-        require_literal(&assumption.literal, bools, "assumptions.literal")?;
-        require_provenance(&assumption.provenance, provenance, "assumptions")?;
-        *total_refs = add_refs(*total_refs, 1, limits)?;
+    if problem.assumptions.is_empty() {
+        return Ok(());
+    }
+    let provenance_records: BTreeMap<_, _> = problem
+        .provenance
+        .iter()
+        .map(|record| (&record.id, record))
+        .collect();
+    let mut rule_ids = BTreeSet::new();
+    let mut literal_variables = BTreeSet::new();
+    for (index, assumption) in problem.assumptions.iter().enumerate() {
+        let path = format!("assumptions[{index}]");
+        if assumption.required_rules.is_empty() {
+            return shape(format!("{path}.requiredRules"));
+        }
+        let refs = assumption
+            .required_rules
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| {
+                ValidationError::new(
+                    ValidationCode::ArithmeticOverflow,
+                    format!("{path}.references"),
+                )
+            })?;
+        check_limit(
+            refs,
+            limits.max_refs_per_node,
+            &format!("{path}.references"),
+        )?;
+        *total_refs = add_refs(*total_refs, count(refs)?, limits)?;
+        strict(&assumption.required_rules, &format!("{path}.requiredRules"))?;
+        if !literal_variables.insert(&assumption.literal.variable) {
+            return duplicate(format!("{path}.literal.variable"));
+        }
+        require_literal(&assumption.literal, bools, &format!("{path}.literal"))?;
+        require_provenance(
+            &assumption.provenance,
+            provenance,
+            &format!("{path}.provenance"),
+        )?;
+        if provenance_records
+            .get(&assumption.provenance)
+            .is_none_or(|record| record.source_kind != ProvenanceSourceKind::RequiredRule)
+        {
+            return shape(format!("{path}.provenance"));
+        }
+        for (rule_index, rule_id) in assumption.required_rules.iter().enumerate() {
+            if !rule_ids.insert(rule_id) {
+                return duplicate(format!("{path}.requiredRules[{rule_index}]"));
+            }
+        }
     }
     Ok(())
 }

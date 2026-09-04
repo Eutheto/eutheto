@@ -285,7 +285,7 @@ fn require_strict_object_schema(schema: &Value, owner: &str) -> Result<()> {
 }
 
 fn validate_matrix(matrix: &SupportMatrix) -> Result<()> {
-    if matrix.schema_version != 1 || matrix.planning_ir_schema_version != 1 {
+    if matrix.schema_version != 1 || matrix.planning_ir_schema_version != 2 {
         bail!("unsupported support-matrix or planning-IR schema version")
     }
     let mut prior_feature: Option<&str> = None;

@@ -130,7 +130,7 @@ fn solve_request(
         ))?),
         scenario_id,
         expected_revision: Revision::INITIAL,
-        planning_ir_schema_version: 1,
+        planning_ir_schema_version: 2,
         compiler_version: "1.0.0".to_owned(),
         application_version: "1.0.0".to_owned(),
         backend_id: BackendId::new("ortools.cp-sat")?,

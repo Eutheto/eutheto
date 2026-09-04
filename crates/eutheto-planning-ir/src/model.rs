@@ -8,13 +8,13 @@ use crate::ids::{
 use eutheto_domain_ir::{
     AssignmentValue, DomainAssignmentId, DomainEntityRef, OptimizationDirection, ScoreCategoryId,
 };
-use eutheto_types::{PackId, ScenarioId};
+use eutheto_types::{PackId, RuleId, ScenarioId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Planning IR schema version supported by this crate.
-pub const PLANNING_IR_SCHEMA_VERSION: u32 = 1;
+pub const PLANNING_IR_SCHEMA_VERSION: u32 = 2;
 /// Projection schema version supported by this crate.
 pub const PROJECTION_SCHEMA_VERSION: u32 = 1;
 
@@ -661,14 +661,16 @@ pub struct ObjectivePlan {
     pub levels: Vec<ObjectiveLevel>,
 }
 
-/// One candidate assumption literal.
+/// One explainable assumption group controlled by a canonical Boolean literal.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Assumption {
-    /// Stable identity.
+    /// Stable identity of the explainable group.
     pub id: AssumptionId,
-    /// Boolean literal.
+    /// Boolean literal that activates every listed required rule.
     pub literal: Literal,
+    /// Canonically sorted, non-empty required rules controlled by the literal.
+    pub required_rules: Vec<RuleId>,
     /// Required provenance.
     pub provenance: ProvenanceId,
 }
@@ -835,7 +837,7 @@ pub struct SplitAuthorization {
     pub projection_independent: bool,
 }
 
-/// Complete immutable schema-v1 planning problem.
+/// Complete immutable schema-v2 planning problem.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlanningProblem {
