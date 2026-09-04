@@ -1,3 +1,39 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
+
+@theme inline {
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-focus: var(--focus);
+  --color-danger: var(--danger);
+  --color-danger-strong: var(--danger-strong);
+  --color-danger-soft: var(--danger-soft);
+  --spacing-1: var(--s1);
+  --spacing-2: var(--s2);
+  --spacing-3: var(--s3);
+  --spacing-4: var(--s4);
+  --spacing-5: var(--s5);
+  --spacing-6: var(--s6);
+  --spacing-7: var(--s7);
+  --spacing-8: var(--s8);
+  --radius-sm: var(--r1);
+  --radius-md: var(--r2);
+  --radius-lg: var(--r3);
+  --font-display: var(--display);
+  --font-body: var(--body);
+  --font-mono: var(--mono);
+  --shadow-raised: 0 1.5rem 4rem var(--shadow);
+}
+
 :root {
   --ink: #1b2823;
   --muted: #4a5a53;
