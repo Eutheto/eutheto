@@ -47,13 +47,9 @@ const statusCopy = computed(() => {
 
   switch (props.status) {
     case "optimal":
-      return acceptedReady.value
-        ? explanationMessage("status.optimal")
-        : explanationMessage("error.internal");
+      return acceptedReady.value ? explanationMessage("status.optimal") : stateCopy.value;
     case "feasible":
-      return acceptedReady.value
-        ? explanationMessage("status.feasible")
-        : explanationMessage("error.internal");
+      return acceptedReady.value ? explanationMessage("status.feasible") : stateCopy.value;
     case "infeasible":
       return explanationMessage("status.infeasible");
     case "unbounded":
@@ -65,8 +61,9 @@ const statusCopy = computed(() => {
     case "backendUnavailable":
       return explanationMessage("status.unavailable");
     case "invalidModel":
+      return explanationMessage("status.invalidModel");
     case "backendFailed":
-      return explanationMessage("status.failed");
+      return explanationMessage("status.backendFailed");
     case null:
       return stateCopy.value;
   }
@@ -146,19 +143,15 @@ function entityHref(entity: DomainEntityRef): string {
       {{ stateCopy }}
     </p>
 
-    <dl class="mt-4 grid gap-3 sm:grid-cols-2">
-      <div>
+    <dl v-if="acceptedReady || backend || elapsed != null" class="mt-4 grid gap-3 sm:grid-cols-2">
+      <div v-if="acceptedReady">
         <dt class="text-sm font-bold text-muted">Required rules</dt>
         <dd class="text-ink">
-          <span aria-hidden="true">{{ allRequiredRulesPassed ? "✓" : "✕" }}</span>
-          {{
-            allRequiredRulesPassed
-              ? explanationMessage("score.requiredPassed")
-              : explanationMessage("score.requiredFailed")
-          }}
+          <span aria-hidden="true">✓</span>
+          {{ explanationMessage("score.requiredPassed") }}
         </dd>
       </div>
-      <div>
+      <div v-if="acceptedReady">
         <dt class="text-sm font-bold text-muted">Verified score</dt>
         <dd class="text-ink">
           {{
@@ -168,7 +161,7 @@ function entityHref(entity: DomainEntityRef): string {
           }}
         </dd>
       </div>
-      <div v-if="baseChangeCount != null">
+      <div v-if="acceptedReady && baseChangeCount != null">
         <dt class="text-sm font-bold text-muted">Base-plan changes</dt>
         <dd class="text-ink">
           {{ new Intl.NumberFormat().format(baseChangeCount) }}
@@ -187,7 +180,11 @@ function entityHref(entity: DomainEntityRef): string {
       </div>
     </dl>
 
-    <section v-if="warnings.length" class="mt-4" aria-labelledby="verification-warnings-heading">
+    <section
+      v-if="acceptedReady && warnings.length"
+      class="mt-4"
+      aria-labelledby="verification-warnings-heading"
+    >
       <h3 id="verification-warnings-heading" class="font-bold text-ink">
         <span aria-hidden="true">!</span> {{ warningSummary }}
       </h3>
@@ -208,8 +205,9 @@ function entityHref(entity: DomainEntityRef): string {
       </ul>
     </section>
 
-    <div class="mt-5 flex flex-wrap gap-3">
+    <div v-if="acceptedReady || backend || elapsed != null" class="mt-5 flex flex-wrap gap-3">
       <button
+        v-if="acceptedReady"
         type="button"
         class="rounded-md border border-line-strong bg-raised px-4 py-2 font-bold text-ink"
         @click="emit('viewProof')"
@@ -217,6 +215,7 @@ function entityHref(entity: DomainEntityRef): string {
         {{ explanationMessage("action.viewProof") }}
       </button>
       <button
+        v-if="backend || elapsed != null"
         type="button"
         class="rounded-md border border-line bg-surface px-4 py-2 font-bold text-ink"
         @click="emit('viewRun')"

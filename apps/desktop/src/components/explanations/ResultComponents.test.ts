@@ -27,6 +27,12 @@ async function render(component: Component, props: Record<string, unknown>): Pro
 
 const emptyScore: ScoreVector = { feasibility: "0", levels: [] };
 const noWarnings: readonly VerificationWarning[] = [];
+const solutionWarning: VerificationWarning = {
+  id: "warning.1",
+  messageKey: "warning.rounding",
+  affectedEntities: [{ kind: "person", id: "alice" }],
+  facts: { count: { type: "integer", value: "9007199254740993" } },
+};
 
 function solutionProps(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -137,24 +143,95 @@ describe("SolutionStatus", () => {
     ["unbounded", false, "Unbounded model proven"],
     ["noSolutionWithinLimit", false, "No verified result within the limit"],
     ["cancelled", false, "Solve cancelled"],
-    ["invalidModel", false, "Internal verification failure"],
+    ["invalidModel", false, "Invalid model"],
     ["backendUnavailable", false, "Backend unavailable"],
-    ["backendFailed", false, "Internal verification failure"],
-  ])("renders exact %s outcome copy", async (status, accepted, expected) => {
-    const html = await render(SolutionStatus, solutionProps({ status, accepted }));
-    expect(html).toContain(expected);
+    ["backendFailed", false, "Backend failed"],
+  ])(
+    "renders exact %s outcome copy with only authoritative details",
+    async (status, accepted, expected) => {
+      const html = await render(
+        SolutionStatus,
+        solutionProps({
+          status,
+          accepted,
+          warnings: [solutionWarning],
+          backend: "solver-backend",
+          elapsed: 1250,
+          baseChangeCount: 2,
+          warningTexts: { "warning.rounding": "Rounded {count} assignments." },
+        }),
+      );
+
+      expect(html).toContain(expected);
+      expect(html).toContain("Backend solver-backend");
+      expect(html).toContain("Finished in 1,250 ms");
+      expect(html).toContain("View run details");
+      expect(html).not.toMatch(/(?:action|score|status|warning)\.[A-Za-z]/);
+
+      if (accepted) {
+        expect(html).toContain("All required rules passed");
+        expect(html).toContain("Verified score");
+        expect(html).toContain("2 verified changes");
+        expect(html).toContain("1 verification warning");
+        expect(html).toContain("Rounded 9,007,199,254,740,993 assignments.");
+        expect(html).toContain('href="#entity-person-alice"');
+        expect(html).toContain("View proof");
+      } else {
+        expect(html).not.toContain("All required rules passed");
+        expect(html).not.toContain("Required rules did not pass");
+        expect(html).not.toContain("Verified score");
+        expect(html).not.toContain("verified changes");
+        expect(html).not.toContain("verification warning");
+        expect(html).not.toContain("Rounded");
+        expect(html).not.toContain('href="#entity-person-alice"');
+        expect(html).not.toContain("View proof");
+      }
+    },
+  );
+
+  it("uses distinct non-verifier copy for invalid models and backend failures", async () => {
+    const invalidModel = await render(
+      SolutionStatus,
+      solutionProps({ status: "invalidModel", accepted: false }),
+    );
+    const backendFailed = await render(
+      SolutionStatus,
+      solutionProps({ status: "backendFailed", accepted: false }),
+    );
+
+    expect(invalidModel).toContain("Invalid model");
+    expect(invalidModel).not.toContain("Backend failed");
+    expect(backendFailed).toContain("Backend failed");
+    expect(backendFailed).not.toContain("Invalid model");
+    expect(invalidModel).not.toContain("Internal verification failure");
+    expect(backendFailed).not.toContain("Internal verification failure");
   });
 
-  it("never describes an unaccepted or required-rule-failing candidate as ready", async () => {
-    const unaccepted = await render(SolutionStatus, solutionProps({ accepted: false }));
+  it("does not mislabel rejected candidates as internal verification failures", async () => {
+    const unaccepted = await render(
+      SolutionStatus,
+      solutionProps({ accepted: false, warnings: [solutionWarning], baseChangeCount: 2 }),
+    );
     const failedRules = await render(
       SolutionStatus,
-      solutionProps({ accepted: true, allRequiredRulesPassed: false }),
+      solutionProps({
+        accepted: true,
+        allRequiredRulesPassed: false,
+        warnings: [solutionWarning],
+        baseChangeCount: 2,
+      }),
     );
-    expect(unaccepted.toLowerCase()).not.toContain("ready");
-    expect(failedRules.toLowerCase()).not.toContain("ready");
-    expect(unaccepted).toContain("internal verification failure");
-    expect(failedRules).toContain("Required rules did not pass");
+
+    for (const html of [unaccepted, failedRules]) {
+      expect(html).toContain("No independently accepted result is available for selection.");
+      expect(html.toLowerCase()).not.toContain("ready");
+      expect(html).not.toContain("internal verification failure");
+      expect(html).not.toContain("Required rules");
+      expect(html).not.toContain("Verified score");
+      expect(html).not.toContain("verification warning");
+      expect(html).not.toContain("verified changes");
+      expect(html).not.toContain("View proof");
+    }
   });
 
   it.each([
@@ -165,46 +242,64 @@ describe("SolutionStatus", () => {
     ["inconclusive", "The available evidence is inconclusive."],
     ["unavailable", "This explanation is unavailable."],
     ["internalFailure", "internal verification failure quarantined this candidate"],
-  ])("prioritizes the %s UI state over a terminal solver status", async (state, expected) => {
-    const html = await render(
-      SolutionStatus,
-      solutionProps({ state, status: "infeasible", accepted: false }),
-    );
-    expect(html).toContain(expected);
-    expect(html).not.toContain("Infeasibility proven");
-  });
-
-  it("quarantines internal failures and exposes proof, run, warning, and secondary details", async () => {
-    const warning: VerificationWarning = {
-      id: "warning.1",
-      messageKey: "warning.rounding",
-      affectedEntities: [{ kind: "person", id: "alice" }],
-      facts: { count: { type: "integer", value: "9007199254740993" } },
-    };
+  ])("prioritizes the %s UI state and hides candidate authority", async (state, expected) => {
     const html = await render(
       SolutionStatus,
       solutionProps({
+        state,
+        status: "infeasible",
         accepted: false,
-        state: "internalFailure",
-        warnings: [warning],
-        backend: "verified-backend",
+        warnings: [solutionWarning],
+        backend: "solver-backend",
         elapsed: 1250,
         baseChangeCount: 2,
         warningTexts: { "warning.rounding": "Rounded {count} assignments." },
       }),
     );
-    expect(html.toLowerCase()).not.toContain("ready");
-    expect(html).toContain('role="alert"');
-    expect(html).toContain("1 verification warning");
-    expect(html).toContain("Rounded 9,007,199,254,740,993 assignments.");
-    expect(html).toContain('href="#entity-person-alice"');
-    expect(html).not.toContain("warning.rounding");
-    expect(html).toContain("Backend verified-backend");
+
+    expect(html).toContain(expected);
+    expect(html).not.toContain("Infeasibility proven");
+    expect(html).not.toContain("All required rules passed");
+    expect(html).not.toContain("Required rules did not pass");
+    expect(html).not.toContain("Verified score");
+    expect(html).not.toContain("verified changes");
+    expect(html).not.toContain("verification warning");
+    expect(html).not.toContain("Rounded");
+    expect(html).not.toContain('href="#entity-person-alice"');
+    expect(html).not.toContain("View proof");
+    expect(html).toContain("Backend solver-backend");
     expect(html).toContain("Finished in 1,250 ms");
-    expect(html).toContain("2 verified changes");
-    expect(html).toContain('type="button"');
-    expect(html).toContain("View proof");
     expect(html).toContain("View run details");
+    expect(html).not.toMatch(/(?:action|score|status|warning)\.[A-Za-z]/);
+  });
+
+  it("reserves internal verification failure copy for the quarantined UI state", async () => {
+    const html = await render(
+      SolutionStatus,
+      solutionProps({
+        accepted: false,
+        state: "internalFailure",
+        status: "backendFailed",
+        warnings: [solutionWarning],
+        backend: "solver-backend",
+        elapsed: 1250,
+        baseChangeCount: 2,
+        warningTexts: { "warning.rounding": "Rounded {count} assignments." },
+      }),
+    );
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("An internal verification failure quarantined this candidate.");
+    expect(html).not.toContain("Backend failed");
+    expect(html).not.toContain("All required rules passed");
+    expect(html).not.toContain("Verified score");
+    expect(html).not.toContain("verification warning");
+    expect(html).not.toContain("verified changes");
+    expect(html).not.toContain("View proof");
+    expect(html).toContain("Backend solver-backend");
+    expect(html).toContain("Finished in 1,250 ms");
+    expect(html).toContain("View run details");
+    expect(html.match(/type="button"/g)).toHaveLength(1);
   });
 });
 
