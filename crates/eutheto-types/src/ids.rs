@@ -198,6 +198,14 @@ define_id!(
     "Stable identity of an assignment or assignment lock."
 );
 define_id!(SolveRunId, "Stable identity of a solver run.");
+define_id!(
+    ScenarioSnapshotId,
+    "Stable identity of an immutable scenario snapshot."
+);
+define_id!(
+    CounterfactualJobId,
+    "Stable identity of a counterfactual solve job."
+);
 define_id!(SolutionId, "Stable identity of a normalized solution.");
 define_id!(CommandId, "Stable identity of a command journal entry.");
 define_id!(
@@ -298,7 +306,9 @@ define_id!(BundleId, "Stable identity of a portable bundle.");
 
 #[cfg(test)]
 mod tests {
-    use super::{FixedIdGenerator, IdGenerator, PackId, ScenarioId};
+    use super::{
+        CounterfactualJobId, FixedIdGenerator, IdGenerator, PackId, ScenarioId, ScenarioSnapshotId,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -317,6 +327,24 @@ mod tests {
     fn serialized_typed_ids_reject_non_v7_uuids() {
         let result = serde_json::from_str::<ScenarioId>("\"550e8400-e29b-41d4-a716-446655440000\"");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn persistence_ids_are_strict_uuid_v7_types() -> Result<(), Box<dyn std::error::Error>> {
+        let value = "018f47f2-e880-7000-8000-000000000003";
+        assert_eq!(value.parse::<ScenarioSnapshotId>()?.to_string(), value);
+        assert_eq!(value.parse::<CounterfactualJobId>()?.to_string(), value);
+        assert!(
+            "550e8400-e29b-41d4-a716-446655440000"
+                .parse::<ScenarioSnapshotId>()
+                .is_err()
+        );
+        assert!(
+            "550e8400-e29b-41d4-a716-446655440000"
+                .parse::<CounterfactualJobId>()
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

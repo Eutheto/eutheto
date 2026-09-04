@@ -11,6 +11,7 @@ use crate::values::{
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// Current scenario envelope format version.
 pub const SCENARIO_FORMAT_VERSION: u32 = 1;
@@ -559,7 +560,12 @@ pub enum AppError {
 
 /// Selection of an automatic or explicit solver backend.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "backendId")]
+#[serde(
+    rename_all = "camelCase",
+    tag = "kind",
+    content = "backendId",
+    deny_unknown_fields
+)]
 pub enum BackendSelection {
     /// Let the deterministic router choose.
     Auto,
@@ -583,7 +589,12 @@ pub enum SolveMode {
 
 /// Worker thread allocation policy.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "count")]
+#[serde(
+    rename_all = "camelCase",
+    tag = "kind",
+    content = "count",
+    deny_unknown_fields
+)]
 pub enum WorkerThreadPolicy {
     /// Let the application apply its bounded default.
     Auto,
@@ -710,6 +721,44 @@ pub struct SolveOptions {
     /// Shared generation and execution limits.
     pub resource_limits: ResourceLimits,
 }
+
+impl SolveOptions {
+    /// Validates nonzero optional limits and exact worker allocation.
+    ///
+    /// # Errors
+    /// Rejects a zero memory limit, exact worker count, or solution limit.
+    pub fn validate(&self) -> Result<(), SolveOptionsError> {
+        if self.memory_limit_bytes == Some(0) {
+            return Err(SolveOptionsError::ZeroMemoryLimit);
+        }
+        if matches!(self.worker_threads, WorkerThreadPolicy::Exact(0)) {
+            return Err(SolveOptionsError::ZeroWorkerThreads);
+        }
+        if self.solution_limit == Some(0) {
+            return Err(SolveOptionsError::ZeroSolutionLimit);
+        }
+        Ok(())
+    }
+}
+
+/// Invalid canonical solve options.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SolveOptionsError {
+    /// A present process memory ceiling is zero.
+    ZeroMemoryLimit,
+    /// An exact worker allocation is zero.
+    ZeroWorkerThreads,
+    /// A present accepted-solution ceiling is zero.
+    ZeroSolutionLimit,
+}
+
+impl fmt::Display for SolveOptionsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid solve options: {self:?}")
+    }
+}
+
+impl std::error::Error for SolveOptionsError {}
 
 /// Project list item returned by application APIs.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1057,7 +1106,9 @@ pub enum EventPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::{SCENARIO_FORMAT_VERSION, ScenarioCommand, ScenarioDocument, SolveOptions};
+    use super::{
+        SCENARIO_FORMAT_VERSION, ScenarioCommand, ScenarioDocument, SolveOptions, SolveOptionsError,
+    };
     use serde_json::{Value, json};
 
     fn scenario_json() -> Value {
@@ -1184,5 +1235,39 @@ mod tests {
         unknown_old_field["timeLimit"] = json!(5);
         assert!(serde_json::from_value::<SolveOptions>(unknown_old_field).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn solve_options_reject_zero_optional_limits_and_exact_workers() -> Result<(), serde_json::Error>
+    {
+        let mut options: SolveOptions = serde_json::from_value(solve_options_json())?;
+        options.memory_limit_bytes = Some(0);
+        assert_eq!(options.validate(), Err(SolveOptionsError::ZeroMemoryLimit));
+
+        options.memory_limit_bytes = None;
+        options.worker_threads = super::WorkerThreadPolicy::Exact(0);
+        assert_eq!(
+            options.validate(),
+            Err(SolveOptionsError::ZeroWorkerThreads)
+        );
+
+        options.worker_threads = super::WorkerThreadPolicy::Auto;
+        options.solution_limit = Some(0);
+        assert_eq!(
+            options.validate(),
+            Err(SolveOptionsError::ZeroSolutionLimit)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn solve_option_tagged_enums_reject_unknown_fields() {
+        let mut backend = solve_options_json();
+        backend["backend"]["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<SolveOptions>(backend).is_err());
+
+        let mut workers = solve_options_json();
+        workers["workerThreads"] = json!({"kind": "exact", "count": 1, "unexpected": true});
+        assert!(serde_json::from_value::<SolveOptions>(workers).is_err());
     }
 }

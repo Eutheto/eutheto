@@ -4,6 +4,11 @@
 //! the sole `SQLite` connection. Callers never receive a connection or a
 //! transaction and therefore cannot accidentally bypass revision checks.
 
+use eutheto_domain_ir::{
+    AcceptedResult, DomainEvidenceId, NormalizedSolution, PortableAcceptedResultV2,
+    RUN_REQUEST_SEMANTICS_SCHEMA_VERSION, RunInputV1, RunManifestV1, RunPhaseTimingsV1,
+    RunRequestSemanticsV1, RunTerminalOutcomeV1, VerificationReport, VerificationValue,
+};
 use eutheto_export::{
     ApplicationMetadata, PortableScenario, SemanticCapability, collect_scenario_owned_uuids,
     collect_self_declared_uuids, validate_scenario_owned_uuid_uniqueness,
@@ -14,13 +19,18 @@ use eutheto_import::{
     StagedDisposition, StagedImport,
 };
 use eutheto_types::{
-    ActorRef, BundleId, CommandId, CommandSource, MAX_SCENARIO_DOCUMENT_BYTES, PackId,
-    PortableAsset, PortableJsonLimits, ProjectMetadataDto, ProjectSummaryDto, Revision,
-    Rfc3339Timestamp, ScenarioDocument, ScenarioId, ScenarioRevisionReference, SolveRunId,
-    SupplementalIdentity, SupplementalSectionKind, extract_result_dependency, extract_result_id,
-    extract_scenario_references, validate_nonsecret_portable_json,
+    ActorRef, BackendId, BundleId, CommandId, CommandSource, IanaTimeZone,
+    MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset, PortableJsonLimits, ProjectMetadataDto,
+    ProjectSummaryDto, RequestId, Revision, Rfc3339Timestamp, SafeDiagnosticValue,
+    ScenarioDocument, ScenarioId, ScenarioRevisionReference, ScenarioSnapshotId, SolutionId,
+    SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity, SupplementalSectionKind,
+    extract_result_dependency, extract_result_id, extract_scenario_references,
+    validate_nonsecret_portable_json,
 };
-use rusqlite::{Connection, MAIN_DB, OpenFlags, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{
+    Connection, MAIN_DB, OpenFlags, OptionalExtension, TransactionBehavior, limits::Limit, params,
+    types::ValueRef,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,8 +45,17 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 const INITIAL_MIGRATION: &str = include_str!("../../../migrations/V1_initial_schema.sql");
+const INDEPENDENT_VERIFICATION_MIGRATION: &str =
+    include_str!("../../../migrations/V2_independent_verification.sql");
+const SQLITE_LENGTH_LIMIT_BYTES: i32 = 128 * 1024 * 1024;
+// Allows one SQLite busy-timeout interval for worker cleanup and one for the
+// owning process to persist its terminal timeout/cancellation outcome.
+const SOLVE_TERMINAL_PERSISTENCE_GRACE_MILLISECONDS: u64 = 10_000;
+const V1_MIGRATION_NAME: &str = "V1_initial_schema.sql";
+const V2_MIGRATION_NAME: &str = "V2_independent_verification.sql";
+const PRE_V2_BACKUP_SUFFIX: &str = ".pre-v2-backup.sqlite3";
 const MAX_SNAPSHOT_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 const IMPORT_PROVENANCE_RETENTION_POLICY_VERSION: u32 = 1;
 const MAX_IMPORT_PROVENANCE_ROWS: u64 = 128;
@@ -119,6 +138,22 @@ pub enum StoreError {
     NumericRange,
     #[error("private storage path validation failed")]
     PrivatePath(#[source] io::Error),
+    #[error("solve request {request_id} conflicts with an existing request")]
+    SolveRequestIdConflict { request_id: RequestId },
+    #[error("solve run {0} collides with an existing run")]
+    SolveRunCollision(SolveRunId),
+    #[error("solve run {0} was not found")]
+    SolveRunNotFound(SolveRunId),
+    #[error("solve run {0} is already terminal")]
+    SolveRunTerminalConflict(SolveRunId),
+    #[error("persisted solve run is invalid: {0}")]
+    InvalidPersistedRun(String),
+    #[error("persisted accepted result is invalid: {0}")]
+    InvalidPersistedResult(String),
+    #[error("persisted candidate diagnostics are invalid: {0}")]
+    InvalidPersistedDiagnostic(String),
+    #[error("scenario snapshot {0} does not match its solve input")]
+    SnapshotMismatch(ScenarioSnapshotId),
     #[cfg(debug_assertions)]
     #[error("injected persistence failure")]
     InjectedFailure,
@@ -196,11 +231,13 @@ impl Default for SnapshotPolicy {
 }
 
 /// Configuration applied before the actor starts accepting work.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct OpenOptions {
     pub snapshot_policy: SnapshotPolicy,
     #[cfg(debug_assertions)]
     pub failpoint: Option<Failpoint>,
+    #[cfg(debug_assertions)]
+    v2_migration_begin_test_hook: Option<V2MigrationBeginTestHook>,
 }
 
 /// One-shot test failure locations. This API is absent from optimized builds.
@@ -208,8 +245,54 @@ pub struct OpenOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Failpoint {
     AfterMigrationSql,
+    AfterV2MigrationSql,
     AfterDocumentWrite,
     AfterSupplementalWrite,
+    AfterSolveRunInsert,
+    AfterAcceptedSolutionInsert,
+    AfterQuarantineWrite,
+}
+
+/// Debug-only synchronization immediately before the V2 writer transaction.
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug)]
+pub struct V2MigrationBeginTestHook {
+    reached: Arc<std::sync::Barrier>,
+    release: Arc<std::sync::Barrier>,
+}
+
+#[cfg(debug_assertions)]
+impl V2MigrationBeginTestHook {
+    /// Creates a hook shared by one test thread and the migration actor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            reached: Arc::new(std::sync::Barrier::new(2)),
+            release: Arc::new(std::sync::Barrier::new(2)),
+        }
+    }
+
+    /// Blocks until the migration actor is immediately before V2 `BEGIN`.
+    pub fn wait_before_begin(&self) {
+        self.reached.wait();
+    }
+
+    /// Releases the migration actor to acquire its writer lock.
+    pub fn release(&self) {
+        self.release.wait();
+    }
+
+    fn actor_wait_before_begin(&self) {
+        self.reached.wait();
+        self.release.wait();
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Default for V2MigrationBeginTestHook {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl OpenOptions {
     /// Uses a validated snapshot policy with no injected failure.
@@ -219,6 +302,8 @@ impl OpenOptions {
             snapshot_policy,
             #[cfg(debug_assertions)]
             failpoint: None,
+            #[cfg(debug_assertions)]
+            v2_migration_begin_test_hook: None,
         }
     }
 
@@ -229,6 +314,14 @@ impl OpenOptions {
         self.failpoint = Some(failpoint);
         self
     }
+
+    /// Pauses an existing-V1 migration immediately before its V2 writer transaction.
+    #[cfg(debug_assertions)]
+    #[must_use]
+    pub fn with_v2_migration_begin_test_hook(mut self, hook: V2MigrationBeginTestHook) -> Self {
+        self.v2_migration_begin_test_hook = Some(hook);
+        self
+    }
 }
 
 /// Result of startup recovery work.
@@ -237,6 +330,7 @@ pub struct InitializationOutcome {
     pub schema_version: u32,
     pub applied_migrations: Vec<u32>,
     pub integrity: IntegrityOutcome,
+    pub retained_backup_path: Option<PathBuf>,
     pub recovery: RecoveryOutcome,
 }
 
@@ -331,6 +425,78 @@ pub struct PortableSupplementalSections {
     pub shared_records: BTreeMap<String, Vec<u8>>,
     pub preferences: BTreeMap<String, Vec<u8>>,
     pub assets: BTreeMap<String, PortableAsset>,
+}
+
+/// Immutable caller-supplied solve request. Scenario-owned fields are derived
+/// from the exact authoritative document inside the start transaction.
+#[derive(Clone, Debug)]
+pub struct NewSolveRunV1 {
+    /// Stable identity assigned to this execution attempt.
+    pub run_id: SolveRunId,
+    /// Idempotency identity assigned to the semantic request.
+    pub request_id: RequestId,
+    /// Scenario to solve.
+    pub scenario_id: ScenarioId,
+    /// Exact scenario revision the caller intends to solve.
+    pub expected_revision: Revision,
+    /// Planning IR schema version.
+    pub planning_ir_schema_version: u32,
+    /// Domain compiler version.
+    pub compiler_version: String,
+    /// Application version.
+    pub application_version: String,
+    /// Selected backend identity.
+    pub backend_id: BackendId,
+    /// Selected backend version.
+    pub backend_version: String,
+    /// Backend adapter version.
+    pub adapter_version: String,
+    /// Isolated worker version.
+    pub worker_version: String,
+    /// Solver engine version.
+    pub solver_version: String,
+    /// Worker protocol major version.
+    pub protocol_major: u32,
+    /// Worker protocol minor version.
+    pub protocol_minor: u32,
+    /// Canonical planning model hash.
+    pub model_hash: String,
+    /// Canonical objective-policy hash.
+    pub objective_policy_hash: String,
+    /// Exact canonical solver options.
+    pub solve_options: SolveOptions,
+    /// Optional canonical temporary-condition-set hash.
+    pub temporary_condition_hash: Option<String>,
+    /// Parent-recorded execution start time.
+    pub started_at: Rfc3339Timestamp,
+}
+
+/// Result of atomically creating or reusing an idempotent solve request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartedSolveRunV1 {
+    /// Immutable typed input persisted for the run.
+    pub input: RunInputV1,
+    /// Original parent-recorded start time used for deadlines and manifests.
+    pub started_at: Rfc3339Timestamp,
+    /// Whether an existing request was reused.
+    pub reused: bool,
+}
+
+/// Exact immutable scenario snapshot and typed input for backend execution.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedSolveInputV1 {
+    /// Immutable typed input persisted for the run.
+    pub input: RunInputV1,
+    /// Exact scenario document referenced by the input snapshot.
+    pub document: ScenarioDocument,
+}
+
+/// Redacted, nonsecret candidate diagnostics retained for a quarantined run.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CandidateDiagnosticsV1 {
+    /// Stable diagnostic identities mapped to bounded safe values.
+    pub values: BTreeMap<String, SafeDiagnosticValue>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -512,6 +678,7 @@ pub struct StoreDiagnostics {
     pub synchronous: u32,
     pub busy_timeout_ms: u32,
     pub trusted_schema: bool,
+    pub sqlite_length_limit_bytes: i32,
     pub schema_version: u32,
     pub tables: Vec<String>,
     pub indexes: Vec<String>,
@@ -574,6 +741,11 @@ impl SqliteScenarioStore {
     /// Opens or creates a database and returns both the actor and startup
     /// recovery outcome.
     ///
+    /// Application wiring must pass only the fixed owner-private database from
+    /// `AppPaths`; this is authoritative application state, not an import
+    /// surface. Foreign database bytes must be decoded through the inert
+    /// portable import boundary instead of being opened here.
+    ///
     /// # Errors
     ///
     /// Returns an error if the actor thread cannot start or report its
@@ -585,6 +757,10 @@ impl SqliteScenarioStore {
     }
 
     /// Opens or creates a database with explicit actor and snapshot options.
+    ///
+    /// Application wiring must select only the trusted owner-private `AppPaths`
+    /// database. Foreign database files must enter through inert portable
+    /// import and are never accepted as an authoritative store.
     ///
     /// # Errors
     ///
@@ -611,6 +787,8 @@ impl SqliteScenarioStore {
         let failpoint = Arc::new(std::sync::Mutex::new(options.failpoint));
         #[cfg(debug_assertions)]
         let actor_failpoint = Arc::clone(&failpoint);
+        #[cfg(debug_assertions)]
+        let actor_v2_migration_begin_test_hook = options.v2_migration_begin_test_hook.clone();
 
         let actor_thread = thread::Builder::new()
             .name("eutheto-sqlite-store".to_owned())
@@ -622,6 +800,10 @@ impl SqliteScenarioStore {
                             verify_private_database_path(&path, &guard)?;
                             initialize_connection(
                                 &mut connection,
+                                &path,
+                                &guard.file,
+                                #[cfg(debug_assertions)]
+                                actor_v2_migration_begin_test_hook.as_ref(),
                                 #[cfg(debug_assertions)]
                                 &actor_failpoint,
                             )
@@ -969,6 +1151,117 @@ impl SqliteScenarioStore {
             .await
     }
 
+    /// Starts an immutable V2 solve run or reuses the run already bound to the
+    /// same request identity and canonical request hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unavailable actor, invalid request or persisted
+    /// input, request/run identity conflict, stale scenario revision, snapshot
+    /// mismatch, serialization bound violation, or database failure.
+    pub async fn start_solve_run(
+        &self,
+        request: NewSolveRunV1,
+    ) -> Result<StartedSolveRunV1, StoreError> {
+        let snapshot_policy = self.snapshot_policy;
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        self.call(move |connection| {
+            start_solve_run_transaction(
+                connection,
+                request,
+                snapshot_policy,
+                #[cfg(debug_assertions)]
+                &failpoint,
+            )
+        })
+        .await
+    }
+
+    /// Loads the exact immutable document snapshot and typed V2 input for a run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or run is unavailable, the persisted input
+    /// is invalid, the snapshot binding does not match, bounded decompression
+    /// fails, or the exact scenario document is invalid.
+    pub async fn load_solve_input(
+        &self,
+        run_id: SolveRunId,
+    ) -> Result<LoadedSolveInputV1, StoreError> {
+        self.call(move |connection| load_solve_input_row(connection, run_id))
+            .await
+    }
+
+    /// Atomically finalizes a running solve and persists its independently
+    /// accepted canonical result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or run is unavailable, the run is already
+    /// terminal, any accepted-result binding or bounded JSON is invalid, the
+    /// solve deadline has passed, or the atomic database commit fails.
+    pub async fn finalize_accepted_run(
+        &self,
+        accepted_result: AcceptedResult,
+        manifest: RunManifestV1,
+        evidence: BTreeMap<DomainEvidenceId, VerificationValue>,
+    ) -> Result<(), StoreError> {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        self.call(move |connection| {
+            finalize_accepted_run_transaction(
+                connection,
+                &accepted_result,
+                &manifest,
+                &evidence,
+                #[cfg(debug_assertions)]
+                &failpoint,
+            )
+        })
+        .await
+    }
+
+    /// Atomically quarantines a running solve after an independent
+    /// verification alarm. No solution row is created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or run is unavailable, the run is already
+    /// terminal, the manifest is not a verification alarm, diagnostics are
+    /// invalid or unsafe, or the atomic database commit fails.
+    pub async fn finalize_quarantined_run(
+        &self,
+        manifest: RunManifestV1,
+        candidate_diagnostics: CandidateDiagnosticsV1,
+    ) -> Result<(), StoreError> {
+        #[cfg(debug_assertions)]
+        let failpoint = Arc::clone(&self.failpoint);
+        self.call(move |connection| {
+            finalize_quarantined_run_transaction(
+                connection,
+                &manifest,
+                &candidate_diagnostics,
+                #[cfg(debug_assertions)]
+                &failpoint,
+            )
+        })
+        .await
+    }
+
+    /// Atomically finalizes a running solve with a non-result or interrupted
+    /// terminal manifest. No solution row is created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor or run is unavailable, the run is already
+    /// terminal, the manifest is invalid or has an unsupported outcome, or the
+    /// atomic database commit fails.
+    pub async fn finalize_terminal_run(&self, manifest: RunManifestV1) -> Result<(), StoreError> {
+        self.call(move |connection| finalize_terminal_run_transaction(connection, &manifest))
+            .await
+    }
+
     /// Records that a project was opened and returns its authoritative view.
     ///
     /// # Errors
@@ -1127,6 +1420,7 @@ impl SqliteScenarioStore {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let project = load_project(&transaction, scenario_id)?;
+            retain_current_project_revision_if_required(&transaction, &project)?;
             let actual_revision = project.summary.revision.value();
             let document = project.document;
             let portable = project.portable;
@@ -1284,6 +1578,7 @@ impl SqliteScenarioStore {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let project = load_project(&transaction, scenario_id)?;
+            retain_current_project_revision_if_required(&transaction, &project)?;
             let actual_revision = project.summary.revision.value();
             let document = project.document;
             let portable = project.portable;
@@ -1495,6 +1790,8 @@ impl SqliteScenarioStore {
                 connection.pragma_query_value(None, "trusted_schema", |row| row.get(0))?;
             let schema_version =
                 connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            let sqlite_length_limit_bytes =
+                connection.limit(Limit::SQLITE_LIMIT_LENGTH)?;
             let mut statement = connection.prepare(
                 "SELECT type, name FROM sqlite_schema WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%' ORDER BY type, name",
             )?;
@@ -1517,6 +1814,7 @@ impl SqliteScenarioStore {
                 synchronous,
                 busy_timeout_ms,
                 trusted_schema,
+                sqlite_length_limit_bytes,
                 schema_version,
                 tables,
                 indexes,
@@ -1569,6 +1867,693 @@ impl SqliteScenarioStore {
         *guard = Some(failpoint_value);
         Ok(())
     }
+}
+
+fn solve_request_hash(
+    request: &NewSolveRunV1,
+    pack_id: &PackId,
+    pack_schema_version: u32,
+    scenario_timezone: &IanaTimeZone,
+) -> Result<String, StoreError> {
+    RunRequestSemanticsV1 {
+        schema_version: RUN_REQUEST_SEMANTICS_SCHEMA_VERSION,
+        scenario_id: request.scenario_id,
+        scenario_revision: request.expected_revision.value(),
+        pack_id: pack_id.clone(),
+        pack_schema_version,
+        planning_ir_schema_version: request.planning_ir_schema_version,
+        compiler_version: request.compiler_version.clone(),
+        application_version: request.application_version.clone(),
+        backend_id: request.backend_id.clone(),
+        backend_version: request.backend_version.clone(),
+        adapter_version: request.adapter_version.clone(),
+        worker_version: request.worker_version.clone(),
+        solver_version: request.solver_version.clone(),
+        protocol_major: request.protocol_major,
+        protocol_minor: request.protocol_minor,
+        model_hash: request.model_hash.clone(),
+        objective_policy_hash: request.objective_policy_hash.clone(),
+        solve_options: request.solve_options.clone(),
+        scenario_timezone: scenario_timezone.clone(),
+        temporary_condition_hash: request.temporary_condition_hash.clone(),
+    }
+    .canonical_hash()
+    .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))
+}
+
+// Request idempotency, exact snapshot selection, and run insertion deliberately
+// remain one cohesive transaction so no backend can observe a partial start.
+#[allow(clippy::too_many_lines)]
+fn start_solve_run_transaction(
+    connection: &mut Connection,
+    request: NewSolveRunV1,
+    snapshot_policy: SnapshotPolicy,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+) -> Result<StartedSolveRunV1, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing: Option<(String, String, Option<String>)> = transaction
+        .query_row(
+            "SELECT id, input_hash, run_input_json FROM solve_runs WHERE request_id = ?1",
+            [request.request_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((run_id_text, stored_hash, input_json)) = existing {
+        if input_json.is_none() {
+            return Err(StoreError::InvalidPersistedRun(
+                "idempotent request has no V2 run input".to_owned(),
+            ));
+        }
+        let run_id: SolveRunId = run_id_text
+            .parse()
+            .map_err(|error| StoreError::InvalidPersistedRun(format!("invalid run ID: {error}")))?;
+        let (input, _, _, started_at) = load_run_input_record(&transaction, run_id)?;
+        let request_hash = solve_request_hash(
+            &request,
+            &input.pack_id,
+            input.pack_schema_version,
+            &input.scenario_timezone,
+        )?;
+        if stored_hash != request_hash {
+            return Err(StoreError::SolveRequestIdConflict {
+                request_id: request.request_id,
+            });
+        }
+        if input.request_id != request.request_id || input.request_hash != request_hash {
+            return Err(StoreError::InvalidPersistedRun(
+                "idempotent request columns disagree with the typed input".to_owned(),
+            ));
+        }
+        transaction.commit()?;
+        return Ok(StartedSolveRunV1 {
+            input,
+            started_at,
+            reused: true,
+        });
+    }
+    let project = load_project(&transaction, request.scenario_id)?;
+    let request_hash = solve_request_hash(
+        &request,
+        &project.document.domain_pack.id,
+        project.document.domain_pack.schema_version,
+        &project.document.settings.time_zone,
+    )?;
+    ensure_revision(request.expected_revision, project.summary.revision.value())?;
+    let run_collision: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM solve_runs WHERE id = ?1)",
+        [request.run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if run_collision {
+        return Err(StoreError::SolveRunCollision(request.run_id));
+    }
+    let document_json = serialize_document(&project.document)?;
+    let document_hash = blake3::hash(document_json.as_bytes()).to_hex().to_string();
+    let (snapshot_id, snapshot_created_at) = ensure_solve_snapshot(
+        &transaction,
+        request.scenario_id,
+        request.expected_revision,
+        document_json.as_bytes(),
+        request.started_at,
+        snapshot_policy,
+    )?;
+    let input = RunInputV1::new(
+        request.run_id,
+        request.request_id,
+        request.scenario_id,
+        request.expected_revision.value(),
+        snapshot_id,
+        document_hash,
+        snapshot_created_at,
+        project.document.domain_pack.id.clone(),
+        project.document.domain_pack.schema_version,
+        request.planning_ir_schema_version,
+        request.compiler_version,
+        request.application_version,
+        request.backend_id,
+        request.backend_version,
+        request.adapter_version,
+        request.worker_version,
+        request.solver_version,
+        request.protocol_major,
+        request.protocol_minor,
+        request.model_hash,
+        request.objective_policy_hash,
+        request.solve_options.clone(),
+        project.document.settings.time_zone.clone(),
+        request.temporary_condition_hash,
+    )
+    .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    if input.request_hash != request_hash {
+        return Err(StoreError::InvalidPersistedRun(
+            "constructed run input disagrees with canonical request semantics".to_owned(),
+        ));
+    }
+    let input_json = serialize_checked_json(&input, "solve-run input")
+        .map_err(StoreError::InvalidPersistedRun)?;
+    let options_json = serialize_checked_json(&request.solve_options, "solve options")
+        .map_err(StoreError::InvalidPersistedRun)?;
+    transaction.execute(
+        "INSERT INTO solve_runs (id, request_id, scenario_id, scenario_revision, input_hash, backend_id, backend_version, protocol_version, status, options_json, started_at, run_input_json, run_manifest_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running', ?9, ?10, ?11, NULL)",
+        params![
+            request.run_id.to_string(),
+            request.request_id.to_string(),
+            request.scenario_id.to_string(),
+            u64_to_i64(request.expected_revision.value())?,
+            request_hash,
+            input.backend_id.to_string(),
+            input.backend_version,
+            u32_to_i64(input.protocol_major),
+            options_json,
+            request.started_at.to_string(),
+            input_json,
+        ],
+    )?;
+    validate_global_identity_ownership(&transaction)?;
+    #[cfg(debug_assertions)]
+    consume_failpoint(failpoint, Failpoint::AfterSolveRunInsert)?;
+    transaction.commit()?;
+    Ok(StartedSolveRunV1 {
+        input,
+        started_at: request.started_at,
+        reused: false,
+    })
+}
+
+fn ensure_solve_snapshot(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    document_bytes: &[u8],
+    created_at: Rfc3339Timestamp,
+    snapshot_policy: SnapshotPolicy,
+) -> Result<(ScenarioSnapshotId, Rfc3339Timestamp), StoreError> {
+    let existing: Option<(String, Vec<u8>, String)> = transaction
+        .query_row(
+            "SELECT id, document_json_zstd, created_at FROM scenario_snapshots WHERE scenario_id = ?1 AND revision = ?2",
+            params![scenario_id.to_string(), u64_to_i64(revision.value())?],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((snapshot_id, compressed, stored_created_at)) = existing {
+        let snapshot_id: ScenarioSnapshotId = snapshot_id.parse().map_err(|error| {
+            StoreError::InvalidPersistedRun(format!("invalid snapshot ID: {error}"))
+        })?;
+        if bounded_decompress_snapshot(&compressed)? != document_bytes {
+            return Err(StoreError::SnapshotMismatch(snapshot_id));
+        }
+        let snapshot_created_at = parse_timestamp(&stored_created_at, "snapshot created_at")?;
+        if snapshot_created_at > created_at {
+            return Err(StoreError::InvalidPersistedRun(
+                "solve start precedes its immutable snapshot".to_owned(),
+            ));
+        }
+        return Ok((snapshot_id, snapshot_created_at));
+    }
+    if u64::try_from(document_bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > snapshot_policy.max_document_bytes
+    {
+        return Err(StoreError::SnapshotTooLarge);
+    }
+    let compressed = zstd::stream::encode_all(document_bytes, snapshot_policy.compression_level)
+        .map_err(StoreError::Compression)?;
+    let snapshot_id = ScenarioSnapshotId::from_uuid(Uuid::now_v7());
+    transaction.execute(
+        "INSERT INTO scenario_snapshots (id, scenario_id, revision, document_json_zstd, created_at, reason) VALUES (?1, ?2, ?3, ?4, ?5, 'solve-input')",
+        params![
+            snapshot_id.to_string(),
+            scenario_id.to_string(),
+            u64_to_i64(revision.value())?,
+            compressed,
+            created_at.to_string(),
+        ],
+    )?;
+    Ok((snapshot_id, created_at))
+}
+
+fn bounded_decompress_snapshot(compressed: &[u8]) -> Result<Vec<u8>, StoreError> {
+    let decoder = zstd::stream::read::Decoder::new(compressed).map_err(StoreError::Compression)?;
+    let mut bytes = Vec::new();
+    decoder
+        .take(MAX_SCENARIO_DOCUMENT_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(StoreError::Compression)?;
+    if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > MAX_SCENARIO_DOCUMENT_BYTES
+    {
+        return Err(StoreError::SnapshotTooLarge);
+    }
+    Ok(bytes)
+}
+
+fn parse_run_input(bytes: &[u8]) -> Result<RunInputV1, StoreError> {
+    if u64::try_from(bytes.len()).map_err(|_| StoreError::NumericRange)?
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(StoreError::InvalidPersistedRun(
+            "run input exceeds the JSON byte limit".to_owned(),
+        ));
+    }
+    RunInputV1::from_json(bytes).map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))
+}
+
+struct PersistedRunRow {
+    run_id: String,
+    request_id: Option<String>,
+    scenario_id: String,
+    scenario_revision: i64,
+    request_hash: String,
+    status: String,
+    manifest_json: Option<String>,
+    started_at: String,
+    input_json: Option<String>,
+}
+
+fn load_run_input_record(
+    connection: &Connection,
+    run_id: SolveRunId,
+) -> Result<(RunInputV1, String, Option<String>, Rfc3339Timestamp), StoreError> {
+    let row: Option<PersistedRunRow> = connection
+        .query_row(
+            "SELECT id, request_id, scenario_id, scenario_revision, input_hash, status, run_manifest_json, started_at, run_input_json FROM solve_runs WHERE id = ?1",
+            [run_id.to_string()],
+            |row| {
+                Ok(PersistedRunRow {
+                    run_id: row.get(0)?,
+                    request_id: row.get(1)?,
+                    scenario_id: row.get(2)?,
+                    scenario_revision: row.get(3)?,
+                    request_hash: row.get(4)?,
+                    status: row.get(5)?,
+                    manifest_json: row.get(6)?,
+                    started_at: row.get(7)?,
+                    input_json: row.get(8)?,
+                })
+            },
+        )
+        .optional()?;
+    let Some(PersistedRunRow {
+        run_id: stored_run_id,
+        request_id,
+        scenario_id,
+        scenario_revision,
+        request_hash,
+        status,
+        manifest_json,
+        started_at,
+        input_json,
+    }) = row
+    else {
+        return Err(StoreError::SolveRunNotFound(run_id));
+    };
+    let request_id = request_id.ok_or_else(|| {
+        StoreError::InvalidPersistedRun("V2 solve run has no request ID".to_owned())
+    })?;
+    let input_json = input_json.ok_or_else(|| {
+        StoreError::InvalidPersistedRun("V2 solve run has no run input".to_owned())
+    })?;
+    let input = parse_run_input(input_json.as_bytes())?;
+    let stored_request_id: RequestId = request_id
+        .parse()
+        .map_err(|error| StoreError::InvalidPersistedRun(format!("invalid request ID: {error}")))?;
+    let stored_scenario_id: ScenarioId = scenario_id.parse().map_err(|error| {
+        StoreError::InvalidPersistedRun(format!("invalid scenario ID: {error}"))
+    })?;
+    let started_at = parse_timestamp(&started_at, "solve-run started_at")?;
+    if stored_run_id != run_id.to_string()
+        || input.run_id != run_id
+        || input.request_id != stored_request_id
+        || input.scenario_id != stored_scenario_id
+        || input.scenario_revision != i64_to_u64(scenario_revision)?
+        || input.request_hash != request_hash
+        || input.snapshot_created_at > started_at
+    {
+        return Err(StoreError::InvalidPersistedRun(
+            "run columns disagree with the typed input".to_owned(),
+        ));
+    }
+    Ok((input, status, manifest_json, started_at))
+}
+
+fn load_solve_input_row(
+    connection: &Connection,
+    run_id: SolveRunId,
+) -> Result<LoadedSolveInputV1, StoreError> {
+    let (input, _, _, _) = load_run_input_record(connection, run_id)?;
+    let row: Option<(String, i64, Vec<u8>, String)> = connection
+        .query_row(
+            "SELECT scenario_id, revision, document_json_zstd, created_at FROM scenario_snapshots WHERE id = ?1",
+            [input.snapshot_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((scenario_id, revision, compressed, snapshot_created_at)) = row else {
+        return Err(StoreError::SnapshotMismatch(input.snapshot_id));
+    };
+    let document_bytes = bounded_decompress_snapshot(&compressed)?;
+    let document_value: Value = serde_json::from_slice(&document_bytes)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    validate_stored_portable_json(&document_value, "solve snapshot document")
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    let document: ScenarioDocument = serde_json::from_value(document_value)
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    let snapshot_created_at = parse_timestamp(&snapshot_created_at, "snapshot created_at")?;
+    if scenario_id != input.scenario_id.to_string()
+        || i64_to_u64(revision)? != input.scenario_revision
+        || document.scenario_id != input.scenario_id
+        || blake3::hash(&document_bytes).to_hex().to_string() != input.snapshot_document_hash
+        || document.domain_pack.id != input.pack_id
+        || document.domain_pack.schema_version != input.pack_schema_version
+        || document.settings.time_zone != input.scenario_timezone
+        || snapshot_created_at != input.snapshot_created_at
+        || serde_json::to_vec(&document)? != document_bytes
+    {
+        return Err(StoreError::SnapshotMismatch(input.snapshot_id));
+    }
+    Ok(LoadedSolveInputV1 { input, document })
+}
+
+fn serialize_checked_json<T: Serialize>(value: &T, context: &str) -> Result<String, String> {
+    let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    {
+        return Err(format!("{context} exceeds the JSON byte limit"));
+    }
+    let parsed: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    validate_nonsecret_portable_json(
+        &parsed,
+        &PortableJsonLimits {
+            max_depth: eutheto_export::PORTABLE_LIMITS.max_json_depth,
+            max_string_bytes: eutheto_export::PORTABLE_LIMITS.max_string_bytes,
+            max_collection_items: eutheto_export::PORTABLE_LIMITS.max_collection_items,
+        },
+    )
+    .map_err(|error| format!("{context} violates the nonsecret policy: {error}"))?;
+    String::from_utf8(bytes).map_err(|error| error.to_string())
+}
+
+fn terminal_status(outcome: &RunTerminalOutcomeV1) -> Result<&'static str, StoreError> {
+    match outcome {
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Optimal,
+            ..
+        } => Ok("optimal"),
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            ..
+        } => Ok("feasible"),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::Infeasible,
+        } => Ok("infeasible"),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::Unbounded,
+        } => Ok("unbounded"),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::NoSolutionWithinLimit,
+        } => Ok("no_solution_within_limit"),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::Cancelled,
+        } => Ok("cancelled"),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::InvalidModel,
+        } => Ok("invalid_model"),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::BackendUnavailable,
+        } => Ok("backend_unavailable"),
+        RunTerminalOutcomeV1::NoResult {
+            status: SolveStatus::BackendFailed,
+        } => Ok("backend_failed"),
+        RunTerminalOutcomeV1::VerificationAlarm { .. } => Ok("quarantined"),
+        RunTerminalOutcomeV1::Interrupted => Ok("interrupted"),
+        RunTerminalOutcomeV1::Accepted { .. } | RunTerminalOutcomeV1::NoResult { .. } => {
+            Err(StoreError::InvalidPersistedRun(
+                "terminal outcome contains an invalid status".to_owned(),
+            ))
+        }
+    }
+}
+
+fn solve_deadline(
+    input: &RunInputV1,
+    started_at: Rfc3339Timestamp,
+) -> Result<jiff::Timestamp, StoreError> {
+    started_at
+        .as_timestamp()
+        .checked_add(std::time::Duration::from_millis(
+            input.solve_options.time_limit_milliseconds.value(),
+        ))
+        .map_err(|error| {
+            StoreError::InvalidPersistedRun(format!("solve deadline is invalid: {error}"))
+        })
+}
+
+fn solve_recovery_deadline(
+    input: &RunInputV1,
+    started_at: Rfc3339Timestamp,
+) -> Result<jiff::Timestamp, StoreError> {
+    solve_deadline(input, started_at)?
+        .checked_add(std::time::Duration::from_millis(
+            SOLVE_TERMINAL_PERSISTENCE_GRACE_MILLISECONDS,
+        ))
+        .map_err(|error| {
+            StoreError::InvalidPersistedRun(format!("solve recovery deadline is invalid: {error}"))
+        })
+}
+
+fn validate_terminal_manifest(
+    connection: &Connection,
+    manifest: &RunManifestV1,
+) -> Result<RunInputV1, StoreError> {
+    manifest
+        .validate()
+        .map_err(|error| StoreError::InvalidPersistedRun(error.to_string()))?;
+    let (input, status, stored_manifest, started_at) =
+        load_run_input_record(connection, manifest.run_id)?;
+    if status != "running" || stored_manifest.is_some() {
+        return Err(StoreError::SolveRunTerminalConflict(manifest.run_id));
+    }
+    if input.checksum != manifest.run_input_checksum || started_at != manifest.started_at {
+        return Err(StoreError::InvalidPersistedRun(
+            "terminal manifest does not bind the stored run input".to_owned(),
+        ));
+    }
+    Ok(input)
+}
+
+fn finalize_accepted_run_transaction(
+    connection: &mut Connection,
+    accepted_result: &AcceptedResult,
+    manifest: &RunManifestV1,
+    evidence: &BTreeMap<DomainEvidenceId, VerificationValue>,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+) -> Result<(), StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let input = validate_terminal_manifest(&transaction, manifest)?;
+    if !matches!(&manifest.outcome, RunTerminalOutcomeV1::Accepted { .. }) {
+        return Err(StoreError::InvalidPersistedResult(
+            "accepted finalization requires an accepted manifest".to_owned(),
+        ));
+    }
+    let deadline = solve_deadline(&input, manifest.started_at)?;
+    let elapsed = manifest.elapsed_milliseconds.ok_or_else(|| {
+        StoreError::InvalidPersistedResult(
+            "accepted finalization requires a measured elapsed duration".to_owned(),
+        )
+    })?;
+    if manifest.finished_at.as_timestamp() > deadline
+        || elapsed > input.solve_options.time_limit_milliseconds
+    {
+        return Err(StoreError::InvalidPersistedResult(
+            "accepted finalization exceeds the immutable solve deadline".to_owned(),
+        ));
+    }
+    if jiff::Timestamp::now() >= solve_recovery_deadline(&input, manifest.started_at)? {
+        return Err(StoreError::InvalidPersistedResult(
+            "accepted finalization is past the terminal persistence cutoff".to_owned(),
+        ));
+    }
+    let wrapper = PortableAcceptedResultV2::new(
+        input,
+        manifest.clone(),
+        accepted_result.clone(),
+        evidence.clone(),
+    )
+    .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+    let manifest_json = serialize_checked_json(manifest, "run manifest")
+        .map_err(StoreError::InvalidPersistedRun)?;
+    let solution_json = serialize_checked_json(&accepted_result.solution, "normalized solution")
+        .map_err(StoreError::InvalidPersistedResult)?;
+    let report_json = serialize_checked_json(&accepted_result.verification, "verification report")
+        .map_err(StoreError::InvalidPersistedResult)?;
+    let score_json = serialize_checked_json(&accepted_result.verification.score, "score")
+        .map_err(StoreError::InvalidPersistedResult)?;
+    let evidence_json = serialize_checked_json(evidence, "result evidence")
+        .map_err(StoreError::InvalidPersistedResult)?;
+    wrapper
+        .validate()
+        .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+    transaction.execute(
+        "INSERT INTO solutions (id, solve_run_id, scenario_id, scenario_revision, status, accepted, normalized_solution_json, score_json, verification_report_json, evidence_json, created_at) VALUES (?1, ?2, ?3, ?4, 'verified', 1, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            accepted_result.solution.solution_id.to_string(),
+            manifest.run_id.to_string(),
+            accepted_result.solution.scenario_id.to_string(),
+            u64_to_i64(accepted_result.solution.scenario_revision)?,
+            solution_json,
+            score_json,
+            report_json,
+            evidence_json,
+            manifest.finished_at.to_string(),
+        ],
+    )?;
+    #[cfg(debug_assertions)]
+    consume_failpoint(failpoint, Failpoint::AfterAcceptedSolutionInsert)?;
+    let changed = transaction.execute(
+        "UPDATE solve_runs SET status = ?2, finished_at = ?3, elapsed_ms = ?4, run_manifest_json = ?5, backend_diagnostics_json = NULL, error_json = NULL WHERE id = ?1 AND status = 'running' AND run_manifest_json IS NULL",
+        params![
+            manifest.run_id.to_string(),
+            terminal_status(&manifest.outcome)?,
+            manifest.finished_at.to_string(),
+            manifest
+                .elapsed_milliseconds
+                .map(|elapsed| u64_to_i64(elapsed.value()))
+                .transpose()?,
+            manifest_json,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(StoreError::SolveRunTerminalConflict(manifest.run_id));
+    }
+    validate_global_identity_ownership(&transaction)?;
+    increment_library_revision(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn contains_unsafe_diagnostic_text(text: &str) -> bool {
+    text.chars()
+        .any(|character| matches!(character, '\n' | '\r' | '/' | '\\'))
+        || text.contains("://")
+        || text.split_whitespace().any(|part| {
+            part.contains('.')
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        })
+}
+
+fn validate_candidate_diagnostics(
+    diagnostics: &CandidateDiagnosticsV1,
+) -> Result<String, StoreError> {
+    if diagnostics.values.len() > eutheto_domain_ir::MAX_PORTABLE_RESULT_EVIDENCE_RECORDS {
+        return Err(StoreError::InvalidPersistedDiagnostic(
+            "candidate diagnostics exceed the record limit".to_owned(),
+        ));
+    }
+    for (key, value) in &diagnostics.values {
+        if key.is_empty()
+            || key.len() > eutheto_domain_ir::MAX_RUN_DIAGNOSTIC_CODE_BYTES
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            return Err(StoreError::InvalidPersistedDiagnostic(
+                "candidate diagnostic identity is invalid".to_owned(),
+            ));
+        }
+        if let SafeDiagnosticValue::Text(text) = value
+            && contains_unsafe_diagnostic_text(text)
+        {
+            return Err(StoreError::InvalidPersistedDiagnostic(
+                "candidate diagnostics contain log, domain, or path-like text".to_owned(),
+            ));
+        }
+    }
+    serialize_checked_json(diagnostics, "candidate diagnostics")
+        .map_err(StoreError::InvalidPersistedDiagnostic)
+}
+
+fn finalize_quarantined_run_transaction(
+    connection: &mut Connection,
+    manifest: &RunManifestV1,
+    diagnostics: &CandidateDiagnosticsV1,
+    #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
+) -> Result<(), StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    validate_terminal_manifest(&transaction, manifest)?;
+    let RunTerminalOutcomeV1::VerificationAlarm { diagnostic_code } = &manifest.outcome else {
+        return Err(StoreError::InvalidPersistedDiagnostic(
+            "quarantine requires a verification-alarm manifest".to_owned(),
+        ));
+    };
+    let diagnostics_json = validate_candidate_diagnostics(diagnostics)?;
+    let error_json = serialize_checked_json(
+        &serde_json::json!({"code": diagnostic_code}),
+        "verification alarm",
+    )
+    .map_err(StoreError::InvalidPersistedDiagnostic)?;
+    let manifest_json = serialize_checked_json(manifest, "run manifest")
+        .map_err(StoreError::InvalidPersistedRun)?;
+    let changed = transaction.execute(
+        "UPDATE solve_runs SET status = 'quarantined', finished_at = ?2, elapsed_ms = ?3, run_manifest_json = ?4, backend_diagnostics_json = ?5, error_json = ?6 WHERE id = ?1 AND status = 'running' AND run_manifest_json IS NULL",
+        params![
+            manifest.run_id.to_string(),
+            manifest.finished_at.to_string(),
+            manifest
+                .elapsed_milliseconds
+                .map(|elapsed| u64_to_i64(elapsed.value()))
+                .transpose()?,
+            manifest_json,
+            diagnostics_json,
+            error_json,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(StoreError::SolveRunTerminalConflict(manifest.run_id));
+    }
+    synchronize_retained_scenario_revisions(&transaction, Vec::new())?;
+    #[cfg(debug_assertions)]
+    consume_failpoint(failpoint, Failpoint::AfterQuarantineWrite)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn finalize_terminal_run_transaction(
+    connection: &mut Connection,
+    manifest: &RunManifestV1,
+) -> Result<(), StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    validate_terminal_manifest(&transaction, manifest)?;
+    if !matches!(
+        &manifest.outcome,
+        RunTerminalOutcomeV1::NoResult { .. } | RunTerminalOutcomeV1::Interrupted
+    ) {
+        return Err(StoreError::InvalidPersistedRun(
+            "generic finalization permits only no-result or interrupted outcomes".to_owned(),
+        ));
+    }
+    let manifest_json = serialize_checked_json(manifest, "run manifest")
+        .map_err(StoreError::InvalidPersistedRun)?;
+    let changed = transaction.execute(
+        "UPDATE solve_runs SET status = ?2, finished_at = ?3, elapsed_ms = ?4, run_manifest_json = ?5, backend_diagnostics_json = NULL, error_json = NULL WHERE id = ?1 AND status = 'running' AND run_manifest_json IS NULL",
+        params![
+            manifest.run_id.to_string(),
+            terminal_status(&manifest.outcome)?,
+            manifest.finished_at.to_string(),
+            manifest
+                .elapsed_milliseconds
+                .map(|elapsed| u64_to_i64(elapsed.value()))
+                .transpose()?,
+            manifest_json,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(StoreError::SolveRunTerminalConflict(manifest.run_id));
+    }
+    synchronize_retained_scenario_revisions(&transaction, Vec::new())?;
+    transaction.commit()?;
+    Ok(())
 }
 
 struct StagedApplyParts {
@@ -2179,20 +3164,28 @@ fn open_connection(path: &Path) -> Result<Connection, StoreError> {
             | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, SQLITE_LENGTH_LIMIT_BYTES)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "synchronous", "NORMAL")?;
-    connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.pragma_update(None, "trusted_schema", "OFF")?;
     Ok(connection)
 }
 
 fn initialize_connection(
     connection: &mut Connection,
+    database_path: &Path,
+    authoritative_file: &File,
+    #[cfg(debug_assertions)] v2_migration_begin_test_hook: Option<&V2MigrationBeginTestHook>,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
 ) -> Result<InitializationOutcome, StoreError> {
-    let applied_migrations = initialize_schema(
+    let (applied_migrations, retained_backup_path) = initialize_schema(
         connection,
+        database_path,
+        authoritative_file,
+        #[cfg(debug_assertions)]
+        v2_migration_begin_test_hook,
         #[cfg(debug_assertions)]
         failpoint,
     )?;
@@ -2222,22 +3215,12 @@ fn initialize_connection(
     if quick_check != "ok" {
         return Err(StoreError::Integrity(quick_check));
     }
-    let interrupted_at = jiff::Timestamp::now().to_string();
-    let mut statement = connection.prepare(
-        "UPDATE solve_runs SET status = 'interrupted', finished_at = COALESCE(finished_at, ?1), error_json = COALESCE(error_json, '{\"code\":\"interrupted\"}') WHERE status = 'running' RETURNING id",
-    )?;
-    let rows = statement.query_map([interrupted_at], |row| row.get::<_, String>(0))?;
-    let mut interrupted_solve_run_ids = Vec::new();
-    for row in rows {
-        let id = row?;
-        interrupted_solve_run_ids.push(id.parse().map_err(|error| {
-            StoreError::Integrity(format!("invalid stored solve-run id: {error}"))
-        })?);
-    }
+    let interrupted_solve_run_ids = recover_running_v2_runs(connection)?;
     Ok(InitializationOutcome {
         schema_version: CURRENT_SCHEMA_VERSION,
         applied_migrations,
         integrity: IntegrityOutcome::Ok,
+        retained_backup_path,
         recovery: RecoveryOutcome {
             interrupted_solve_run_ids,
         },
@@ -2319,21 +3302,39 @@ fn initialize_scenario_identity_owners(connection: &mut Connection) -> Result<()
 
 fn initialize_schema(
     connection: &mut Connection,
+    database_path: &Path,
+    authoritative_file: &File,
+    #[cfg(debug_assertions)] v2_migration_begin_test_hook: Option<&V2MigrationBeginTestHook>,
     #[cfg(debug_assertions)] failpoint: &Arc<std::sync::Mutex<Option<Failpoint>>>,
-) -> Result<Vec<u32>, StoreError> {
-    let found_version: u32 =
+) -> Result<(Vec<u32>, Option<PathBuf>), StoreError> {
+    let initial_version: u32 =
         connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if found_version > CURRENT_SCHEMA_VERSION {
+    if initial_version > CURRENT_SCHEMA_VERSION {
         return Err(StoreError::NewerSchema {
-            found: found_version,
+            found: initial_version,
             supported: CURRENT_SCHEMA_VERSION,
         });
     }
-
-    let checksum = blake3::hash(INITIAL_MIGRATION.as_bytes())
-        .to_hex()
-        .to_string();
-    if found_version == 0 {
+    let checksums = [
+        blake3::hash(INITIAL_MIGRATION.as_bytes())
+            .to_hex()
+            .to_string(),
+        blake3::hash(INDEPENDENT_VERIFICATION_MIGRATION.as_bytes())
+            .to_hex()
+            .to_string(),
+    ];
+    let mut applied = Vec::new();
+    if initial_version == 0 {
+        let has_registry: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_registry {
+            return Err(StoreError::Integrity(
+                "database migration registry disagrees with user_version".to_owned(),
+            ));
+        }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, checksum TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;",
@@ -2342,14 +3343,50 @@ fn initialize_schema(
         #[cfg(debug_assertions)]
         consume_failpoint(failpoint, Failpoint::AfterMigrationSql)?;
         transaction.execute(
-            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (1, 'V1_initial_schema.sql', ?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-            [checksum],
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (1, ?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![V1_MIGRATION_NAME, checksums[0]],
         )?;
         transaction.pragma_update(None, "user_version", 1)?;
         transaction.commit()?;
-        return Ok(vec![1]);
+        applied.push(1);
+    } else {
+        verify_migration_registry(connection, initial_version, &checksums)?;
     }
 
+    let current_version: u32 =
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let mut retained_backup_path = None;
+    if current_version == 1 {
+        #[cfg(debug_assertions)]
+        if let Some(hook) = v2_migration_begin_test_hook {
+            hook.actor_wait_before_begin();
+        }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if initial_version == 1 {
+            let source = open_validated_read_only_source(database_path, authoritative_file)?;
+            retained_backup_path =
+                Some(ensure_pre_v2_backup(&source, database_path, &checksums[0])?);
+        }
+        transaction.execute_batch(INDEPENDENT_VERIFICATION_MIGRATION)?;
+        #[cfg(debug_assertions)]
+        consume_failpoint(failpoint, Failpoint::AfterV2MigrationSql)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (2, ?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![V2_MIGRATION_NAME, checksums[1]],
+        )?;
+        transaction.pragma_update(None, "user_version", 2)?;
+        transaction.commit()?;
+        applied.push(2);
+    }
+    verify_migration_registry(connection, CURRENT_SCHEMA_VERSION, &checksums)?;
+    Ok((applied, retained_backup_path))
+}
+
+fn verify_migration_registry(
+    connection: &Connection,
+    pragma_version: u32,
+    checksums: &[String; 2],
+) -> Result<(), StoreError> {
     let has_registry: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations')",
         [],
@@ -2360,29 +3397,318 @@ fn initialize_schema(
             "database schema migration registry is missing".to_owned(),
         ));
     }
-    let registry_version: Option<u32> =
-        connection.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
-            row.get(0)
-        })?;
-    let registry_version = registry_version.unwrap_or(0);
-    if registry_version > CURRENT_SCHEMA_VERSION {
+    let mut statement = connection
+        .prepare("SELECT version, name, checksum FROM schema_migrations ORDER BY version")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some((found, _, _)) = rows
+        .iter()
+        .find(|(version, _, _)| *version > CURRENT_SCHEMA_VERSION)
+    {
         return Err(StoreError::NewerSchema {
-            found: registry_version,
+            found: *found,
             supported: CURRENT_SCHEMA_VERSION,
         });
     }
-    let stored_checksum = connection
-        .query_row(
-            "SELECT checksum FROM schema_migrations WHERE version = 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .ok_or_else(|| StoreError::Integrity("initial database migration is missing".to_owned()))?;
-    if stored_checksum != checksum {
-        return Err(StoreError::MigrationChanged { version: 1 });
+    if rows.len() != usize::try_from(pragma_version).map_err(|_| StoreError::NumericRange)?
+        || rows
+            .last()
+            .map(|(version, _, _)| *version)
+            .unwrap_or_default()
+            != pragma_version
+    {
+        return Err(StoreError::Integrity(
+            "database migration registry disagrees with user_version".to_owned(),
+        ));
     }
-    Ok(Vec::new())
+    for (index, (version, name, checksum)) in rows.iter().enumerate() {
+        let expected_version = u32::try_from(index + 1).map_err(|_| StoreError::NumericRange)?;
+        if *version != expected_version {
+            return Err(StoreError::Integrity(
+                "database migration registry is not contiguous".to_owned(),
+            ));
+        }
+        let expected_name = if *version == 1 {
+            V1_MIGRATION_NAME
+        } else {
+            V2_MIGRATION_NAME
+        };
+        if name != expected_name {
+            return Err(StoreError::Integrity(
+                "database migration registry name is invalid".to_owned(),
+            ));
+        }
+        if checksum != &checksums[index] {
+            return Err(StoreError::MigrationChanged { version: *version });
+        }
+    }
+    Ok(())
+}
+fn pre_v2_backup_path(database_path: &Path) -> PathBuf {
+    let mut backup_path = database_path.as_os_str().to_owned();
+    backup_path.push(PRE_V2_BACKUP_SUFFIX);
+    PathBuf::from(backup_path)
+}
+
+fn open_validated_read_only_source(
+    database_path: &Path,
+    authoritative_file: &File,
+) -> Result<Connection, StoreError> {
+    ensure_same_file(authoritative_file, database_path)?;
+    let source = Connection::open_with_flags(
+        database_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    source.set_limit(Limit::SQLITE_LIMIT_LENGTH, SQLITE_LENGTH_LIMIT_BYTES)?;
+    source.pragma_update(None, "trusted_schema", "OFF")?;
+    ensure_same_file(authoritative_file, database_path)?;
+    Ok(source)
+}
+
+fn ensure_pre_v2_backup(
+    connection: &Connection,
+    database_path: &Path,
+    v1_checksum: &str,
+) -> Result<PathBuf, StoreError> {
+    let backup_path = pre_v2_backup_path(database_path);
+    match std::fs::symlink_metadata(&backup_path) {
+        Ok(_) => {
+            validate_v1_backup(&backup_path, v1_checksum)?;
+            validate_v1_backup_matches_live(connection, &backup_path, v1_checksum)?;
+            Ok(backup_path)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let guard = prepare_private_new_file(&backup_path)?;
+            if let Err(error) = connection.backup(MAIN_DB, &backup_path, None) {
+                remove_guarded_file(&backup_path, &guard);
+                return Err(StoreError::Database(error));
+            }
+            ensure_same_file(&guard.file, &backup_path)?;
+            restrict_private_file(&backup_path)?;
+            validate_v1_backup(&backup_path, v1_checksum)?;
+            Ok(backup_path)
+        }
+        Err(error) => Err(StoreError::PrivatePath(error)),
+    }
+}
+
+fn validate_v1_backup_matches_live(
+    live: &Connection,
+    backup_path: &Path,
+    v1_checksum: &str,
+) -> Result<(), StoreError> {
+    let mut temporary_name = backup_path.as_os_str().to_owned();
+    temporary_name.push(format!(".compare-{}.sqlite3", Uuid::now_v7()));
+    let temporary_path = PathBuf::from(temporary_name);
+    let guard = prepare_private_new_file(&temporary_path)?;
+    let result = (|| {
+        live.backup(MAIN_DB, &temporary_path, None)?;
+        ensure_same_file(&guard.file, &temporary_path)?;
+        restrict_private_file(&temporary_path)?;
+        validate_v1_backup(&temporary_path, v1_checksum)?;
+        if sqlite_logical_digest(&temporary_path)? != sqlite_logical_digest(backup_path)? {
+            return Err(StoreError::Integrity(
+                "retained pre-V2 backup does not match the live V1 database".to_owned(),
+            ));
+        }
+        Ok(())
+    })();
+    for sidecar in sqlite_sidecar_paths(&temporary_path) {
+        if let Ok(sidecar_guard) = prepare_private_file(&sidecar, false) {
+            remove_guarded_file(&sidecar, &sidecar_guard);
+        }
+    }
+    remove_guarded_file(&temporary_path, &guard);
+    result
+}
+
+fn hash_logical_field(hasher: &mut blake3::Hasher, tag: u8, bytes: &[u8]) {
+    hasher.update(&[tag]);
+    hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn hash_sql_value(hasher: &mut blake3::Hasher, value: ValueRef<'_>) {
+    match value {
+        ValueRef::Null => hash_logical_field(hasher, 0, &[]),
+        ValueRef::Integer(value) => hash_logical_field(hasher, 1, &value.to_le_bytes()),
+        ValueRef::Real(value) => {
+            hash_logical_field(hasher, 2, &value.to_bits().to_le_bytes());
+        }
+        ValueRef::Text(value) => hash_logical_field(hasher, 3, value),
+        ValueRef::Blob(value) => hash_logical_field(hasher, 4, value),
+    }
+}
+
+fn sqlite_logical_digest(path: &Path) -> Result<blake3::Hash, StoreError> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, SQLITE_LENGTH_LIMIT_BYTES)?;
+    connection.pragma_update(None, "trusted_schema", "OFF")?;
+    let mut hasher = blake3::Hasher::new();
+    hash_logical_field(&mut hasher, 0x10, b"eutheto.sqlite.logical.v1");
+    {
+        let mut statement = connection.prepare(
+            "SELECT type, name, tbl_name, COALESCE(sql, '') FROM sqlite_schema ORDER BY type, name, tbl_name, sql",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            hash_logical_field(&mut hasher, 0x11, &[]);
+            for column in 0..4 {
+                hash_sql_value(&mut hasher, row.get_ref(column)?);
+            }
+        }
+    }
+    let table_names = {
+        let mut statement = connection
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for table_name in table_names {
+        hash_logical_field(&mut hasher, 0x20, table_name.as_bytes());
+        let quoted_name = table_name.replace('"', "\"\"");
+        let projection = format!("SELECT * FROM \"{quoted_name}\"");
+        let column_count = connection.prepare(&projection)?.column_count();
+        hash_logical_field(
+            &mut hasher,
+            0x21,
+            &u64::try_from(column_count)
+                .map_err(|_| StoreError::NumericRange)?
+                .to_le_bytes(),
+        );
+        let order = (1..=column_count)
+            .map(|column| column.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!("{projection} ORDER BY {order}");
+        let mut statement = connection.prepare(&query)?;
+        for name in statement.column_names() {
+            hash_logical_field(&mut hasher, 0x22, name.as_bytes());
+        }
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            hash_logical_field(&mut hasher, 0x23, &[]);
+            for column in 0..column_count {
+                hash_sql_value(&mut hasher, row.get_ref(column)?);
+            }
+        }
+    }
+    Ok(hasher.finalize())
+}
+
+fn validate_v1_backup(path: &Path, v1_checksum: &str) -> Result<(), StoreError> {
+    ensure_private_parent(path)?;
+    let guard = prepare_private_file(path, false)?;
+    ensure_same_file(&guard.file, path)?;
+    for sidecar in sqlite_sidecar_paths(path) {
+        if std::fs::symlink_metadata(&sidecar).is_ok() {
+            return Err(StoreError::Integrity(
+                "retained pre-V2 backup has a SQLite sidecar".to_owned(),
+            ));
+        }
+    }
+    let backup = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    backup.set_limit(Limit::SQLITE_LIMIT_LENGTH, SQLITE_LENGTH_LIMIT_BYTES)?;
+    backup.pragma_update(None, "trusted_schema", "OFF")?;
+    let version: u32 = backup.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version != 1 {
+        return Err(StoreError::Integrity(
+            "retained pre-V2 backup is not a V1 database".to_owned(),
+        ));
+    }
+    let quick_check: String = backup.pragma_query_value(None, "quick_check", |row| row.get(0))?;
+    if quick_check != "ok" {
+        return Err(StoreError::Integrity(
+            "retained pre-V2 backup failed quick_check".to_owned(),
+        ));
+    }
+    let row: Option<(String, String)> = backup
+        .query_row(
+            "SELECT name, checksum FROM schema_migrations WHERE version = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if row.as_ref().map(|(name, _)| name.as_str()) != Some(V1_MIGRATION_NAME)
+        || row.as_ref().map(|(_, checksum)| checksum.as_str()) != Some(v1_checksum)
+    {
+        return Err(StoreError::Integrity(
+            "retained pre-V2 backup has an invalid V1 registry".to_owned(),
+        ));
+    }
+    let count: u32 = backup.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+        row.get(0)
+    })?;
+    if count != 1 {
+        return Err(StoreError::Integrity(
+            "retained pre-V2 backup has an invalid migration registry".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn recover_running_v2_runs(connection: &mut Connection) -> Result<Vec<SolveRunId>, StoreError> {
+    let candidates = {
+        let mut statement = connection.prepare(
+            "SELECT id FROM solve_runs WHERE status = 'running' AND run_manifest_json IS NULL ORDER BY id",
+        )?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let now = jiff::Timestamp::now();
+    let finished_at = Rfc3339Timestamp::from_timestamp(now);
+    let mut interrupted = Vec::new();
+    for run_id_text in candidates {
+        let Ok(run_id) = run_id_text.parse::<SolveRunId>() else {
+            continue;
+        };
+        let (input, status, stored_manifest, started_at) =
+            match load_run_input_record(connection, run_id) {
+                Ok(record) => record,
+                Err(StoreError::InvalidPersistedRun(_) | StoreError::SolveRunNotFound(_)) => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+        let Ok(recovery_deadline) = solve_recovery_deadline(&input, started_at) else {
+            continue;
+        };
+        if status != "running" || stored_manifest.is_some() || now < recovery_deadline {
+            continue;
+        }
+        let Ok(manifest) = RunManifestV1::new(
+            run_id,
+            input.checksum,
+            RunTerminalOutcomeV1::Interrupted,
+            started_at,
+            finished_at,
+            None,
+            None,
+            None,
+            RunPhaseTimingsV1::default(),
+            Vec::new(),
+        ) else {
+            continue;
+        };
+        finalize_terminal_run_transaction(connection, &manifest)?;
+        interrupted.push(run_id);
+    }
+    Ok(interrupted)
 }
 
 async fn update_archive(
@@ -2531,18 +3857,19 @@ fn load_project(
 fn load_retained_scenario_revisions(
     connection: &Connection,
 ) -> Result<Vec<StoredScenarioRevision>, StoreError> {
-    let dependencies = retained_result_dependencies(connection)?;
+    let result_dependencies = retained_result_dependencies(connection)?;
+    let internal_dependencies = retained_scenario_dependencies(connection)?;
     let current = scenario_revisions(connection)?;
     let retained = read_retained_scenario_revision_rows(connection)?;
     for identity in retained.keys() {
-        if !dependencies.contains(identity) {
+        if !internal_dependencies.contains(identity) {
             return Err(StoreError::Integrity(
-                "an immutable scenario revision is not required by a retained result".to_owned(),
+                "an immutable scenario revision has no retention dependency".to_owned(),
             ));
         }
     }
     let mut historical = Vec::new();
-    for dependency in dependencies {
+    for dependency in result_dependencies {
         if current.get(&dependency.scenario_id) == Some(&dependency.scenario_revision) {
             continue;
         }
@@ -2584,7 +3911,7 @@ fn synchronize_retained_scenario_revisions(
         insert_retained_scenario_revision(transaction, scenario)?;
     }
 
-    let dependencies = retained_result_dependencies(transaction)?;
+    let dependencies = retained_scenario_dependencies(transaction)?;
     let retained = read_retained_scenario_revision_rows(transaction)?;
     for dependency in &dependencies {
         if retained.contains_key(dependency) {
@@ -2620,6 +3947,23 @@ fn synchronize_retained_scenario_revisions(
                 u64_to_i64(identity.scenario_revision.value())?
             ])?;
         }
+    }
+    Ok(())
+}
+
+fn retain_current_project_revision_if_required(
+    transaction: &rusqlite::Transaction<'_>,
+    project: &StoredProject,
+) -> Result<(), StoreError> {
+    let identity = ScenarioRevisionReference {
+        scenario_id: project.summary.id,
+        scenario_revision: project.summary.revision,
+    };
+    if retained_scenario_dependencies(transaction)?.contains(&identity) {
+        insert_retained_scenario_revision(
+            transaction,
+            &historical_scenario_from_project(project.clone()),
+        )?;
     }
     Ok(())
 }
@@ -2732,6 +4076,44 @@ fn retained_result_dependencies(
             ))
         })?;
         dependencies.insert(dependency);
+    }
+    drop(rows);
+    drop(statement);
+    let mut statement = connection.prepare(
+        "SELECT r.run_input_json FROM solutions s
+         JOIN solve_runs r ON r.id = s.solve_run_id
+         WHERE s.accepted = 1 AND s.status = 'verified'
+         ORDER BY r.run_input_json",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let json: String = row.get(0)?;
+        let input = parse_run_input(json.as_bytes())?;
+        dependencies.insert(ScenarioRevisionReference {
+            scenario_id: input.scenario_id,
+            scenario_revision: checked_revision(input.scenario_revision)?,
+        });
+    }
+    Ok(dependencies)
+}
+
+fn retained_scenario_dependencies(
+    connection: &Connection,
+) -> Result<BTreeSet<ScenarioRevisionReference>, StoreError> {
+    let mut dependencies = retained_result_dependencies(connection)?;
+    let mut statement = connection.prepare(
+        "SELECT run_input_json FROM solve_runs
+         WHERE status = 'running' AND run_input_json IS NOT NULL
+         ORDER BY run_input_json",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let json: String = row.get(0)?;
+        let input = parse_run_input(json.as_bytes())?;
+        dependencies.insert(ScenarioRevisionReference {
+            scenario_id: input.scenario_id,
+            scenario_revision: checked_revision(input.scenario_revision)?,
+        });
     }
     Ok(dependencies)
 }
@@ -3014,6 +4396,7 @@ fn authoritative_occupied_uuids(connection: &Connection) -> Result<BTreeSet<Uuid
             &scenario.extensions,
         ));
     }
+    occupied.extend(load_authoritative_solve_identities(connection)?);
     occupied.extend(
         load_supplemental_identity_owners(connection)?
             .keys()
@@ -3025,6 +4408,7 @@ fn authoritative_occupied_uuids(connection: &Connection) -> Result<BTreeSet<Uuid
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum StoredIdentityOwner {
     ScenarioFamily(ScenarioId),
+    SolveState,
     Supplemental(SupplementalIdentity),
 }
 
@@ -3047,6 +4431,30 @@ fn register_stored_identity(
     }
     owners.insert(identity, owner);
     Ok(())
+}
+
+fn load_authoritative_solve_identities(
+    connection: &Connection,
+) -> Result<BTreeSet<Uuid>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT id FROM scenario_snapshots
+         UNION ALL SELECT id FROM solve_runs
+         UNION ALL SELECT request_id FROM solve_runs WHERE request_id IS NOT NULL
+         UNION ALL SELECT id FROM solutions",
+    )?;
+    let mut identities = BTreeSet::new();
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for value in rows {
+        let identity = Uuid::parse_str(&value).map_err(|error| {
+            StoreError::Integrity(format!("invalid authoritative solve identity: {error}"))
+        })?;
+        if !identities.insert(identity) {
+            return Err(StoreError::IdentityCollision(identity));
+        }
+    }
+    Ok(identities)
 }
 
 fn validate_global_identity_ownership(connection: &Connection) -> Result<(), StoreError> {
@@ -3095,6 +4503,9 @@ fn validate_global_identity_ownership(connection: &Connection) -> Result<(), Sto
                 StoredIdentityOwner::ScenarioFamily(scenario_id),
             )?;
         }
+    }
+    for identity in load_authoritative_solve_identities(connection)? {
+        register_stored_identity(&mut owners, identity, StoredIdentityOwner::SolveState)?;
     }
     for (identity, supplemental) in load_supplemental_identity_owners(connection)? {
         register_stored_identity(
@@ -3535,6 +4946,81 @@ fn authorize_staged_apply(
     Ok(actual_revision)
 }
 
+fn store_opaque_staged_results(
+    transaction: &rusqlite::Transaction<'_>,
+    results: BTreeMap<String, Vec<u8>>,
+    replacements: &BTreeSet<SupplementalIdentity>,
+) -> Result<(), StoreError> {
+    let canonical = load_canonical_accepted_results(transaction)?;
+    let mut canonical_by_id = BTreeMap::new();
+    for (key, bytes) in canonical {
+        let id = Uuid::parse_str(&key).map_err(|error| {
+            StoreError::InvalidPersistedResult(format!("invalid canonical result ID: {error}"))
+        })?;
+        canonical_by_id.insert(id, bytes);
+    }
+    let mut statement = transaction
+        .prepare("SELECT key, value FROM portable_sections WHERE section = 'results'")?;
+    let stored = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    let mut stored_by_id = BTreeMap::new();
+    let mut stored_by_key = BTreeMap::new();
+    for (key, bytes) in stored {
+        let value: Value = serde_json::from_slice(&bytes)?;
+        let id = extract_result_id(&value).map_err(|error| {
+            StoreError::Integrity(format!("stored result has invalid identity: {error}"))
+        })?;
+        if stored_by_id.insert(id, bytes.clone()).is_some() {
+            return Err(StoreError::IdentityCollision(id));
+        }
+        if !replacements.contains(&SupplementalIdentity {
+            section: SupplementalSectionKind::Results,
+            key: key.clone(),
+        }) {
+            stored_by_key.insert(key, id);
+        }
+    }
+
+    let mut accepted = BTreeMap::new();
+    let mut incoming_by_id = BTreeMap::new();
+    for (key, bytes) in results {
+        let value: Value = serde_json::from_slice(&bytes)?;
+        validate_stored_portable_json(&value, "staged retained result")?;
+        let id = extract_result_id(&value)
+            .map_err(|error| StoreError::InvalidStagedApply(error.to_string()))?;
+        if let Some(existing) = canonical_by_id.get(&id) {
+            if existing != &bytes {
+                return Err(StoreError::IdentityCollision(id));
+            }
+            continue;
+        }
+        if let Some(existing) = stored_by_id.get(&id) {
+            if existing != &bytes {
+                return Err(StoreError::IdentityCollision(id));
+            }
+            continue;
+        }
+        if let Some(existing) = incoming_by_id.get(&id) {
+            if existing != &bytes {
+                return Err(StoreError::IdentityCollision(id));
+            }
+            continue;
+        }
+        if let Some(existing_id) = stored_by_key.get(&key)
+            && *existing_id != id
+        {
+            return Err(StoreError::IdentityCollision(id));
+        }
+        incoming_by_id.insert(id, bytes.clone());
+        accepted.insert(key, bytes);
+    }
+    upsert_portable_section(transaction, SupplementalSectionKind::Results, accepted)
+}
+
 fn apply_staged_library_transaction(
     connection: &mut Connection,
     staged: StagedLibraryApply,
@@ -3602,7 +5088,7 @@ fn apply_staged_library_transaction(
         scenario_revisions,
         &remove_scenario_ids,
     )?;
-    upsert_portable_section(&transaction, SupplementalSectionKind::Results, results)?;
+    store_opaque_staged_results(&transaction, results, &supplemental_replacements)?;
     upsert_portable_section(
         &transaction,
         SupplementalSectionKind::SharedRecords,
@@ -3793,14 +5279,21 @@ fn apply_staged_scenarios(
                         ));
                     }
                 } else if occupied.contains(&scenario_id) {
-                    transaction.execute(
-                        "DELETE FROM scenarios WHERE id = ?1",
-                        [scenario_id.to_string()],
+                    let current = load_project(transaction, scenario_id)?;
+                    retain_current_project_revision_if_required(transaction, &current)?;
+                    replace_project_in_place(
+                        transaction,
+                        &document,
+                        revision,
+                        archived_at,
+                        &portable,
                     )?;
                 } else {
                     return Err(StoreError::ScenarioNotFound(scenario_id));
                 }
-                insert_project(transaction, &document, revision, archived_at, &portable)?;
+                if remove_scenario_ids.contains(&scenario_id) {
+                    insert_project(transaction, &document, revision, archived_at, &portable)?;
+                }
                 replaced += 1;
             }
         }
@@ -4001,6 +5494,119 @@ fn supplemental_identities_from_keys(
     identities
 }
 
+fn canonical_result_ids(connection: &Connection) -> Result<Vec<Uuid>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT id FROM solutions WHERE accepted = 1 AND status = 'verified' ORDER BY id",
+    )?;
+    statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .map(|row| {
+            let id = row?;
+            Uuid::parse_str(&id).map_err(|error| {
+                StoreError::InvalidPersistedResult(format!("invalid solution ID: {error}"))
+            })
+        })
+        .collect()
+}
+
+fn load_canonical_accepted_results(
+    connection: &Connection,
+) -> Result<BTreeMap<String, Vec<u8>>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT id, solve_run_id, scenario_id, scenario_revision, normalized_solution_json, score_json, verification_report_json, evidence_json FROM solutions WHERE accepted = 1 AND status = 'verified' ORDER BY id",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    let mut results = BTreeMap::new();
+    for (
+        solution_id_text,
+        run_id_text,
+        scenario_id_text,
+        scenario_revision,
+        solution_json,
+        score_json,
+        report_json,
+        evidence_json,
+    ) in rows
+    {
+        let solution_id: SolutionId = solution_id_text.parse().map_err(|error| {
+            StoreError::InvalidPersistedResult(format!("invalid solution ID: {error}"))
+        })?;
+        let run_id: SolveRunId = run_id_text.parse().map_err(|error| {
+            StoreError::InvalidPersistedResult(format!("invalid solve-run ID: {error}"))
+        })?;
+        let scenario_id: ScenarioId = scenario_id_text.parse().map_err(|error| {
+            StoreError::InvalidPersistedResult(format!("invalid scenario ID: {error}"))
+        })?;
+        let loaded = load_solve_input_row(connection, run_id)?;
+        let (input, status, manifest_json, started_at) = load_run_input_record(connection, run_id)?;
+        if loaded.input != input {
+            return Err(StoreError::InvalidPersistedResult(
+                "solve input changed while deriving a result".to_owned(),
+            ));
+        }
+        let manifest_json = manifest_json.ok_or_else(|| {
+            StoreError::InvalidPersistedResult("accepted run has no manifest".to_owned())
+        })?;
+        let manifest = RunManifestV1::from_json(manifest_json.as_bytes())
+            .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+        if manifest.run_id != run_id
+            || manifest.started_at != started_at
+            || status != terminal_status(&manifest.outcome)?
+            || !matches!(&manifest.outcome, RunTerminalOutcomeV1::Accepted { .. })
+        {
+            return Err(StoreError::InvalidPersistedResult(
+                "accepted run columns disagree with its manifest".to_owned(),
+            ));
+        }
+        let solution = NormalizedSolution::from_json(solution_json.as_bytes())
+            .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+        let report = VerificationReport::from_json(report_json.as_bytes())
+            .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+        let accepted_result = AcceptedResult::new(solution, report)
+            .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+        if accepted_result.solution.solution_id != solution_id
+            || accepted_result.solution.scenario_id != scenario_id
+            || accepted_result.solution.scenario_revision != i64_to_u64(scenario_revision)?
+            || serde_json::from_str::<eutheto_domain_ir::ScoreVector>(&score_json)
+                .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?
+                != accepted_result.verification.score
+        {
+            return Err(StoreError::InvalidPersistedResult(
+                "accepted solution columns disagree with its typed result".to_owned(),
+            ));
+        }
+        let evidence_json = evidence_json.ok_or_else(|| {
+            StoreError::InvalidPersistedResult("accepted result has no evidence".to_owned())
+        })?;
+        let evidence: BTreeMap<DomainEvidenceId, VerificationValue> =
+            serde_json::from_str(&evidence_json)
+                .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+        let wrapper = PortableAcceptedResultV2::new(input, manifest, accepted_result, evidence)
+            .map_err(|error| StoreError::InvalidPersistedResult(error.to_string()))?;
+        let bytes = serialize_checked_json(&wrapper, "portable accepted result")
+            .map_err(StoreError::InvalidPersistedResult)?
+            .into_bytes();
+        if results.insert(solution_id.to_string(), bytes).is_some() {
+            return Err(StoreError::IdentityCollision(solution_id.as_uuid()));
+        }
+    }
+    Ok(results)
+}
+
 fn portable_section_identities(
     sections: &PortableSupplementalSections,
 ) -> BTreeSet<SupplementalIdentity> {
@@ -4026,14 +5632,21 @@ fn extend_supplemental_identities<'a>(
 fn load_supplemental_identities(
     connection: &Connection,
 ) -> Result<BTreeSet<SupplementalIdentity>, StoreError> {
-    let mut statement =
-        connection.prepare("SELECT section, key FROM portable_sections ORDER BY section, key")?;
+    let mut statement = connection
+        .prepare("SELECT section, key, value FROM portable_sections ORDER BY section, key")?;
     let mut rows = statement.query([])?;
     let mut identities = BTreeSet::new();
     while let Some(row) = rows.next()? {
+        let section = supplemental_section_kind(&row.get::<_, String>(0)?)?;
+        let key: String = row.get(1)?;
+        identities.insert(SupplementalIdentity { section, key });
+    }
+    drop(rows);
+    drop(statement);
+    for result_id in canonical_result_ids(connection)? {
         identities.insert(SupplementalIdentity {
-            section: supplemental_section_kind(&row.get::<_, String>(0)?)?,
-            key: row.get(1)?,
+            section: SupplementalSectionKind::Results,
+            key: result_id.to_string(),
         });
     }
     Ok(identities)
@@ -4077,6 +5690,18 @@ fn load_supplemental_identity_owners(
             }
         }
     }
+    drop(rows);
+    for (key, bytes) in load_canonical_accepted_results(connection)? {
+        let value: Value = serde_json::from_slice(&bytes)?;
+        let owner = SupplementalIdentity {
+            section: SupplementalSectionKind::Results,
+            key,
+        };
+        for identity in collect_self_declared_uuids(&value) {
+            register_supplemental_identity_owner(&mut owners, identity, &owner)?;
+        }
+    }
+    drop(statement);
     Ok(owners)
 }
 
@@ -4394,6 +6019,26 @@ fn load_portable_sections(
             }
         }
     }
+    drop(rows);
+    drop(statement);
+    let mut opaque_ids = BTreeSet::new();
+    for bytes in sections.results.values() {
+        let value: Value = serde_json::from_slice(bytes)?;
+        let result_id = extract_result_id(&value).map_err(|error| {
+            StoreError::Integrity(format!("stored result has invalid identity: {error}"))
+        })?;
+        if !opaque_ids.insert(result_id) {
+            return Err(StoreError::IdentityCollision(result_id));
+        }
+    }
+    for (key, bytes) in load_canonical_accepted_results(connection)? {
+        let result_id = Uuid::parse_str(&key).map_err(|error| {
+            StoreError::InvalidPersistedResult(format!("invalid result identity: {error}"))
+        })?;
+        if opaque_ids.contains(&result_id) || sections.results.insert(key, bytes).is_some() {
+            return Err(StoreError::IdentityCollision(result_id));
+        }
+    }
     Ok(sections)
 }
 
@@ -4655,6 +6300,71 @@ fn insert_project(
         "INSERT INTO scenario_history_state (scenario_id, cursor_sequence, branch_generation) VALUES (?1, 0, 0)",
         [scenario_id.to_string()],
     )?;
+    Ok(())
+}
+
+fn replace_project_in_place(
+    transaction: &rusqlite::Transaction<'_>,
+    document: &ScenarioDocument,
+    revision: Revision,
+    archived_at: Option<Rfc3339Timestamp>,
+    portable: &PortableWrapperMetadata,
+) -> Result<(), StoreError> {
+    validate_project_owned_uuid_uniqueness(document, revision, portable)
+        .map_err(StoreError::InvalidScenarioIdentity)?;
+    validate_stored_portable_json(
+        &serde_json::to_value(&portable.semantic_extensions)?,
+        "scenario semantic extensions",
+    )?;
+    validate_stored_portable_json(
+        &serde_json::to_value(&portable.extensions)?,
+        "scenario extensions",
+    )?;
+    let scenario_id = document.scenario_id;
+    let projection = document_projection(document);
+    let changed = transaction.execute(
+        "UPDATE scenarios SET domain_pack_id = ?2, domain_schema_version = ?3, title = ?4, description = ?5, revision = ?6, document_json = ?7, portable_required_capabilities_json = ?8, portable_semantic_extensions_json = ?9, portable_extensions_json = ?10, created_at = ?11, updated_at = ?12, archived_at = ?13 WHERE id = ?1",
+        params![
+            scenario_id.to_string(),
+            projection.domain_pack_id,
+            u32_to_i64(projection.domain_schema_version),
+            projection.title,
+            projection.description,
+            u64_to_i64(revision.value())?,
+            serialize_document(document)?,
+            serde_json::to_string(&portable.required_capabilities)?,
+            serde_json::to_string(&portable.semantic_extensions)?,
+            serde_json::to_string(&portable.extensions)?,
+            projection.created_at,
+            projection.updated_at,
+            archived_at.map(|value| value.to_string()),
+        ],
+    )?;
+    if changed != 1 {
+        return Err(StoreError::ScenarioNotFound(scenario_id));
+    }
+    transaction.execute(
+        "DELETE FROM command_journal WHERE scenario_id = ?1",
+        [scenario_id.to_string()],
+    )?;
+    transaction.execute(
+        "UPDATE scenario_history_state SET cursor_sequence = 0, branch_generation = 0 WHERE scenario_id = ?1",
+        [scenario_id.to_string()],
+    )?;
+    transaction.execute(
+        "DELETE FROM ai_conversations WHERE scenario_id = ?1",
+        [scenario_id.to_string()],
+    )?;
+    record_scenario_identity_owners(
+        transaction,
+        scenario_id,
+        &collect_project_owned_uuids(
+            document,
+            &portable.semantic_extensions,
+            &portable.extensions,
+        ),
+    )?;
+    record_scenario_revision_high_water(transaction, scenario_id, revision)?;
     Ok(())
 }
 

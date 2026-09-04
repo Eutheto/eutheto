@@ -446,6 +446,49 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
 }
 
 #[test]
+fn preflight_maps_shared_invalid_solve_options() -> TestResult {
+    let (matrix, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let problem = Arc::new(problem()?);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let base = solve_options(descriptor.id.clone())?;
+    let invalid_options = [
+        {
+            let mut value = base.clone();
+            value.memory_limit_bytes = Some(0);
+            value
+        },
+        {
+            let mut value = base.clone();
+            value.worker_threads = WorkerThreadPolicy::Exact(0);
+            value
+        },
+        {
+            let mut value = base;
+            value.solution_limit = Some(0);
+            value
+        },
+    ];
+    for options in invalid_options {
+        let (parent, _, _) = parent_budget(1_000)?;
+        let request = SolveRequest::new(
+            descriptor.id.clone(),
+            &descriptor.version,
+            &descriptor.adapter_version,
+            Arc::clone(&problem),
+            summary.clone(),
+            options,
+            &parent,
+            None,
+        )?;
+        assert!(matches!(
+            preflight(&matrix, &descriptor, &request),
+            Err(PreflightError::InvalidSolveOptions)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn cancellation_and_timeout_remain_distinct() -> TestResult {
     let (cancel_parent, _, cancellation) = parent_budget(100)?;
     let problem = Arc::new(problem()?);

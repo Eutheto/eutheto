@@ -1131,6 +1131,7 @@ name = "eutheto-store"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-import",
  "eutheto-types",

@@ -1,3 +1,8 @@
+use eutheto_domain_ir::{
+    AcceptedResult, NORMALIZED_SOLUTION_SCHEMA_VERSION, NormalizedSolution,
+    PortableAcceptedResultV2, RunManifestV1, RunPhaseTimingsV1, RunTerminalOutcomeV1, ScoreVector,
+    VerificationContextV1, VerificationReport, VerificationScope, blake3_hex,
+};
 use eutheto_export::{
     ApplicationMetadata, PortableProjectMetadata, PortableScenario, SemanticCapability,
     validate_current_portable_scenario,
@@ -6,19 +11,22 @@ use eutheto_import::{
     ImportProvenance, PreviewBinding, RestoreAuthorization, RestoreMode, SafetyBackupEvidence,
     StagedBackupRestore, StagedDisposition, StagedImport, StagedScenario,
 };
-#[cfg(debug_assertions)]
-use eutheto_store::Failpoint;
 use eutheto_store::{
-    AppSetting, CommandWrite, JournalWrite, NewProject, OpenOptions, ProjectListScope,
-    RedoBranchPolicy, SafetyBackupFailureReceipt, SnapshotPolicy, SqliteScenarioStore,
-    StagedLibraryApply, StoreError, StoredProject, ensure_private_application_directory,
+    AppSetting, CandidateDiagnosticsV1, CommandWrite, JournalWrite, NewProject, NewSolveRunV1,
+    OpenOptions, ProjectListScope, RedoBranchPolicy, SafetyBackupFailureReceipt, SnapshotPolicy,
+    SqliteScenarioStore, StagedLibraryApply, StoreError, StoredProject,
+    ensure_private_application_directory,
 };
+#[cfg(debug_assertions)]
+use eutheto_store::{Failpoint, V2MigrationBeginTestHook};
 use eutheto_types::{
-    ActorRef, BundleId, CommandId, CommandSource, DomainPackRef, GapPolicy, Horizon, IanaTimeZone,
-    LocaleTag, MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId, PersonId, PortableAsset,
-    Revision, Rfc3339Timestamp, RuleId, ScenarioDocument, ScenarioDomain, ScenarioId,
-    ScenarioMetadata, ScenarioSettings, SolveRunId, SupplementalIdentity, SupplementalSectionKind,
-    UnitSystem,
+    ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, DomainPackRef,
+    DurationMillis, ExplanationMode, GapPolicy, Horizon, IanaTimeZone, LocaleTag,
+    MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId, PersonId, PortableAsset,
+    PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
+    RuleId, ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings,
+    SolutionId, SolveMode, SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity,
+    SupplementalSectionKind, UnitSystem, WorkerThreadPolicy,
 };
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -45,6 +53,15 @@ fn pack_id() -> Result<PackId, eutheto_types::NamespacedIdError> {
 
 fn timestamp(value: &str) -> Result<Rfc3339Timestamp, jiff::Error> {
     Rfc3339Timestamp::parse(value)
+}
+fn shift_timestamp(
+    value: Rfc3339Timestamp,
+    milliseconds: u64,
+) -> Result<Rfc3339Timestamp, jiff::Error> {
+    value
+        .as_timestamp()
+        .checked_add(std::time::Duration::from_millis(milliseconds))
+        .map(Rfc3339Timestamp::from_timestamp)
 }
 
 fn document(id: ScenarioId) -> Result<ScenarioDocument, Box<dyn Error>> {
@@ -74,6 +91,122 @@ fn document(id: ScenarioId) -> Result<ScenarioDocument, Box<dyn Error>> {
         ScenarioDomain::default(),
         BTreeMap::from([("vendor.example".to_owned(), json!({"preserved": true}))]),
     ))
+}
+
+fn solve_options() -> Result<SolveOptions, Box<dyn Error>> {
+    Ok(SolveOptions {
+        backend: BackendSelection::Auto,
+        mode: SolveMode::Balanced,
+        time_limit_milliseconds: DurationMillis::new(120_000)?,
+        memory_limit_bytes: Some(64 * 1024 * 1024),
+        worker_threads: WorkerThreadPolicy::Exact(1),
+        random_seed: 7,
+        solution_limit: Some(1),
+        stop_after_first_feasible: true,
+        collect_intermediate_solutions: false,
+        explanation_mode: ExplanationMode::Standard,
+        preserve_existing: PreservationPolicy::None,
+        reproducibility: ReproducibilityMode::Deterministic,
+        resource_limits: ResourceLimits {
+            max_entities: 1_000,
+            max_rules: 1_000,
+            max_variables: 10_000,
+            max_constraints: 10_000,
+        },
+    })
+}
+
+fn solve_request(
+    scenario_id: ScenarioId,
+    run_suffix: u16,
+    request_suffix: u16,
+) -> Result<NewSolveRunV1, Box<dyn Error>> {
+    Ok(NewSolveRunV1 {
+        run_id: SolveRunId::from_uuid(Uuid::parse_str(&format!(
+            "018f47f2-e880-7000-8001-{run_suffix:012x}"
+        ))?),
+        request_id: RequestId::from_uuid(Uuid::parse_str(&format!(
+            "018f47f2-e880-7000-8002-{request_suffix:012x}"
+        ))?),
+        scenario_id,
+        expected_revision: Revision::INITIAL,
+        planning_ir_schema_version: 1,
+        compiler_version: "1.0.0".to_owned(),
+        application_version: "1.0.0".to_owned(),
+        backend_id: BackendId::new("ortools.cp-sat")?,
+        backend_version: "9.15.0".to_owned(),
+        adapter_version: "1.0.0".to_owned(),
+        worker_version: "1.0.0".to_owned(),
+        solver_version: "9.15.0".to_owned(),
+        protocol_major: 1,
+        protocol_minor: 0,
+        model_hash: blake3_hex(b"planning-model"),
+        objective_policy_hash: blake3_hex(b"objective-policy"),
+        solve_options: solve_options()?,
+        temporary_condition_hash: None,
+        started_at: Rfc3339Timestamp::from_timestamp(jiff::Timestamp::now()),
+    })
+}
+
+fn accepted_result_for(
+    input: &eutheto_domain_ir::RunInputV1,
+    solution_suffix: u16,
+) -> Result<AcceptedResult, Box<dyn Error>> {
+    let solution = NormalizedSolution {
+        schema_version: NORMALIZED_SOLUTION_SCHEMA_VERSION,
+        pack_id: input.pack_id.clone(),
+        scenario_id: input.scenario_id,
+        scenario_revision: input.scenario_revision,
+        projection_version: 1,
+        solution_id: SolutionId::from_uuid(Uuid::parse_str(&format!(
+            "018f47f2-e880-7000-8003-{solution_suffix:012x}"
+        ))?),
+        assignments: Vec::new(),
+    };
+    let scope = VerificationScope::new(input.scenario_id, input.scenario_revision, Vec::new())?;
+    let context = VerificationContextV1::new(
+        input.scenario_id,
+        input.scenario_revision,
+        input.snapshot_document_hash.clone(),
+        input.model_hash.clone(),
+        solution.canonical_hash()?,
+        scope.checksum,
+    )?;
+    let report = VerificationReport::new(
+        &context,
+        Vec::new(),
+        ScoreVector {
+            feasibility: 0,
+            levels: Vec::new(),
+        },
+        Vec::new(),
+        BTreeMap::new(),
+    )?;
+    Ok(AcceptedResult::new(solution, report)?)
+}
+
+fn terminal_manifest(
+    input: &eutheto_domain_ir::RunInputV1,
+    started_at: Rfc3339Timestamp,
+    outcome: RunTerminalOutcomeV1,
+) -> Result<RunManifestV1, Box<dyn Error>> {
+    let accepted = matches!(&outcome, RunTerminalOutcomeV1::Accepted { .. });
+    let interrupted = matches!(&outcome, RunTerminalOutcomeV1::Interrupted);
+    let finished_at = shift_timestamp(started_at, 1_000)?;
+    Ok(RunManifestV1::new(
+        input.run_id,
+        input.checksum.clone(),
+        outcome,
+        started_at,
+        finished_at,
+        (!interrupted)
+            .then(|| DurationMillis::new(1_000))
+            .transpose()?,
+        None,
+        accepted.then(|| DurationMillis::new(500)).transpose()?,
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?)
 }
 
 fn set_marker(
@@ -172,7 +305,7 @@ async fn project_crud_and_document_survive_reopen() -> Result<(), Box<dyn Error>
     let expected = document(id)?;
 
     let (store, first_start) = SqliteScenarioStore::open(&path).await?;
-    assert_eq!(first_start.applied_migrations, vec![1]);
+    assert_eq!(first_start.applied_migrations, vec![1, 2]);
     let created = store
         .create_project(NewProject {
             document: expected.clone(),
@@ -3436,18 +3569,1083 @@ async fn persisted_raw_secret_sentinel_is_rejected_on_snapshot_load() -> Result<
 }
 
 #[tokio::test]
+async fn solve_start_is_idempotent_and_loads_only_the_exact_snapshot() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let scenario_id = scenario_id(301)?;
+    let expected = document(scenario_id)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: expected.clone(),
+        })
+        .await?;
+
+    let request = solve_request(scenario_id, 1, 1)?;
+    let started = store.start_solve_run(request.clone()).await?;
+    assert!(!started.reused);
+    assert_eq!(started.started_at, request.started_at);
+    let mut retry = request.clone();
+    retry.run_id = SolveRunId::from_uuid(Uuid::parse_str("018f47f2-e880-7000-8001-000000000002")?);
+    retry.started_at = timestamp(LATER)?;
+    let mut before_snapshot = solve_request(scenario_id, 6, 6)?;
+    before_snapshot.started_at = timestamp("2026-08-28T22:59:59Z")?;
+    assert!(matches!(
+        store.start_solve_run(before_snapshot).await,
+        Err(StoreError::InvalidPersistedRun(_))
+    ));
+    let reused = store.start_solve_run(retry).await?;
+    assert!(reused.reused);
+    assert_eq!(reused.input, started.input);
+    assert_eq!(reused.started_at, started.started_at);
+
+    let mut conflicting = request.clone();
+    conflicting.model_hash = blake3_hex(b"different-model");
+    assert!(matches!(
+        store.start_solve_run(conflicting).await,
+        Err(StoreError::SolveRequestIdConflict { request_id })
+            if request_id == request.request_id
+    ));
+    let mut stale = solve_request(scenario_id, 3, 3)?;
+    let mut colliding_run = solve_request(scenario_id, 5, 5)?;
+    colliding_run.run_id = started.input.run_id;
+    assert!(matches!(
+        store.start_solve_run(colliding_run).await,
+        Err(StoreError::SolveRunCollision(id)) if id == started.input.run_id
+    ));
+    stale.expected_revision = Revision::new(1);
+    assert!(matches!(
+        store.start_solve_run(stale).await,
+        Err(StoreError::Conflict { expected, actual })
+            if expected == Revision::new(1) && actual == Revision::INITIAL
+    ));
+    let loaded = store.load_solve_input(started.input.run_id).await?;
+    #[cfg(debug_assertions)]
+    {
+        let rollback_request = solve_request(scenario_id, 4, 4)?;
+        store.set_failpoint(Failpoint::AfterSolveRunInsert)?;
+        assert!(matches!(
+            store.start_solve_run(rollback_request.clone()).await,
+            Err(StoreError::InjectedFailure)
+        ));
+        let connection = Connection::open(&path)?;
+        let inserted: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM solve_runs WHERE id = ?1)",
+            [rollback_request.run_id.to_string()],
+            |row| row.get(0),
+        )?;
+        assert!(!inserted);
+    }
+    assert_eq!(loaded.input, started.input);
+    assert_eq!(loaded.document, expected);
+    drop(store);
+
+    let mut altered = expected;
+    altered.metadata.title = "Mutated snapshot".to_owned();
+    let compressed = zstd::stream::encode_all(serde_json::to_vec(&altered)?.as_slice(), 3)?;
+    let connection = Connection::open(&path)?;
+    connection.execute(
+        "UPDATE scenario_snapshots SET document_json_zstd = ?2 WHERE id = ?1",
+        params![started.input.snapshot_id.to_string(), compressed],
+    )?;
+    drop(connection);
+    let (reopened, _) = SqliteScenarioStore::open(&path).await?;
+    assert!(matches!(
+        reopened.load_solve_input(started.input.run_id).await,
+        Err(StoreError::SnapshotMismatch(snapshot_id))
+            if snapshot_id == started.input.snapshot_id
+    ));
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+// One sequential fixture proves every terminal CAS path shares the same atomic boundary.
+#[allow(clippy::too_many_lines)]
+async fn terminal_finalizers_are_compare_and_set_and_atomic() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let scenario_id = scenario_id(302)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: document(scenario_id)?,
+        })
+        .await?;
+
+    let accepted_started = store
+        .start_solve_run(solve_request(scenario_id, 10, 10)?)
+        .await?;
+    let accepted_run = accepted_started.input.clone();
+    let accepted = accepted_result_for(&accepted_run, 10)?;
+    let accepted_manifest = terminal_manifest(
+        &accepted_run,
+        accepted_started.started_at,
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            solution_id: accepted.solution.solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+    )?;
+    let evidence = BTreeMap::new();
+    store
+        .finalize_accepted_run(
+            accepted.clone(),
+            accepted_manifest.clone(),
+            evidence.clone(),
+        )
+        .await?;
+    assert!(matches!(
+        store
+            .finalize_terminal_run(terminal_manifest(
+                &accepted_run,
+                accepted_started.started_at,
+                RunTerminalOutcomeV1::Interrupted,
+            )?)
+            .await,
+        Err(StoreError::SolveRunTerminalConflict(id)) if id == accepted_run.run_id
+    ));
+    let snapshot = store.library_snapshot().await?;
+    let canonical = snapshot
+        .sections
+        .results
+        .get(&accepted.solution.solution_id.to_string())
+        .ok_or_else(|| std::io::Error::other("canonical accepted result missing"))?;
+    let portable = PortableAcceptedResultV2::from_json(canonical)?;
+    assert_eq!(portable.accepted_result, accepted);
+    assert_eq!(portable.evidence, evidence);
+
+    let rolled_back_started = store
+        .start_solve_run(solve_request(scenario_id, 11, 11)?)
+        .await?;
+    let rolled_back_run = rolled_back_started.input.clone();
+    let rolled_back_result = accepted_result_for(&rolled_back_run, 11)?;
+    let rolled_back_manifest = terminal_manifest(
+        &rolled_back_run,
+        rolled_back_started.started_at,
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Optimal,
+            solution_id: rolled_back_result.solution.solution_id,
+            accepted_result_checksum: rolled_back_result.checksum.clone(),
+            verification_checksum: rolled_back_result.verification.checksum.clone(),
+        },
+    )?;
+    store.set_failpoint(Failpoint::AfterAcceptedSolutionInsert)?;
+    assert!(matches!(
+        store
+            .finalize_accepted_run(
+                rolled_back_result.clone(),
+                rolled_back_manifest.clone(),
+                BTreeMap::new(),
+            )
+            .await,
+        Err(StoreError::InjectedFailure)
+    ));
+    let connection = Connection::open(&path)?;
+    let (status, solutions): (String, i64) = connection.query_row(
+        "SELECT r.status, (SELECT COUNT(*) FROM solutions s WHERE s.solve_run_id = r.id) FROM solve_runs r WHERE r.id = ?1",
+        [rolled_back_run.run_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(status, "running");
+    assert_eq!(solutions, 0);
+    drop(connection);
+    store
+        .finalize_accepted_run(rolled_back_result, rolled_back_manifest, BTreeMap::new())
+        .await?;
+
+    let quarantined_started = store
+        .start_solve_run(solve_request(scenario_id, 12, 12)?)
+        .await?;
+    let quarantined_run = quarantined_started.input.clone();
+    let quarantine_manifest = terminal_manifest(
+        &quarantined_run,
+        quarantined_started.started_at,
+        RunTerminalOutcomeV1::VerificationAlarm {
+            diagnostic_code: "verification.candidate-rejected".to_owned(),
+        },
+    )?;
+    let diagnostics = CandidateDiagnosticsV1 {
+        values: BTreeMap::from([(
+            "candidate_count".to_owned(),
+            eutheto_types::SafeDiagnosticValue::Integer(1),
+        )]),
+    };
+    store.set_failpoint(Failpoint::AfterQuarantineWrite)?;
+    assert!(matches!(
+        store
+            .finalize_quarantined_run(quarantine_manifest.clone(), diagnostics.clone())
+            .await,
+        Err(StoreError::InjectedFailure)
+    ));
+    store
+        .finalize_quarantined_run(quarantine_manifest, diagnostics)
+        .await?;
+
+    for (suffix, status, expected_status) in [
+        (13, SolveStatus::Infeasible, "infeasible"),
+        (14, SolveStatus::Unbounded, "unbounded"),
+        (
+            15,
+            SolveStatus::NoSolutionWithinLimit,
+            "no_solution_within_limit",
+        ),
+        (16, SolveStatus::Cancelled, "cancelled"),
+        (17, SolveStatus::InvalidModel, "invalid_model"),
+        (18, SolveStatus::BackendUnavailable, "backend_unavailable"),
+        (19, SolveStatus::BackendFailed, "backend_failed"),
+    ] {
+        let started = store
+            .start_solve_run(solve_request(scenario_id, suffix, suffix)?)
+            .await?;
+        let input = started.input.clone();
+        store
+            .finalize_terminal_run(terminal_manifest(
+                &input,
+                started.started_at,
+                RunTerminalOutcomeV1::NoResult { status },
+            )?)
+            .await?;
+        let connection = Connection::open(&path)?;
+        let stored_status: String = connection.query_row(
+            "SELECT status FROM solve_runs WHERE id = ?1",
+            [input.run_id.to_string()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_status, expected_status);
+    }
+
+    let interrupted_started = store
+        .start_solve_run(solve_request(scenario_id, 20, 20)?)
+        .await?;
+    let interrupted_run = interrupted_started.input.clone();
+    store
+        .finalize_terminal_run(terminal_manifest(
+            &interrupted_run,
+            interrupted_started.started_at,
+            RunTerminalOutcomeV1::Interrupted,
+        )?)
+        .await?;
+
+    let connection = Connection::open(&path)?;
+    let quarantine: (String, i64) = connection.query_row(
+        "SELECT r.status, (SELECT COUNT(*) FROM solutions s WHERE s.solve_run_id = r.id) FROM solve_runs r WHERE r.id = ?1",
+        [quarantined_run.run_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let accepted_optimal_status: String = connection.query_row(
+        "SELECT status FROM solve_runs WHERE id = ?1",
+        [rolled_back_run.run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let interrupted_status: String = connection.query_row(
+        "SELECT status FROM solve_runs WHERE id = ?1",
+        [interrupted_run.run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(quarantine, ("quarantined".to_owned(), 0));
+    assert_eq!(accepted_optimal_status, "optimal");
+    assert_eq!(interrupted_status, "interrupted");
+    drop(connection);
+
+    let late_started = store
+        .start_solve_run(solve_request(scenario_id, 21, 21)?)
+        .await?;
+    let late_run = late_started.input.clone();
+    let late_result = accepted_result_for(&late_run, 21)?;
+    let late_manifest = RunManifestV1::new(
+        late_run.run_id,
+        late_run.checksum.clone(),
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            solution_id: late_result.solution.solution_id,
+            accepted_result_checksum: late_result.checksum.clone(),
+            verification_checksum: late_result.verification.checksum.clone(),
+        },
+        late_started.started_at,
+        shift_timestamp(late_started.started_at, 120_001)?,
+        Some(DurationMillis::new(120_001)?),
+        None,
+        Some(DurationMillis::new(500)?),
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?;
+    assert!(matches!(
+        store
+            .finalize_accepted_run(late_result, late_manifest, BTreeMap::new())
+            .await,
+        Err(StoreError::InvalidPersistedResult(_))
+    ));
+
+    let original_document = document(scenario_id)?;
+    store
+        .execute_command(
+            scenario_id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), None, UPDATED)?,
+                    output: (),
+                })
+            },
+        )
+        .await?;
+    assert!(
+        store
+            .library_snapshot()
+            .await?
+            .scenario_revisions
+            .iter()
+            .any(|revision| revision.scenario.document == original_document)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_persistence_after_recovery_cutoff_is_rejected_atomically()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let scenario_id = scenario_id(310)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: document(scenario_id)?,
+        })
+        .await?;
+    let mut request = solve_request(scenario_id, 70, 70)?;
+    request.started_at = Rfc3339Timestamp::from_timestamp(
+        jiff::Timestamp::now().checked_sub(std::time::Duration::from_secs(131))?,
+    );
+    let started = store.start_solve_run(request).await?;
+    let input = started.input.clone();
+    let accepted = accepted_result_for(&input, 70)?;
+    let manifest = terminal_manifest(
+        &input,
+        started.started_at,
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            solution_id: accepted.solution.solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+    )?;
+    assert!(
+        manifest.finished_at.as_timestamp()
+            <= started
+                .started_at
+                .as_timestamp()
+                .checked_add(std::time::Duration::from_mins(2))?
+    );
+    assert!(matches!(
+        store
+            .finalize_accepted_run(accepted, manifest, BTreeMap::new())
+            .await,
+        Err(StoreError::InvalidPersistedResult(_))
+    ));
+    let connection = Connection::open(&path)?;
+    let solution_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM solutions", [], |row| row.get(0))?;
+    let status: String = connection.query_row(
+        "SELECT status FROM solve_runs WHERE id = ?1",
+        [input.run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(solution_count, 0);
+    assert_eq!(status, "running");
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_terminalizes_only_a_valid_v2_running_input_once() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let scenario_id = scenario_id(303)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: document(scenario_id)?,
+        })
+        .await?;
+    let mut expired_request = solve_request(scenario_id, 20, 20)?;
+    expired_request.started_at = timestamp(CREATED)?;
+    let run = store.start_solve_run(expired_request).await?.input;
+    drop(store);
+
+    let (reopened, outcome) = SqliteScenarioStore::open(&path).await?;
+    assert_eq!(outcome.recovery.interrupted_solve_run_ids, vec![run.run_id]);
+    drop(reopened);
+    let (reopened, second) = SqliteScenarioStore::open(&path).await?;
+    assert!(second.recovery.interrupted_solve_run_ids.is_empty());
+    let connection = Connection::open(&path)?;
+    let (manifest_json, elapsed_ms): (String, Option<i64>) = connection.query_row(
+        "SELECT run_manifest_json, elapsed_ms FROM solve_runs WHERE id = ?1",
+        [run.run_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let manifest = RunManifestV1::from_json(manifest_json.as_bytes())?;
+    assert!(matches!(
+        &manifest.outcome,
+        RunTerminalOutcomeV1::Interrupted
+    ));
+    assert_eq!(manifest.elapsed_milliseconds, None);
+    assert_eq!(elapsed_ms, None);
+    drop(reopened);
+    Ok(())
+}
+
+#[tokio::test]
+async fn second_store_open_preserves_running_input_before_recovery_deadline()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let scenario_id = scenario_id(307)?;
+    let (owner, _) = SqliteScenarioStore::open(&path).await?;
+    owner
+        .create_project(NewProject {
+            document: document(scenario_id)?,
+        })
+        .await?;
+    let mut request = solve_request(scenario_id, 50, 50)?;
+    request.started_at = Rfc3339Timestamp::from_timestamp(
+        jiff::Timestamp::now().checked_sub(std::time::Duration::from_secs(121))?,
+    );
+    let run = owner.start_solve_run(request).await?.input;
+
+    let (observer, outcome) = SqliteScenarioStore::open(&path).await?;
+    assert!(outcome.recovery.interrupted_solve_run_ids.is_empty());
+    let connection = Connection::open(&path)?;
+    let status: String = connection.query_row(
+        "SELECT status FROM solve_runs WHERE id = ?1",
+        [run.run_id.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(status, "running");
+    drop(observer);
+    drop(owner);
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_r0_survives_edit_ordinary_replace_and_reopen() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let scenario_id = scenario_id(308)?;
+    let original = document(scenario_id)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: original.clone(),
+        })
+        .await?;
+    let started = store
+        .start_solve_run(solve_request(scenario_id, 60, 60)?)
+        .await?;
+    let input = started.input.clone();
+    store
+        .execute_command(
+            scenario_id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), None, UPDATED)?,
+                    output: (),
+                })
+            },
+        )
+        .await?;
+    assert_eq!(
+        store.load_solve_input(input.run_id).await?.document,
+        original
+    );
+    assert!(
+        store
+            .library_snapshot()
+            .await?
+            .scenario_revisions
+            .is_empty()
+    );
+    let connection = Connection::open(&path)?;
+    let retained_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM retained_scenario_revisions",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retained_count, 1);
+    drop(connection);
+    let accepted = accepted_result_for(&input, 60)?;
+    store
+        .finalize_accepted_run(
+            accepted.clone(),
+            terminal_manifest(
+                &input,
+                started.started_at,
+                RunTerminalOutcomeV1::Accepted {
+                    status: SolveStatus::Feasible,
+                    solution_id: accepted.solution.solution_id,
+                    accepted_result_checksum: accepted.checksum.clone(),
+                    verification_checksum: accepted.verification.checksum.clone(),
+                },
+            )?,
+            BTreeMap::new(),
+        )
+        .await?;
+    assert_eq!(store.library_snapshot().await?.scenario_revisions.len(), 1);
+    let mut replacement = staged_import(
+        Revision::new(3),
+        vec![(
+            Revision::new(2),
+            set_marker(document(scenario_id)?, Some(2), LATER)?,
+            StagedDisposition::Replace,
+        )],
+        timestamp(CREATED)?,
+    );
+    replacement.mode = RestoreMode::ImportScenario;
+    store
+        .apply_staged_library(StagedLibraryApply::Import(replacement), timestamp(LATER)?)
+        .await?;
+    let snapshot = store.library_snapshot().await?;
+    assert_eq!(snapshot.scenario_revisions[0].scenario.document, original);
+    assert!(
+        snapshot
+            .sections
+            .results
+            .contains_key(&accepted.solution.solution_id.to_string())
+    );
+    drop(store);
+
+    let (reopened, _) = SqliteScenarioStore::open(&path).await?;
+    let snapshot = reopened.library_snapshot().await?;
+    assert_eq!(snapshot.scenario_revisions[0].scenario.document, original);
+    assert!(
+        snapshot
+            .sections
+            .results
+            .contains_key(&accepted.solution.solution_id.to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn nonaccepted_terminal_run_prunes_its_retained_source_revision() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let scenario_id = scenario_id(309)?;
+    let (store, _) = SqliteScenarioStore::open(&path).await?;
+    store
+        .create_project(NewProject {
+            document: document(scenario_id)?,
+        })
+        .await?;
+    let started = store
+        .start_solve_run(solve_request(scenario_id, 61, 61)?)
+        .await?;
+    let input = started.input.clone();
+    store
+        .execute_command(
+            scenario_id,
+            Revision::INITIAL,
+            RedoBranchPolicy::Reject,
+            |current| {
+                Ok(CommandWrite {
+                    document: set_marker(current.clone(), Some(1), UPDATED)?,
+                    journal: journal(json!({"marker": 1}), None, UPDATED)?,
+                    output: (),
+                })
+            },
+        )
+        .await?;
+    assert!(
+        store
+            .library_snapshot()
+            .await?
+            .scenario_revisions
+            .is_empty()
+    );
+    let connection = Connection::open(&path)?;
+    let retained_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM retained_scenario_revisions",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retained_count, 1);
+    drop(connection);
+    store
+        .finalize_terminal_run(terminal_manifest(
+            &input,
+            started.started_at,
+            RunTerminalOutcomeV1::NoResult {
+                status: SolveStatus::Infeasible,
+            },
+        )?)
+        .await?;
+    assert!(
+        store
+            .library_snapshot()
+            .await?
+            .scenario_revisions
+            .is_empty()
+    );
+    let connection = Connection::open(&path)?;
+    let retained_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM retained_scenario_revisions",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retained_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+// The full import/copy/replace sequence keeps opaque authority and collision rollback auditable.
+#[allow(clippy::too_many_lines)]
+async fn imported_v2_wrappers_remain_opaque_and_identity_conflicts_roll_back()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let source_path = directory.path().join("source.sqlite3");
+    let target_path = directory.path().join("target.sqlite3");
+    let imported_scenario_id = scenario_id(304)?;
+    let scenario = document(imported_scenario_id)?;
+    let (source, _) = SqliteScenarioStore::open(&source_path).await?;
+    source
+        .create_project(NewProject {
+            document: scenario.clone(),
+        })
+        .await?;
+    let started = source
+        .start_solve_run(solve_request(imported_scenario_id, 30, 30)?)
+        .await?;
+    let input = started.input.clone();
+    let accepted = accepted_result_for(&input, 30)?;
+    let manifest = terminal_manifest(
+        &input,
+        started.started_at,
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Feasible,
+            solution_id: accepted.solution.solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+    )?;
+    source
+        .finalize_accepted_run(accepted.clone(), manifest, BTreeMap::new())
+        .await?;
+    let source_snapshot = source.library_snapshot().await?;
+    let result_key = accepted.solution.solution_id.to_string();
+    let canonical = source_snapshot.sections.results[&result_key].clone();
+
+    let (target, _) = SqliteScenarioStore::open(&target_path).await?;
+    let mut initial = staged_import(
+        Revision::INITIAL,
+        vec![(Revision::INITIAL, scenario, StagedDisposition::Create)],
+        timestamp(CREATED)?,
+    );
+    initial
+        .results
+        .insert(format!("{result_key}.json"), canonical.clone());
+    target
+        .apply_staged_library(StagedLibraryApply::Import(initial), timestamp(UPDATED)?)
+        .await?;
+    let restored = target.library_snapshot().await?;
+    assert_eq!(
+        restored.sections.results[&format!("{result_key}.json")],
+        canonical
+    );
+    let connection = Connection::open(&target_path)?;
+    let (accepted_rows, opaque_rows): (i64, i64) = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM solutions WHERE accepted = 1), (SELECT COUNT(*) FROM portable_sections WHERE section = 'results')",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(accepted_rows, 0);
+    assert_eq!(opaque_rows, 1);
+    drop(connection);
+
+    let mut identical = staged_import(restored.revision, Vec::new(), timestamp(UPDATED)?);
+    identical
+        .results
+        .insert(format!("{result_key}.json"), canonical.clone());
+    identical
+        .supplemental_replacements
+        .insert(SupplementalIdentity {
+            section: SupplementalSectionKind::Results,
+            key: format!("{result_key}.json"),
+        });
+    target
+        .apply_staged_library(StagedLibraryApply::Import(identical), timestamp(LATER)?)
+        .await?;
+
+    let mut conflicting: Value = serde_json::from_slice(&canonical)?;
+    conflicting
+        .as_object_mut()
+        .ok_or_else(|| std::io::Error::other("portable result is not an object"))?
+        .insert("opaqueImportMarker".to_owned(), json!("different"));
+    let before_conflict = target.library_snapshot().await?.revision;
+    let mut staged_conflict = staged_import(before_conflict, Vec::new(), timestamp(LATER)?);
+    staged_conflict.results.insert(
+        format!("{result_key}.json"),
+        serde_json::to_vec(&conflicting)?,
+    );
+    staged_conflict
+        .supplemental_replacements
+        .insert(SupplementalIdentity {
+            section: SupplementalSectionKind::Results,
+            key: format!("{result_key}.json"),
+        });
+    assert!(matches!(
+        target
+            .apply_staged_library(
+                StagedLibraryApply::Import(staged_conflict),
+                timestamp(LATER)?,
+            )
+            .await,
+        Err(StoreError::InvalidStagedApply(_) | StoreError::IdentityCollision(_))
+    ));
+    assert_eq!(target.library_snapshot().await?.revision, before_conflict);
+
+    let remapped_path = directory.path().join("remapped.sqlite3");
+    let (remapped_store, _) = SqliteScenarioStore::open(&remapped_path).await?;
+    let mut remapped = staged_import(
+        Revision::INITIAL,
+        vec![(
+            Revision::INITIAL,
+            document(imported_scenario_id)?,
+            StagedDisposition::CreateCopy,
+        )],
+        timestamp(CREATED)?,
+    );
+    let original_id = scenario_id(305)?;
+    remapped.scenarios[0].original_id = original_id;
+    remapped.scenarios[0]
+        .id_remap
+        .insert(original_id.as_uuid(), imported_scenario_id.as_uuid());
+    remapped
+        .results
+        .insert(format!("{result_key}.json"), canonical);
+    remapped_store
+        .apply_staged_library(StagedLibraryApply::Import(remapped), timestamp(UPDATED)?)
+        .await?;
+    let connection = Connection::open(&remapped_path)?;
+    let canonical_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM solutions WHERE accepted = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let opaque_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM portable_sections WHERE section = 'results'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(canonical_count, 0);
+    assert_eq!(opaque_count, 1);
+    Ok(())
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn unrelated_valid_v1_backup_is_rejected_without_migrating_live_database()
+-> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    let backup_path =
+        std::path::PathBuf::from(format!("{}.pre-v2-backup.sqlite3", path.to_string_lossy()));
+    let fixture = include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3");
+    std::fs::write(&path, fixture)?;
+    std::fs::write(&backup_path, fixture)?;
+    for private_path in [&path, &backup_path] {
+        let mut permissions = std::fs::metadata(private_path)?.permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(private_path, permissions)?;
+    }
+    let unrelated = Connection::open(&backup_path)?;
+    unrelated.execute(
+        "UPDATE app_metadata SET value = '1' WHERE key = 'portable_library_revision'",
+        [],
+    )?;
+    drop(unrelated);
+
+    assert!(matches!(
+        SqliteScenarioStore::open(&path).await,
+        Err(StoreError::Integrity(_))
+    ));
+    let live = Connection::open(&path)?;
+    let version: u32 = live.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    assert_eq!(version, 1);
+    assert!(
+        std::fs::read_dir(directory.path())?
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".compare-"))
+    );
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn v1_upgrade_backup_observes_the_commit_before_its_writer_lock() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    std::fs::write(
+        &path,
+        include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3"),
+    )?;
+    let writer = Connection::open(&path)?;
+    writer.pragma_update(None, "journal_mode", "WAL")?;
+    writer.execute_batch("BEGIN IMMEDIATE")?;
+    writer.execute(
+        "INSERT INTO app_metadata (key, value) VALUES ('migration_lock_marker', 'committed-before-backup')",
+        [],
+    )?;
+
+    let hook = V2MigrationBeginTestHook::new();
+    let actor_hook = hook.clone();
+    let open_path = path.clone();
+    let (done_sender, done_receiver) = std::sync::mpsc::channel();
+    let open_task = tokio::spawn(async move {
+        let result = SqliteScenarioStore::open_with_options(
+            open_path,
+            OpenOptions::new(SnapshotPolicy::default())
+                .with_v2_migration_begin_test_hook(actor_hook),
+        )
+        .await;
+        let _ignored = done_sender.send(());
+        result
+    });
+    let wait_hook = hook.clone();
+    tokio::task::spawn_blocking(move || wait_hook.wait_before_begin()).await?;
+
+    writer.execute_batch("COMMIT")?;
+    hook.release();
+    tokio::task::spawn_blocking(move || {
+        done_receiver.recv_timeout(std::time::Duration::from_secs(5))
+    })
+    .await??;
+    let (store, outcome) = open_task.await??;
+    let backup_path = outcome
+        .retained_backup_path
+        .ok_or_else(|| std::io::Error::other("missing retained V1 backup"))?;
+    drop(store);
+
+    for database_path in [&path, &backup_path] {
+        let connection = Connection::open(database_path)?;
+        let marker: String = connection.query_row(
+            "SELECT value FROM app_metadata WHERE key = 'migration_lock_marker'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(marker, "committed-before-backup");
+    }
+    let live = Connection::open(&path)?;
+    let live_version: u32 = live.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let backup = Connection::open(&backup_path)?;
+    let backup_version: u32 = backup.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    assert_eq!(live_version, 2);
+    assert_eq!(backup_version, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn released_v1_fixture_is_backed_up_and_upgraded_to_v2() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    std::fs::write(
+        &path,
+        include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3"),
+    )?;
+
+    let (store, outcome) = SqliteScenarioStore::open(&path).await?;
+    assert_eq!(outcome.applied_migrations, vec![2]);
+    let backup_path = outcome
+        .retained_backup_path
+        .ok_or_else(|| std::io::Error::other("missing retained V1 backup"))?;
+    assert_eq!(
+        backup_path,
+        std::path::PathBuf::from(format!("{}.pre-v2-backup.sqlite3", path.to_string_lossy()))
+    );
+    assert!(backup_path.is_file());
+    drop(store);
+
+    let current = Connection::open(&path)?;
+    let current_version: u32 =
+        current.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    assert_eq!(current_version, 2);
+    let backup = Connection::open(&backup_path)?;
+    let backup_version: u32 = backup.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let backup_check: String = backup.pragma_query_value(None, "quick_check", |row| row.get(0))?;
+    assert_eq!(backup_version, 1);
+    assert_eq!(backup_check, "ok");
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn v2_migration_failure_retains_a_valid_v1_backup() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    std::fs::write(
+        &path,
+        include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3"),
+    )?;
+    let result = SqliteScenarioStore::open_with_options(
+        &path,
+        OpenOptions::new(SnapshotPolicy::default()).with_failpoint(Failpoint::AfterV2MigrationSql),
+    )
+    .await;
+    assert!(matches!(result, Err(StoreError::InjectedFailure)));
+
+    let backup_path =
+        std::path::PathBuf::from(format!("{}.pre-v2-backup.sqlite3", path.to_string_lossy()));
+    let current = Connection::open(&path)?;
+    let current_version: u32 =
+        current.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let backup = Connection::open(&backup_path)?;
+    let backup_version: u32 = backup.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let backup_check: String = backup.pragma_query_value(None, "quick_check", |row| row.get(0))?;
+    assert_eq!(current_version, 1);
+    assert_eq!(backup_version, 1);
+    assert_eq!(backup_check, "ok");
+    Ok(())
+}
+
+#[tokio::test]
+// One migration fixture proves legacy payload preservation and every status classification.
+#[allow(clippy::too_many_lines)]
+async fn v2_migration_classifies_legacy_rows_without_rewriting_payloads()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let path = directory.path().join("library.sqlite3");
+    std::fs::write(
+        &path,
+        include_bytes!("../../../tests/migration/fixtures/database_v1.sqlite3"),
+    )?;
+    let scenario_id = scenario_id(306)?;
+    let document = document(scenario_id)?;
+    let running_id =
+        SolveRunId::from_uuid(Uuid::parse_str("018f47f2-e880-7000-8001-000000000040")?);
+    let terminal_id =
+        SolveRunId::from_uuid(Uuid::parse_str("018f47f2-e880-7000-8001-000000000041")?);
+    let connection = Connection::open(&path)?;
+    connection.execute(
+        "INSERT INTO scenarios (id, domain_pack_id, domain_schema_version, title, description, revision, document_json, created_at, updated_at) VALUES (?1, ?2, 1, ?3, ?4, 0, ?5, ?6, ?6)",
+        params![
+            scenario_id.to_string(),
+            document.domain_pack.id.to_string(),
+            document.metadata.title,
+            document.metadata.description,
+            serde_json::to_string(&document)?,
+            CREATED,
+        ],
+    )?;
+    connection.execute(
+        "INSERT INTO scenario_history_state (scenario_id, cursor_sequence, branch_generation) VALUES (?1, 0, 0)",
+        [scenario_id.to_string()],
+    )?;
+    for (run_id, status, error_json) in [
+        (
+            running_id,
+            "running",
+            Some(r#"{"safe":"preserved-running"}"#),
+        ),
+        (
+            terminal_id,
+            "completed",
+            Some(r#"{"safe":"preserved-terminal"}"#),
+        ),
+    ] {
+        connection.execute(
+            "INSERT INTO solve_runs (id, scenario_id, scenario_revision, input_hash, backend_id, backend_version, status, options_json, started_at, error_json) VALUES (?1, ?2, 0, 'legacy-hash', 'legacy.backend', '1', ?3, '{\"legacy\":true}', ?4, ?5)",
+            params![
+                run_id.to_string(),
+                scenario_id.to_string(),
+                status,
+                CREATED,
+                error_json,
+            ],
+        )?;
+    }
+    connection.execute(
+        "INSERT INTO solutions (id, solve_run_id, scenario_id, scenario_revision, status, accepted, normalized_solution_json, score_json, verification_report_json, created_at) VALUES (?1, ?2, ?3, 0, 'accepted', 1, '{\"legacy\":true}', '{\"legacy\":true}', '{\"legacy\":true}', ?4)",
+        params![
+            SolutionId::from_uuid(Uuid::parse_str(
+                "018f47f2-e880-7000-8003-000000000040"
+            )?)
+            .to_string(),
+            terminal_id.to_string(),
+            scenario_id.to_string(),
+            CREATED,
+        ],
+    )?;
+    drop(connection);
+
+    let (store, outcome) = SqliteScenarioStore::open(&path).await?;
+    assert_eq!(outcome.applied_migrations, vec![2]);
+    assert!(outcome.recovery.interrupted_solve_run_ids.is_empty());
+    drop(store);
+    let connection = Connection::open(&path)?;
+    let running: (String, String, Option<String>) = connection.query_row(
+        "SELECT status, options_json, error_json FROM solve_runs WHERE id = ?1",
+        [running_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let terminal: (String, String, Option<String>) = connection.query_row(
+        "SELECT status, options_json, error_json FROM solve_runs WHERE id = ?1",
+        [terminal_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let solution: (String, i64, String) = connection.query_row(
+        "SELECT status, accepted, normalized_solution_json FROM solutions",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(
+        running,
+        (
+            "legacy_interrupted".to_owned(),
+            r#"{"legacy":true}"#.to_owned(),
+            Some(r#"{"safe":"preserved-running"}"#.to_owned()),
+        )
+    );
+    assert_eq!(
+        terminal,
+        (
+            "legacy_terminal".to_owned(),
+            r#"{"legacy":true}"#.to_owned(),
+            Some(r#"{"safe":"preserved-terminal"}"#.to_owned()),
+        )
+    );
+    assert_eq!(
+        solution,
+        (
+            "legacy_unverified".to_owned(),
+            0,
+            r#"{"legacy":true}"#.to_owned(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn startup_applies_required_pragmas_schema_and_indexes() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
     let (store, outcome) = SqliteScenarioStore::open(&path).await?;
-    assert_eq!(outcome.schema_version, 1);
+    assert_eq!(outcome.schema_version, 2);
     let diagnostics = store.diagnostics().await?;
     assert!(diagnostics.foreign_keys);
     assert_eq!(diagnostics.journal_mode, "wal");
     assert_eq!(diagnostics.synchronous, 1);
     assert_eq!(diagnostics.busy_timeout_ms, 5_000);
     assert!(!diagnostics.trusted_schema);
-    assert_eq!(diagnostics.schema_version, 1);
+    assert_eq!(diagnostics.sqlite_length_limit_bytes, 128 * 1024 * 1024);
+    assert_eq!(diagnostics.schema_version, 2);
     for table in [
         "app_metadata",
         "scenarios",
@@ -3457,6 +4655,7 @@ async fn startup_applies_required_pragmas_schema_and_indexes() -> Result<(), Box
         "scenario_history_state",
         "solve_runs",
         "solutions",
+        "counterfactual_jobs",
         "app_settings",
         "portable_library_metadata",
         "ai_conversations",
@@ -3479,6 +4678,9 @@ async fn startup_applies_required_pragmas_schema_and_indexes() -> Result<(), Box
         "scenarios_by_recency",
         "solve_runs_by_scenario",
         "accepted_solutions_by_scenario",
+        "canonical_solution_by_run",
+        "counterfactual_jobs_by_scenario",
+        "solve_runs_by_request_id",
         "ai_conversations_by_scenario",
         "command_journal_by_history",
     ] {
@@ -3524,12 +4726,42 @@ async fn released_migration_checksum_mismatch_is_rejected() -> Result<(), Box<dy
 }
 
 #[tokio::test]
+async fn v2_checksum_and_registry_pragma_disagreement_are_rejected() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let checksum_path = directory.path().join("checksum.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&checksum_path).await?;
+    drop(store);
+    let connection = Connection::open(&checksum_path)?;
+    connection.execute(
+        "UPDATE schema_migrations SET checksum = 'changed-v2' WHERE version = 2",
+        [],
+    )?;
+    drop(connection);
+    assert!(matches!(
+        SqliteScenarioStore::open(&checksum_path).await,
+        Err(StoreError::MigrationChanged { version: 2 })
+    ));
+
+    let registry_path = directory.path().join("registry.sqlite3");
+    let (store, _) = SqliteScenarioStore::open(&registry_path).await?;
+    drop(store);
+    let connection = Connection::open(&registry_path)?;
+    connection.pragma_update(None, "user_version", 1)?;
+    drop(connection);
+    assert!(matches!(
+        SqliteScenarioStore::open(&registry_path).await,
+        Err(StoreError::Integrity(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn newer_database_is_rejected_without_schema_mutation() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
     let connection = Connection::open(&path)?;
     connection
-        .execute_batch("CREATE TABLE future_marker (value TEXT); PRAGMA user_version = 2;")?;
+        .execute_batch("CREATE TABLE future_marker (value TEXT); PRAGMA user_version = 3;")?;
     drop(connection);
     let bytes_before = std::fs::read(&path)?;
     let wal_path = directory.path().join("library.sqlite3-wal");
@@ -3541,8 +4773,8 @@ async fn newer_database_is_rejected_without_schema_mutation() -> Result<(), Box<
     assert!(matches!(
         result,
         Err(StoreError::NewerSchema {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         })
     ));
     assert_eq!(std::fs::read(&path)?, bytes_before);
@@ -3590,7 +4822,8 @@ async fn migration_failpoint_rolls_back_schema_and_registry() -> Result<(), Box<
 }
 
 #[tokio::test]
-async fn startup_marks_running_solve_runs_interrupted() -> Result<(), Box<dyn Error>> {
+async fn startup_does_not_fabricate_a_manifest_for_an_invalid_or_legacy_run()
+-> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("library.sqlite3");
     let scenario_id = scenario_id(6)?;
@@ -3612,7 +4845,7 @@ async fn startup_marks_running_solve_runs_interrupted() -> Result<(), Box<dyn Er
     drop(connection);
 
     let (reopened, outcome) = SqliteScenarioStore::open(&path).await?;
-    assert_eq!(outcome.recovery.interrupted_solve_run_ids, vec![run_id]);
+    assert!(outcome.recovery.interrupted_solve_run_ids.is_empty());
     let persisted = reopened.get_project(scenario_id).await?;
     assert_eq!(persisted.summary.revision, Revision::INITIAL);
     assert_eq!(persisted.document, expected);
@@ -3624,9 +4857,9 @@ async fn startup_marks_running_solve_runs_interrupted() -> Result<(), Box<dyn Er
             [run_id.to_string()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-    assert_eq!(status, "interrupted");
-    assert!(finished_at.is_some());
-    assert_eq!(error_json.as_deref(), Some("{\"code\":\"interrupted\"}"));
+    assert_eq!(status, "running");
+    assert!(finished_at.is_none());
+    assert!(error_json.is_none());
     drop(reopened);
     Ok(())
 }
