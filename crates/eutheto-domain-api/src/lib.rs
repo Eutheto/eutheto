@@ -7,11 +7,15 @@ mod schema;
 
 pub use schema::{ContractJsonLimits, validate_contract_schema, validate_contract_value};
 
-use eutheto_domain_ir::{AcceptedResult, NormalizedSolution, ScoreVector, VerificationReport};
+use eutheto_domain_ir::{
+    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
+    ExplanationCapability, NormalizedSolution, ScoreVector, VerificationContextV1,
+    VerificationReport, VerificationScope,
+};
 use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, PlanningProblem};
 use eutheto_types::{
     CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, PackId,
-    ScenarioDocument, SolutionId, ValidationIssue,
+    ScenarioDocument, SolutionId, SolveBudgetView, ValidationIssue,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -83,6 +87,9 @@ pub struct DomainPackDescriptor {
     pub scenario_versions: ScenarioVersionDescriptor,
     pub icon_id: String,
     pub capabilities: BTreeSet<DomainCapability>,
+    /// Canonical explanation kinds this pack can render. `Counterfactual` also gates temporary
+    /// condition compilation.
+    pub explanation_capabilities: BTreeSet<ExplanationCapability>,
     pub portable_schema_version: u32,
     pub portable_capabilities: BTreeSet<String>,
     pub share_result_schema_version: u32,
@@ -307,6 +314,17 @@ pub struct CompileContext {
     pub planning_limits: PlanningIrLimitsV1,
 }
 
+/// Immutable inputs for one bounded temporary counterfactual compilation.
+///
+/// This context is deliberately nonserializable. `budget` is a shared view of the caller's
+/// original deadline and cancellation state; packs must not replace it with a fresh deadline.
+#[derive(Clone)]
+pub struct CounterfactualCompileContext<'a> {
+    pub base_problem: &'a PlanningProblem,
+    pub compile_context: &'a CompileContext,
+    pub budget: SolveBudgetView,
+}
+
 /// Pack validation output in deterministic issue order.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -442,14 +460,6 @@ pub struct DomainView {
     pub data: Value,
 }
 
-/// Stable structured explanation contribution.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DomainExplanation {
-    pub message_key: String,
-    pub parameters: BTreeMap<String, Value>,
-}
-
 /// Object-safe contract implemented by compiled-in packs.
 pub trait DomainPack: Send + Sync {
     /// Returns this pack's descriptor.
@@ -521,7 +531,19 @@ pub trait DomainPack: Send + Sync {
         solution_id: SolutionId,
     ) -> Result<NormalizedSolution, DomainPackError>;
 
-    /// Verifies a normalized solution against its scenario document.
+    /// Declares the required-rule identities and semantic bindings for a scenario revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the document is invalid or its verification scope cannot be built.
+    fn verification_scope(
+        &self,
+        document: &ScenarioDocument,
+        scenario_revision: u64,
+    ) -> Result<VerificationScope, DomainPackError>;
+
+    /// Verifies required rules against a normalized solution and embeds the separately
+    /// recomputed authoritative score without deriving rule outcomes from it.
     ///
     /// # Errors
     ///
@@ -530,6 +552,8 @@ pub trait DomainPack: Send + Sync {
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        context: &VerificationContextV1,
+        authoritative_score: &ScoreVector,
     ) -> Result<VerificationReport, DomainPackError>;
 
     /// Computes the pack-defined score vector for a solution.
@@ -598,17 +622,39 @@ pub trait DomainPack: Send + Sync {
         view_id: &str,
     ) -> Result<DomainView, DomainPackError>;
 
-    /// Builds the requested structured explanation.
+    /// Renders validated typed evidence as inert localization messages.
+    ///
+    /// The request kind must be declared in `descriptor().explanation_capabilities`. Implementors
+    /// must validate the document and request and must return
+    /// [`DomainPackError::UnsupportedExplanationCapability`] when the capability is absent.
     ///
     /// # Errors
     ///
-    /// Returns an error if the document, optional solution, or request identifier is invalid.
-    fn explain(
+    /// Returns an error if the document or evidence request is invalid or unsupported.
+    fn render_evidence(
         &self,
         document: &ScenarioDocument,
-        solution: Option<&NormalizedSolution>,
-        request_id: &str,
-    ) -> Result<DomainExplanation, DomainPackError>;
+        request: &EvidenceRenderRequestV1,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError>;
+
+    /// Recompiles a validated temporary condition against an exact baseline model.
+    ///
+    /// `Counterfactual` must be declared in `descriptor().explanation_capabilities`. Implementors
+    /// must observe the shared budget before and during work, preserve baseline semantics except
+    /// for additive condition metadata, provenance, and constraints, and reject a recompiled
+    /// baseline whose canonical hash differs from `context.base_problem`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DomainPackError::Cancelled`] or [`DomainPackError::BudgetExpired`] when observed,
+    /// [`DomainPackError::UnsupportedExplanationCapability`] when unsupported, or another typed
+    /// pack error when the document, condition, baseline, or derived model is invalid.
+    fn compile_counterfactual(
+        &self,
+        document: &ScenarioDocument,
+        condition: &CounterfactualConditionV1,
+        context: &CounterfactualCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError>;
 }
 
 struct Registration {
@@ -786,6 +832,10 @@ pub enum DomainPackError {
     InvalidPayload { path: String, message: String },
     #[error("domain operation was cancelled")]
     Cancelled,
+    #[error("domain operation budget expired")]
+    BudgetExpired,
+    #[error("unsupported explanation capability {0:?}")]
+    UnsupportedExplanationCapability(ExplanationCapability),
     #[error("domain contract violation: {0}")]
     Contract(String),
 }

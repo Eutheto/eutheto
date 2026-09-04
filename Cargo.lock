@@ -916,6 +916,7 @@ dependencies = [
  "clap",
  "dirs",
  "eutheto-core",
+ "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-import",
  "eutheto-store",
@@ -949,6 +950,7 @@ dependencies = [
  "eutheto-command",
  "eutheto-domain-api",
  "eutheto-domain-ir",
+ "eutheto-explain",
  "eutheto-export",
  "eutheto-import",
  "eutheto-planning-ir",
@@ -956,6 +958,8 @@ dependencies = [
  "eutheto-solver-router",
  "eutheto-store",
  "eutheto-types",
+ "eutheto-verify",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -1001,10 +1005,20 @@ dependencies = [
 name = "eutheto-domain-ir"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "eutheto-types",
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "eutheto-explain"
+version = "0.1.0"
+dependencies = [
+ "eutheto-domain-ir",
+ "eutheto-planning-ir",
+ "eutheto-types",
 ]
 
 [[package]]
@@ -1129,6 +1143,7 @@ name = "eutheto-store"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-import",
  "eutheto-types",
@@ -1154,6 +1169,20 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "eutheto-verify"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "eutheto-domain-api",
+ "eutheto-domain-ir",
+ "eutheto-planning-ir",
+ "eutheto-solver-api",
+ "eutheto-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,15 @@
+[package]
+name = "eutheto-explain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+eutheto-domain-ir = { path = "../eutheto-domain-ir" }
+eutheto-planning-ir = { path = "../eutheto-planning-ir" }
+eutheto-types = { path = "../eutheto-types" }

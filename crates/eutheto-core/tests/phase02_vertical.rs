@@ -1,24 +1,26 @@
 use eutheto_command::{OFFICIAL_TEST_PACK_ID, official_registry};
-use eutheto_domain_api::{CompileContext, DomainPack};
-use eutheto_domain_ir::{AssignmentValue, NormalizedSolution, ScoreVector, VerificationReport};
+use eutheto_core::RouterCandidateReviewer;
+use eutheto_domain_api::CompileContext;
+use eutheto_domain_ir::AssignmentValue;
 use eutheto_planning_ir::{
-    CandidateValues, PlanningIrLimitsV1, PlanningProblem, PlanningProblemSummary, Variable,
-    canonical_ir_hash, summarize, validate,
+    CandidateValues, PlanningIrLimitsV1, PlanningProblemSummary, Variable, canonical_ir_hash,
+    summarize, validate,
 };
 use eutheto_solver_api::*;
 use eutheto_solver_router::*;
 use eutheto_types::{
     BackendId, BackendSelection, CancellationToken, DurationMillis, ExplanationMode,
-    FixedMonotonicClock, PackId, ParentSolveBudget, PreservationPolicy, ReproducibilityMode,
-    ResourceLimits, ScenarioDocument, SolutionId, SolveMode, SolveOptions, SolveStatus,
+    FixedIdGenerator, FixedMonotonicClock, PackId, ParentSolveBudget, PreservationPolicy,
+    ReproducibilityMode, ResourceLimits, ScenarioDocument, SolveMode, SolveOptions, SolveStatus,
     WorkerThreadPolicy,
 };
+use eutheto_verify::{AcceptanceDecision, BackendObjectiveReconciliation, SystemVerificationClock};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use uuid::Uuid;
 
 const SCENARIO_ID: &str = "0195a5e4-7c00-7000-8000-000000000021";
 const ENTITY_ID: &str = "018f25a7-8b3c-7d11-8000-000000000021";
@@ -34,13 +36,19 @@ type TestResult = Result<(), Box<dyn Error>>;
 
 struct ExactTestBackend {
     descriptor: SolverDescriptor,
+    runtime_identity: BackendRuntimeIdentity,
     matrix: CapabilityMatrix,
     invocations: AtomicU32,
+    candidate_target: i64,
 }
 
 impl SolverBackend for ExactTestBackend {
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
+    }
+
+    fn runtime_identity(&self) -> &BackendRuntimeIdentity {
+        &self.runtime_identity
     }
 
     fn compatibility(
@@ -72,7 +80,9 @@ impl SolverBackend for ExactTestBackend {
                         values.booleans.insert(variable.id.clone(), true);
                     }
                     Variable::Integer(variable) => {
-                        values.integers.insert(variable.id.clone(), 3);
+                        values
+                            .integers
+                            .insert(variable.id.clone(), self.candidate_target);
                     }
                     Variable::Interval(_) => {
                         return Err(BackendError::new(
@@ -110,53 +120,6 @@ impl SolverBackend for ExactTestBackend {
                 },
             })
         })
-    }
-}
-
-struct ReviewingCandidate<'a> {
-    pack: &'a dyn DomainPack,
-    problem: &'a PlanningProblem,
-    document: &'a ScenarioDocument,
-    solution_id: SolutionId,
-    solution: Option<NormalizedSolution>,
-    verification: Option<VerificationReport>,
-    score: Option<ScoreVector>,
-    observed_raw_objective: Option<i64>,
-}
-
-impl CandidateReviewer for ReviewingCandidate<'_> {
-    fn review(&mut self, _backend_id: &BackendId, candidate: &BackendCandidate) -> CandidateReview {
-        self.observed_raw_objective = candidate
-            .objective
-            .as_ref()
-            .and_then(|objective| objective.objective_values.first().copied());
-        let Ok(solution) = self
-            .pack
-            .project(self.problem, &candidate.values, self.solution_id)
-        else {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.projection_failed".to_owned(),
-            };
-        };
-        let Ok(verification) = self.pack.verify(self.document, &solution) else {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.failed".to_owned(),
-            };
-        };
-        let Ok(score) = self.pack.score(self.document, &solution) else {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.score_failed".to_owned(),
-            };
-        };
-        if !verification.feasible || verification.score.as_ref() != Some(&score) {
-            return CandidateReview::VerificationFailed {
-                diagnostic_code: "verification.rejected".to_owned(),
-            };
-        }
-        self.solution = Some(solution);
-        self.verification = Some(verification);
-        self.score = Some(score);
-        CandidateReview::Verified
     }
 }
 
@@ -265,6 +228,7 @@ fn support_features() -> Result<Vec<SupportFeature>, SupportMatrixError> {
 fn test_registry(
     backend_id: &str,
     unsupported_feature: Option<&str>,
+    candidate_target: i64,
 ) -> Result<(SolverRegistry, Arc<ExactTestBackend>), Box<dyn Error>> {
     let backend_id = BackendId::new(backend_id)?;
     let features = support_features()?;
@@ -316,8 +280,19 @@ fn test_registry(
         }],
         Vec::new(),
     )?;
+    let runtime_identity = BackendRuntimeIdentity::new(
+        descriptor.id.clone(),
+        descriptor.version.clone(),
+        descriptor.adapter_version.clone(),
+        "1.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        1,
+        0,
+    )?;
     let backend = Arc::new(ExactTestBackend {
         descriptor,
+        candidate_target,
+        runtime_identity,
         matrix: matrix.clone(),
         invocations: AtomicU32::new(0),
     });
@@ -330,6 +305,8 @@ fn duration(value: u64) -> Result<DurationMillis, BackendError> {
 }
 
 #[tokio::test]
+// This vertical test keeps routing, verification, timing, and accepted-result assertions together.
+#[allow(clippy::too_many_lines)]
 async fn official_pack_candidate_is_projected_verified_and_scored_before_router_acceptance()
 -> TestResult {
     let domain_registry = official_registry()?;
@@ -349,7 +326,7 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
     assert_eq!(summary.projection_count, 2);
     let problem = Arc::new(problem);
 
-    let (solver_registry, backend) = test_registry(EXACT_BACKEND_ID, None)?;
+    let (solver_registry, backend) = test_registry(EXACT_BACKEND_ID, None, 3)?;
     let options = solve_options(EXACT_BACKEND_ID)?;
     assert!(backend.compatibility(&summary, &options).compatible());
     let clock = FixedMonotonicClock::default();
@@ -359,16 +336,17 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
         CancellationToken::new(),
     )?;
     let mut progress = Progress;
-    let mut reviewer = ReviewingCandidate {
+    let verification_clock = SystemVerificationClock::default();
+    let id_generator = FixedIdGenerator::single(Uuid::parse_str(SOLUTION_ID)?);
+    let mut reviewer = RouterCandidateReviewer::new(
         pack,
-        problem: problem.as_ref(),
-        document: &source,
-        solution_id: SolutionId::from_str(SOLUTION_ID)?,
-        solution: None,
-        verification: None,
-        score: None,
-        observed_raw_objective: None,
-    };
+        &source,
+        context.scenario_revision,
+        problem.as_ref(),
+        &verification_clock,
+        &id_generator,
+    )
+    .map_err(|alarm| std::io::Error::other(alarm.diagnostic_code))?;
     let execution = SolverRouter::new(&solver_registry)
         .execute(
             problem.clone(),
@@ -386,7 +364,23 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
     assert_eq!(execution.terminal_status, SolveStatus::Feasible);
     assert_eq!(execution.invocation_count, 1);
     assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
-    assert_eq!(reviewer.observed_raw_objective, Some(RAW_BACKEND_OBJECTIVE));
+    assert_eq!(
+        execution.first_verified_feasible_milliseconds,
+        Some(DurationMillis::ZERO)
+    );
+    let decision = reviewer.decision().ok_or("acceptance decision missing")?;
+    let AcceptanceDecision::Accepted {
+        result,
+        objective_reconciliation,
+        ..
+    } = decision
+    else {
+        return Err(format!("expected accepted decision, got {decision:?}").into());
+    };
+    assert_eq!(
+        *objective_reconciliation,
+        BackendObjectiveReconciliation::Mismatch
+    );
     assert_eq!(
         execution
             .selected_candidate
@@ -396,10 +390,7 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
         Some(&RAW_BACKEND_OBJECTIVE)
     );
 
-    let solution = reviewer
-        .solution
-        .as_ref()
-        .ok_or("verified solution missing")?;
+    let solution = &result.solution;
     let enabled_assignment = format!("official.test.assignment.enabled.{ENTITY_ID}");
     let target_assignment = format!("official.test.assignment.target.{ENTITY_ID}");
     assert_eq!(
@@ -418,19 +409,73 @@ async fn official_pack_candidate_is_projected_verified_and_scored_before_router_
             .map(|assignment| &assignment.value),
         Some(&AssignmentValue::Integer(3))
     );
-    let score = reviewer
-        .score
-        .as_ref()
-        .ok_or("authoritative score missing")?;
+    let score = &result.verification.score;
     assert_eq!(score.feasibility, 0);
     assert_eq!(score.levels[0].value, 3);
     assert_ne!(score.levels[0].value, RAW_BACKEND_OBJECTIVE);
+    assert!(result.verification.accepted);
+    assert_eq!(result.verification.required_rule_results.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn domain_invalid_backend_candidate_is_quarantined_before_result_availability() -> TestResult
+{
+    let domain_registry = official_registry()?;
+    let pack = domain_registry.require(&PackId::new(OFFICIAL_TEST_PACK_ID)?)?;
+    let source = document()?;
+    let context = compile_context();
+    let problem = pack.compile(&source, &context)?;
+    validate(&problem, context.planning_limits)?;
+    let problem = Arc::new(problem);
+
+    // The candidate remains structurally well-typed, but target zero contradicts the enabled
+    // assignment and the synthetic domain's required rule.
+    let (solver_registry, backend) = test_registry("tests.phase04-invalid", None, 0)?;
+    let options = solve_options("tests.phase04-invalid")?;
+    let parent = ParentSolveBudget::new(
+        DurationMillis::new(1_000)?,
+        Arc::new(FixedMonotonicClock::default()),
+        CancellationToken::new(),
+    )?;
+    let mut progress = Progress;
+    let verification_clock = SystemVerificationClock::default();
+    let id_generator = FixedIdGenerator::single(Uuid::parse_str(SOLUTION_ID)?);
+    let mut reviewer = RouterCandidateReviewer::new(
+        pack,
+        &source,
+        context.scenario_revision,
+        problem.as_ref(),
+        &verification_clock,
+        &id_generator,
+    )
+    .map_err(|alarm| std::io::Error::other(alarm.diagnostic_code))?;
+
+    let execution = SolverRouter::new(&solver_registry)
+        .execute(
+            problem.clone(),
+            options,
+            &parent,
+            &mut progress,
+            &mut reviewer,
+        )
+        .await;
+
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
+    assert_eq!(execution.invocation_count, 1);
     assert_eq!(
-        reviewer
-            .verification
-            .as_ref()
-            .and_then(|report| report.score.as_ref()),
-        Some(score)
+        execution.terminal_reason,
+        ExecutionTerminalReason::VerificationQuarantined
+    );
+    assert!(execution.selected_candidate.is_none());
+    assert!(execution.first_verified_feasible_milliseconds.is_none());
+    let decision = reviewer.decision().ok_or("quarantine decision missing")?;
+    let AcceptanceDecision::Quarantined { alarm, .. } = decision else {
+        return Err(format!("expected quarantined decision, got {decision:?}").into());
+    };
+    assert_eq!(
+        alarm.category,
+        eutheto_verify::CorrectnessAlarmCategory::RequiredRuleRejected
     );
     Ok(())
 }
@@ -443,7 +488,7 @@ async fn incompatible_backend_reports_exact_gap_and_is_never_invoked() -> TestRe
     let problem = pack.compile(&document()?, &context)?;
     let summary = summarize(&problem, context.planning_limits)?;
     let (solver_registry, backend) =
-        test_registry(INCOMPATIBLE_BACKEND_ID, Some(UNSUPPORTED_FEATURE_ID))?;
+        test_registry(INCOMPATIBLE_BACKEND_ID, Some(UNSUPPORTED_FEATURE_ID), 3)?;
     let options = solve_options(INCOMPATIBLE_BACKEND_ID)?;
     let compatibility = backend.compatibility(&summary, &options);
     assert_eq!(compatibility.level, CompatibilityLevel::Unsupported);

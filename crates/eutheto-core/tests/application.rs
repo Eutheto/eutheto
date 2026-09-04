@@ -1,6 +1,23 @@
+use eutheto_command::official_registry;
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
-    BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp, ProjectScope,
+    BackupAssetSelection, BackupSelection, COUNTERFACTUAL_API_SCHEMA_VERSION, DeferredCapability,
+    EuthetoApp, EventSubscription, ProjectScope, SOLUTION_API_SCHEMA_VERSION,
+    SolutionCancelCounterfactualDtoV1, SolutionCancelCounterfactualRequestV1,
+    SolutionCompareRequestV1, SolutionExplainRequestV1, SolutionExplanationDtoV1,
+    SolutionListRequestV1, SolutionSelectRequestV1, SolutionStartCounterfactualDtoV1,
+    SolutionStartCounterfactualRequestV1, SolutionSummaryRequestV1, SolutionVerifyRequestV1,
+    SolutionViewRequestV1,
+};
+use eutheto_domain_api::CompileContext;
+use eutheto_domain_ir::{
+    AcceptedResult, AcceptedResultRefV1, AssignmentValue,
+    COUNTERFACTUAL_REQUEST_SEMANTICS_SCHEMA_VERSION, CounterfactualConditionPayloadV1,
+    CounterfactualConditionV1, CounterfactualFailureKind, CounterfactualJobRecordV1,
+    CounterfactualJobRequestV1, CounterfactualJobState, CounterfactualRequestSemanticsV1,
+    DomainAssignmentId, ExplanationKind, ExplanationRequestSubjectV1, ExplanationRequestV1,
+    RunManifestV1, RunPhaseTimingsV1, RunTerminalOutcomeV1, VerificationContextV1,
+    VerificationValue, blake3_hex,
 };
 use eutheto_export::{
     BackupSections, CHECKSUMS_PATH, CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, FullBackupSnapshot,
@@ -13,16 +30,26 @@ use eutheto_import::{
     InspectionPolicy, MigrationRegistries, PreviewBinding, RestoreAuthorization, RestoreMode,
     SafetyBackupEvidence, StagedDisposition, StagedImport, StagedScenario, inspect_bundle,
 };
+use eutheto_planning_ir::{
+    CandidateValues, PLANNING_IR_SCHEMA_VERSION, PlanningIrLimitsV1, PlanningProblemSummary,
+    ProjectionExpression, Variable, canonical_ir_hash,
+};
+use eutheto_solver_api::*;
 #[cfg(debug_assertions)]
 use eutheto_store::Failpoint;
-use eutheto_store::{SqliteScenarioStore, StagedLibraryApply};
+use eutheto_store::{
+    NewSolveRunV1, SqliteScenarioStore, StagedLibraryApply, StoredAcceptedResultV2,
+};
 use eutheto_types::{
-    ActorRef, AddEntity, AppError, Clock, CommandBatch, CommandEnvelope, CommandId, CommandSource,
-    DirectoryAvailabilityLabel, DomainPackRef, EventPayload, EventTopic, FixedClock,
+    ActorRef, AddEntity, AppError, BackendId, BackendSelection, Clock, CommandBatch,
+    CommandEnvelope, CommandId, CommandSource, CounterfactualJobId, DirectoryAvailabilityLabel,
+    DomainPackRef, DurationMillis, EventPayload, EventTopic, ExplanationMode, FixedClock,
     FixedIdGenerator, GapPolicy, Horizon, IanaTimeZone, IdGenerationError, IdGenerator, LocaleTag,
-    OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PersonId, PortableAsset, RequestId, Revision,
-    Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand,
-    ScenarioSettings, SolveRunId, SupportPreviewDto, SystemIdGenerator, UnitSystem,
+    OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PersonId, PortableAsset, PreservationPolicy,
+    ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
+    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioId,
+    ScenarioSettings, SolutionId, SolveMode, SolveOptions, SolveRunId, SolveStatus,
+    SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem, WorkerThreadPolicy,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -166,6 +193,7 @@ fn dependencies_at(directory: &TempDir, now: &str) -> Result<AppDependencies, Bo
             safety_backups: directory.path().join("backups"),
         },
         clock: Arc::new(FixedClock::new(timestamp(now)?)),
+        monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
         ids: Arc::new(SystemIdGenerator),
         cancellation: eutheto_types::CancellationToken::default(),
     })
@@ -283,10 +311,7 @@ fn with_unknown_pack_and_invalid_domain(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn
     Ok(writer.finish()?.into_inner())
 }
 
-async fn create_project(
-    app: &EuthetoApp,
-    title: &str,
-) -> Result<eutheto_types::ScenarioId, Box<dyn Error>> {
+async fn create_project(app: &EuthetoApp, title: &str) -> Result<ScenarioId, Box<dyn Error>> {
     let result = app
         .execute(AppCommand::CreateProject {
             request_id: request_id()?,
@@ -307,7 +332,7 @@ async fn create_project(
 }
 
 fn add_entity_envelope(
-    scenario_id: eutheto_types::ScenarioId,
+    scenario_id: ScenarioId,
     expected_revision: Revision,
     _name: &str,
 ) -> Result<CommandEnvelope, Box<dyn Error>> {
@@ -335,7 +360,7 @@ fn add_entity_envelope(
 
 async fn scenario_view(
     app: &EuthetoApp,
-    scenario_id: eutheto_types::ScenarioId,
+    scenario_id: ScenarioId,
 ) -> Result<eutheto_types::ScenarioViewDto, Box<dyn Error>> {
     match app
         .query(AppQuery::ScenarioView(scenario_id))
@@ -345,6 +370,442 @@ async fn scenario_view(
         AppQueryResult::Scenario(view) => Ok(*view),
         other => Err(format!("unexpected scenario result: {other:?}").into()),
     }
+}
+
+fn solution_test_id(prefix: u16, suffix: u16) -> Result<Uuid, Box<dyn Error>> {
+    Ok(Uuid::parse_str(&format!(
+        "018f47f2-e880-7000-{prefix:04x}-{suffix:012x}"
+    ))?)
+}
+
+fn solution_test_options() -> Result<SolveOptions, Box<dyn Error>> {
+    Ok(SolveOptions {
+        backend: BackendSelection::Specific(BackendId::new("synthetic.test")?),
+        mode: SolveMode::Balanced,
+        time_limit_milliseconds: DurationMillis::new(5_000)?,
+        memory_limit_bytes: None,
+        worker_threads: WorkerThreadPolicy::Exact(1),
+        random_seed: 7,
+        solution_limit: Some(1),
+        stop_after_first_feasible: true,
+        collect_intermediate_solutions: false,
+        explanation_mode: ExplanationMode::Standard,
+        preserve_existing: PreservationPolicy::None,
+        reproducibility: ReproducibilityMode::Deterministic,
+        resource_limits: ResourceLimits {
+            max_entities: 1_000,
+            max_rules: 1_000,
+            max_variables: 10_000,
+            max_constraints: 10_000,
+        },
+    })
+}
+struct CounterfactualTestBackend {
+    descriptor: SolverDescriptor,
+    runtime_identity: BackendRuntimeIdentity,
+    matrix: CapabilityMatrix,
+    wait_for_cancel: bool,
+    invocations: AtomicUsize,
+    entered: AtomicBool,
+    observed_cancel: AtomicBool,
+}
+
+impl SolverBackend for CounterfactualTestBackend {
+    fn descriptor(&self) -> &SolverDescriptor {
+        &self.descriptor
+    }
+
+    fn runtime_identity(&self) -> &BackendRuntimeIdentity {
+        &self.runtime_identity
+    }
+
+    fn compatibility(
+        &self,
+        summary: &PlanningProblemSummary,
+        options: &SolveOptions,
+    ) -> CompatibilityReport {
+        compatibility_for(&self.matrix, &self.descriptor.id, summary, options).unwrap_or_else(
+            |_| CompatibilityReport {
+                level: CompatibilityLevel::Unsupported,
+                unsupported_features: Vec::new(),
+                warnings: Vec::new(),
+                estimated_translation_cost: None,
+            },
+        )
+    }
+
+    fn solve<'a>(
+        &'a self,
+        request: &'a SolveRequest,
+        output: &'a mut dyn BackendOutputSink,
+    ) -> BackendSolveFuture<'a> {
+        Box::pin(async move {
+            self.invocations.fetch_add(1, Ordering::SeqCst);
+            self.entered.store(true, Ordering::SeqCst);
+            if self.wait_for_cancel {
+                while !request.dispatch_budget().child_view().is_cancelled() {
+                    tokio::task::yield_now().await;
+                }
+                self.observed_cancel.store(true, Ordering::SeqCst);
+                return counterfactual_backend_outcome(
+                    request,
+                    &self.runtime_identity,
+                    BackendTerminationReason::Cancelled,
+                );
+            }
+
+            let mut values = CandidateValues::default();
+            for variable in &request.problem().variables {
+                match variable {
+                    Variable::Boolean(variable) => {
+                        values.booleans.insert(variable.id.clone(), false);
+                    }
+                    Variable::Integer(variable) => {
+                        values.integers.insert(variable.id.clone(), 0);
+                    }
+                    Variable::Interval(_) => {
+                        return Err(BackendError::new(
+                            "tests.counterfactual.unexpected_interval",
+                            "The official counterfactual fixture unexpectedly contained an interval.",
+                        )?);
+                    }
+                }
+            }
+            output.submit_candidate(CandidateSubmission {
+                values,
+                observed_after_milliseconds: DurationMillis::ZERO,
+                objective: None,
+                evidence_refs: Vec::new(),
+            })?;
+            counterfactual_backend_outcome(
+                request,
+                &self.runtime_identity,
+                BackendTerminationReason::CandidateFound,
+            )
+        })
+    }
+}
+
+fn counterfactual_backend_outcome(
+    request: &SolveRequest,
+    identity: &BackendRuntimeIdentity,
+    termination: BackendTerminationReason,
+) -> Result<BackendSolveOutcome, BackendError> {
+    let summary = request.summary();
+    let candidate_found = termination == BackendTerminationReason::CandidateFound;
+    let random_seed = i32::try_from(request.options().random_seed)
+        .map_err(|_| BackendError::from(OutputError::UnsafeDiagnosticLine))?;
+    Ok(BackendSolveOutcome {
+        backend_id: request.backend_id().clone(),
+        model_hash: request.model_hash().to_owned(),
+        solve_fingerprint: request.solve_fingerprint().to_owned(),
+        termination,
+        evidence: BackendTerminationEvidence {
+            remaining_at_dispatch_milliseconds: request.dispatch_budget().remaining_at_dispatch(),
+            backend_limit_milliseconds: request.dispatch_budget().backend_limit(),
+            elapsed_milliseconds: DurationMillis::ZERO,
+            first_incumbent_milliseconds: candidate_found.then_some(DurationMillis::ZERO),
+            objective: None,
+            evidence_refs: Vec::new(),
+            execution: Some(BackendExecutionEvidence {
+                timings: BackendTimingEvidence {
+                    translation_serialization_milliseconds: DurationMillis::ZERO,
+                    worker_startup_milliseconds: None,
+                    handshake_milliseconds: None,
+                    solver_milliseconds: Some(DurationMillis::ZERO),
+                    protocol_decode_milliseconds: None,
+                },
+                model_counts: BackendModelCountEvidence {
+                    planning_variable_count: summary.variable_count,
+                    planning_constraint_count: summary.constraint_count,
+                    translated_variable_count: summary.variable_count,
+                    translated_constraint_count: summary.constraint_count,
+                },
+                worker_statistics: None,
+                reproducibility: BackendReproducibilityEvidence {
+                    backend_version: identity.backend_version().to_owned(),
+                    adapter_version: identity.adapter_version().to_owned(),
+                    worker_version: identity.worker_version().to_owned(),
+                    engine_version: identity.solver_version().to_owned(),
+                    protocol_major: identity.protocol_major(),
+                    protocol_minor: identity.protocol_minor(),
+                    applied_options: request.options().clone(),
+                    applied_parameters: BackendAppliedParameterEvidence {
+                        wall_time_milliseconds: Some(request.dispatch_budget().backend_limit()),
+                        memory_limit_bytes: request.options().memory_limit_bytes,
+                        worker_threads: 1,
+                        random_seed,
+                        stop_after_first_feasible: request.options().stop_after_first_feasible,
+                        emit_intermediate_solutions: request
+                            .options()
+                            .collect_intermediate_solutions,
+                        log_search_progress: false,
+                        deterministic_test_profile: true,
+                    },
+                    model_fingerprint_sha256: "a".repeat(64),
+                    applied_parameters_sha256: None,
+                },
+            }),
+        },
+    })
+}
+
+fn counterfactual_solver_registry(
+    wait_for_cancel: bool,
+) -> Result<(SolverRegistry, Arc<CounterfactualTestBackend>), Box<dyn Error>> {
+    let backend_id = BackendId::new("synthetic.test")?;
+    let features = SUPPORT_FEATURES
+        .iter()
+        .map(|(id, category, gate)| {
+            Ok(SupportFeature {
+                id: SupportFeatureId::new(*id)?,
+                category: match *category {
+                    "primitive" => SupportFeatureCategory::Primitive,
+                    "objective" => SupportFeatureCategory::Objective,
+                    "projection" => SupportFeatureCategory::Projection,
+                    "solve" => SupportFeatureCategory::Solve,
+                    value => {
+                        return Err(SupportMatrixError::UnknownGeneratedCategory(
+                            value.to_owned(),
+                        ));
+                    }
+                },
+                gate: if *gate == "unconditional" {
+                    SupportFeatureGate::Unconditional
+                } else {
+                    SupportFeatureGate::Enabled((*gate).to_owned())
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, SupportMatrixError>>()?;
+    let supported = features.iter().map(|feature| feature.id.clone()).collect();
+    let cells = features
+        .iter()
+        .map(|feature| {
+            (
+                feature.id.clone(),
+                SupportCell::Supported {
+                    fixture_id: format!(
+                        "tests.counterfactual.{}",
+                        feature.id.as_str().replace('.', "-")
+                    ),
+                },
+            )
+        })
+        .collect();
+    let descriptor = SolverDescriptor {
+        id: backend_id.clone(),
+        display_name: "Counterfactual runtime test backend".to_owned(),
+        version: "1.0.0".to_owned(),
+        adapter_version: "1.0.0".to_owned(),
+        distribution: SolverDistribution::BuiltIn,
+        license: LicenseMetadata {
+            spdx_expression: "Apache-2.0".to_owned(),
+            license_name: "Apache License 2.0".to_owned(),
+            source_url: None,
+        },
+        stability: BackendStability::Experimental,
+        capabilities: SolverCapabilities {
+            supported,
+            degraded: BTreeSet::new(),
+        },
+    };
+    let matrix = CapabilityMatrix::new(
+        SUPPORT_MATRIX_SCHEMA_VERSION,
+        SUPPORT_MATRIX_IR_SCHEMA_VERSION,
+        features,
+        vec![BackendSupportColumn {
+            backend_id,
+            backend_version: descriptor.version.clone(),
+            adapter_version: descriptor.adapter_version.clone(),
+            cells,
+        }],
+        Vec::new(),
+    )?;
+    let runtime_identity = BackendRuntimeIdentity::new(
+        descriptor.id.clone(),
+        descriptor.version.clone(),
+        descriptor.adapter_version.clone(),
+        "1.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        1,
+        0,
+    )?;
+    let backend = Arc::new(CounterfactualTestBackend {
+        descriptor,
+        runtime_identity,
+        matrix: matrix.clone(),
+        wait_for_cancel,
+        invocations: AtomicUsize::new(0),
+        entered: AtomicBool::new(false),
+        observed_cancel: AtomicBool::new(false),
+    });
+    let registered: Vec<Arc<dyn SolverBackend>> = vec![backend.clone()];
+    Ok((SolverRegistry::new(matrix, registered)?, backend))
+}
+
+#[allow(clippy::too_many_lines)]
+async fn persist_application_accepted_result(
+    store: &SqliteScenarioStore,
+    scenario_id: ScenarioId,
+    revision: Revision,
+    suffix: u16,
+) -> Result<StoredAcceptedResultV2, Box<dyn Error>> {
+    let registry = official_registry()?;
+    let pack_id = "official.test".parse()?;
+    let pack = registry.require(&pack_id)?;
+    let project = store.get_project(scenario_id).await?;
+    let compile_context = CompileContext {
+        scenario_revision: revision.value(),
+        semantic_metadata: BTreeMap::new(),
+        cancellation: eutheto_types::CancellationToken::new(),
+        planning_limits: PlanningIrLimitsV1::DEFAULT,
+    };
+    let problem = pack.compile(&project.document, &compile_context)?;
+    let model_hash = canonical_ir_hash(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let started_at = SystemClock.now();
+    let finished_at = Rfc3339Timestamp::from_timestamp(
+        started_at
+            .as_timestamp()
+            .checked_add(std::time::Duration::from_secs(1))?,
+    );
+    let started = store
+        .start_solve_run(NewSolveRunV1 {
+            run_id: SolveRunId::from_uuid(solution_test_id(0x8100, suffix)?),
+            request_id: RequestId::from_uuid(solution_test_id(0x8200, suffix)?),
+            scenario_id,
+            expected_revision: revision,
+            planning_ir_schema_version: PLANNING_IR_SCHEMA_VERSION,
+            compiler_version: problem.metadata.compiler_version.clone(),
+            application_version: env!("CARGO_PKG_VERSION").to_owned(),
+            backend_id: BackendId::new("synthetic.test")?,
+            backend_version: "1.0.0".to_owned(),
+            adapter_version: "1.0.0".to_owned(),
+            worker_version: "1.0.0".to_owned(),
+            solver_version: "1.0.0".to_owned(),
+            protocol_major: 1,
+            protocol_minor: 0,
+            model_hash: model_hash.clone(),
+            objective_policy_hash: blake3_hex(b"solution-api-objective-policy"),
+            solve_options: solution_test_options()?,
+            temporary_condition_hash: None,
+            started_at,
+        })
+        .await?;
+    let mut candidate = CandidateValues::default();
+    for variable in &problem.variables {
+        match variable {
+            Variable::Boolean(variable) => {
+                candidate.booleans.insert(variable.id.clone(), false);
+            }
+            Variable::Integer(variable) => {
+                candidate.integers.insert(variable.id.clone(), 0);
+            }
+            Variable::Interval(_) => {}
+        }
+    }
+    let solution_id = SolutionId::from_uuid(solution_test_id(0x8300, suffix)?);
+    let solution = pack.project(&problem, &candidate, solution_id)?;
+    let scope = pack.verification_scope(&project.document, revision.value())?;
+    let context = VerificationContextV1::new(
+        scenario_id,
+        revision.value(),
+        started.input.snapshot_document_hash.clone(),
+        model_hash,
+        solution.canonical_hash()?,
+        scope.checksum,
+    )?;
+    let authoritative_score = pack.score(&project.document, &solution)?;
+    let verification = pack.verify(&project.document, &solution, &context, &authoritative_score)?;
+    let accepted = AcceptedResult::new(solution, verification)?;
+    let manifest = RunManifestV1::new(
+        started.input.run_id,
+        started.input.checksum,
+        RunTerminalOutcomeV1::Accepted {
+            status: SolveStatus::Optimal,
+            solution_id,
+            accepted_result_checksum: accepted.checksum.clone(),
+            verification_checksum: accepted.verification.checksum.clone(),
+        },
+        started.started_at,
+        finished_at,
+        Some(DurationMillis::new(1_000)?),
+        Some(DurationMillis::new(100)?),
+        Some(DurationMillis::new(500)?),
+        RunPhaseTimingsV1::default(),
+        Vec::new(),
+    )?;
+    let evidence = accepted
+        .solution
+        .assignments
+        .iter()
+        .flat_map(|assignment| assignment.evidence.iter())
+        .chain(
+            accepted
+                .verification
+                .required_rule_results
+                .iter()
+                .flat_map(|rule| rule.evidence.iter()),
+        )
+        .cloned()
+        .map(|id| (id, VerificationValue::Boolean(true)))
+        .collect();
+    store
+        .finalize_accepted_run(accepted, manifest, evidence)
+        .await?;
+    Ok(store.load_accepted_result(solution_id).await?)
+}
+
+struct SolutionApplicationFixture {
+    app: EuthetoApp,
+    store: Arc<SqliteScenarioStore>,
+    scenario_id: ScenarioId,
+    stale: StoredAcceptedResultV2,
+    current: StoredAcceptedResultV2,
+}
+
+async fn solution_application_fixture(
+    directory: &TempDir,
+) -> Result<SolutionApplicationFixture, Box<dyn Error>> {
+    let dependencies = dependencies(directory)?;
+    let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database).await?;
+    let store = Arc::new(store);
+    let app = EuthetoApp::from_initialized_store(Arc::clone(&store), initialization, dependencies)
+        .boxed()?;
+    let scenario_id = create_project(&app, "Accepted solutions").await?;
+    let first = app
+        .execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: add_entity_envelope(scenario_id, Revision::INITIAL, "first")?,
+            truncate_redo: false,
+        })
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(first) = first else {
+        return Err("expected first scenario command result".into());
+    };
+    let stale =
+        persist_application_accepted_result(&store, scenario_id, first.new_revision, 1).await?;
+    let second = app
+        .execute(AppCommand::ApplyScenario {
+            request_id: request_id()?,
+            envelope: add_entity_envelope(scenario_id, first.new_revision, "second")?,
+            truncate_redo: false,
+        })
+        .await
+        .boxed()?;
+    let AppCommandResult::ScenarioCommand(second) = second else {
+        return Err("expected second scenario command result".into());
+    };
+    let current =
+        persist_application_accepted_result(&store, scenario_id, second.new_revision, 2).await?;
+    Ok(SolutionApplicationFixture {
+        app,
+        store,
+        scenario_id,
+        stale,
+        current,
+    })
 }
 
 #[tokio::test]
@@ -1565,7 +2026,7 @@ async fn replace_and_tombstone_reimport_publish_authoritative_monotonic_revision
 #[allow(clippy::too_many_lines)]
 async fn seed_local_identity_closure(
     directory: &TempDir,
-) -> Result<(eutheto_types::ScenarioId, Revision, Vec<String>), Box<dyn Error>> {
+) -> Result<(ScenarioId, Revision, Vec<String>), Box<dyn Error>> {
     let source = EuthetoApp::open(dependencies(directory)?).await.boxed()?;
     let scenario_id = create_project(&source, "Identity closure").await?;
     let (seed_bytes, local_library_revision) = match source
@@ -1756,7 +2217,7 @@ async fn preview_detects_local_nested_semantic_historical_and_result_identities(
 
 async fn seed_identity_closure_library(
     directory: &TempDir,
-) -> Result<(eutheto_types::ScenarioId, Revision), Box<dyn Error>> {
+) -> Result<(ScenarioId, Revision), Box<dyn Error>> {
     let (source_id, source_revision, _) = seed_local_identity_closure(directory).await?;
     Ok((source_id, source_revision))
 }
@@ -1926,7 +2387,7 @@ async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(
     Ok(())
 }
 
-async fn create_inspected_backup() -> Result<(Vec<u8>, eutheto_types::ScenarioId), Box<dyn Error>> {
+async fn create_inspected_backup() -> Result<(Vec<u8>, ScenarioId), Box<dyn Error>> {
     let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
@@ -2027,7 +2488,7 @@ async fn preview_add_backup(
 async fn preview_replace_and_assert_removal(
     target: &EuthetoApp,
     backup: Vec<u8>,
-    removed_id: eutheto_types::ScenarioId,
+    removed_id: ScenarioId,
 ) -> Result<RequestId, Box<dyn Error>> {
     match target
         .query(AppQuery::PreviewRestore {
@@ -2061,8 +2522,8 @@ async fn preview_replace_and_assert_removal(
 async fn apply_restore_and_assert_events(
     target: &EuthetoApp,
     preview_id: RequestId,
-    removed_id: eutheto_types::ScenarioId,
-    restored_id: eutheto_types::ScenarioId,
+    removed_id: ScenarioId,
+    restored_id: ScenarioId,
 ) -> Result<(), Box<dyn Error>> {
     let mut changed = target
         .subscribe(EventTopic::ScenarioChanged)
@@ -2123,8 +2584,8 @@ async fn apply_restore_and_assert_events(
 async fn assert_restored_backup(
     target: &EuthetoApp,
     target_directory: &TempDir,
-    removed_id: eutheto_types::ScenarioId,
-    restored_id: eutheto_types::ScenarioId,
+    removed_id: ScenarioId,
+    restored_id: ScenarioId,
 ) -> Result<(), Box<dyn Error>> {
     assert!(matches!(
         target.query(AppQuery::ProjectMetadata(removed_id)).await,
@@ -2177,7 +2638,7 @@ async fn assert_restored_backup(
 
 async fn restore_backup_and_assert(
     backup: Vec<u8>,
-    restored_id: eutheto_types::ScenarioId,
+    restored_id: ScenarioId,
 ) -> Result<(), Box<dyn Error>> {
     let target_directory = private_tempdir()?;
     let target = EuthetoApp::open(dependencies(&target_directory)?)
@@ -2269,8 +2730,8 @@ async fn backup_audit_selection_is_explicitly_deferred_and_never_silently_omitte
     Ok(())
 }
 
-async fn restore_large_asset_fixture()
--> Result<(EuthetoApp, TempDir, eutheto_types::ScenarioId), Box<dyn Error>> {
+async fn restore_large_asset_fixture() -> Result<(EuthetoApp, TempDir, ScenarioId), Box<dyn Error>>
+{
     let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
@@ -2810,8 +3271,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
     );
     Ok(())
 }
-async fn create_historical_closure_backup()
--> Result<(eutheto_types::ScenarioId, Vec<u8>), Box<dyn Error>> {
+async fn create_historical_closure_backup() -> Result<(ScenarioId, Vec<u8>), Box<dyn Error>> {
     let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
         .await
@@ -3450,13 +3910,18 @@ async fn deferred_solve_solution_and_ai_calls_are_typed_unsupported() -> Result<
     let app = EuthetoApp::open(dependencies(&directory)?).await.boxed()?;
     for capability in [
         DeferredCapability::Solve,
-        DeferredCapability::Solution,
         DeferredCapability::ArtificialIntelligence,
     ] {
         assert!(matches!(
             app.query(AppQuery::Deferred(capability)).await,
             Err(AppError::Unsupported(_))
         ));
+    }
+    for capability in [
+        DeferredCapability::Solve,
+        DeferredCapability::Solution,
+        DeferredCapability::ArtificialIntelligence,
+    ] {
         assert!(matches!(
             app.execute(AppCommand::Deferred(capability)).await,
             Err(AppError::Unsupported(_))
@@ -3503,7 +3968,7 @@ async fn registries_expose_only_validated_static_metadata_in_stable_order()
         app.query(AppQuery::ListSolvers).await.boxed()?,
         AppQueryResult::Solvers(solvers) if solvers.is_empty()
     ));
-    let fake_production: eutheto_types::BackendId = "solver.fake-production".parse()?;
+    let fake_production: BackendId = "solver.fake-production".parse()?;
     assert!(matches!(
         app.query(AppQuery::DescribeSolver(fake_production.clone()))
             .await,
@@ -3518,7 +3983,7 @@ async fn registries_expose_only_validated_static_metadata_in_stable_order()
         matrix
             .production_backend_ids
             .iter()
-            .map(eutheto_types::BackendId::as_str)
+            .map(BackendId::as_str)
             .collect::<Vec<_>>(),
         vec!["solver.ortools-cp-sat"]
     );
@@ -3842,6 +4307,7 @@ fn support_dependencies(directory: &TempDir) -> Result<AppDependencies, Box<dyn 
                 .join("private-backups-SUPPORT_BACKUP_PATH_SENTINEL"),
         },
         clock: Arc::new(FixedClock::new(timestamp("2026-01-10T12:00:00Z")?)),
+        monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
         ids: Arc::new(SystemIdGenerator),
         cancellation: eutheto_types::CancellationToken::default(),
     };
@@ -3962,5 +4428,925 @@ async fn support_preview_is_deterministic_and_structurally_redacted() -> Result<
         DirectoryAvailabilityLabel::Unavailable
     );
     assert_support_preview_is_redacted(&serde_json::to_string(&unavailable)?);
+    Ok(())
+}
+
+async fn query_solution_explanation(
+    app: &EuthetoApp,
+    scenario_id: ScenarioId,
+    subject: ExplanationRequestSubjectV1,
+) -> Result<SolutionExplanationDtoV1, Box<dyn Error>> {
+    match app
+        .query(AppQuery::SolutionExplain(SolutionExplainRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id,
+            request: ExplanationRequestV1::new(subject)?,
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionExplanation(result) => Ok(*result),
+        other => Err(format!("unexpected solution explanation result: {other:?}").into()),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn accepted_solution_reads_bind_exact_authority_and_safe_errors() -> Result<(), Box<dyn Error>>
+{
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let stale_ref = AcceptedResultRefV1::from_result(&fixture.stale.portable.accepted_result)?;
+    let current_ref = AcceptedResultRefV1::from_result(&fixture.current.portable.accepted_result)?;
+
+    let list = match fixture
+        .app
+        .query(AppQuery::SolutionList(SolutionListRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionList(list) => list,
+        other => return Err(format!("unexpected solution list result: {other:?}").into()),
+    };
+    assert_eq!(list.solutions.len(), 2);
+    let stale = list
+        .solutions
+        .iter()
+        .find(|summary| summary.result == stale_ref)
+        .ok_or("missing stale accepted solution")?;
+    assert!(stale.stale);
+    assert!(stale.scenario_revision < stale.current_revision);
+    let current = list
+        .solutions
+        .iter()
+        .find(|summary| summary.result == current_ref)
+        .ok_or("missing current accepted solution")?;
+    assert!(!current.stale);
+    assert_eq!(current.scenario_revision, current.current_revision);
+
+    let detail = match fixture
+        .app
+        .query(AppQuery::SolutionGetSummary(SolutionSummaryRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id: current_ref.solution_id,
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionSummary(detail) => detail,
+        other => return Err(format!("unexpected solution summary result: {other:?}").into()),
+    };
+    assert_eq!(detail.result, fixture.current.portable.accepted_result);
+    assert_eq!(
+        detail.scenario_revision.value(),
+        detail.result.solution.scenario_revision
+    );
+
+    let view = match fixture
+        .app
+        .query(AppQuery::SolutionGetView(SolutionViewRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id: current_ref.solution_id,
+            view_id: "official.test.result.summary".to_owned(),
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionView(view) => view,
+        other => return Err(format!("unexpected solution view result: {other:?}").into()),
+    };
+    assert_eq!(view.result, current_ref);
+    assert_eq!(view.view.view_id, "official.test.result.summary");
+    assert_eq!(
+        view.view.data["assignmentCount"].as_u64(),
+        Some(u64::try_from(detail.result.solution.assignments.len())?)
+    );
+
+    let verified = match fixture
+        .app
+        .query(AppQuery::SolutionVerify(SolutionVerifyRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id: current_ref.solution_id,
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionVerification(verified) => verified,
+        other => return Err(format!("unexpected solution verification result: {other:?}").into()),
+    };
+    assert_eq!(
+        verified.verification,
+        fixture.current.portable.accepted_result.verification
+    );
+
+    let comparison = match fixture
+        .app
+        .query(AppQuery::SolutionCompare(SolutionCompareRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            base_solution_id: stale_ref.solution_id,
+            candidate_solution_id: current_ref.solution_id,
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionComparison(comparison) => comparison,
+        other => return Err(format!("unexpected solution comparison result: {other:?}").into()),
+    };
+    assert_eq!(comparison.comparison.base.accepted_result, stale_ref);
+    assert_eq!(comparison.comparison.candidate.accepted_result, current_ref);
+    assert_ne!(
+        comparison.comparison.base.scenario_revision,
+        comparison.comparison.candidate.scenario_revision
+    );
+
+    let assignment_id = fixture
+        .current
+        .portable
+        .accepted_result
+        .solution
+        .assignments[0]
+        .id
+        .clone();
+    let subjects = [
+        (
+            ExplanationRequestSubjectV1::Assignment {
+                result: current_ref.clone(),
+                assignment_id,
+            },
+            ExplanationKind::Assignment,
+        ),
+        (
+            ExplanationRequestSubjectV1::SolutionDifference {
+                left: stale_ref.clone(),
+                right: current_ref.clone(),
+            },
+            ExplanationKind::SolutionDifference,
+        ),
+        (
+            ExplanationRequestSubjectV1::Repair {
+                current: current_ref.clone(),
+                base: stale_ref.clone(),
+            },
+            ExplanationKind::Repair,
+        ),
+        (
+            ExplanationRequestSubjectV1::OptimalityStatus {
+                solve_run_id: fixture.current.portable.run_input.run_id,
+                run_manifest_checksum: fixture.current.portable.run_manifest.checksum.clone(),
+                result: Some(current_ref.clone()),
+            },
+            ExplanationKind::OptimalityStatus,
+        ),
+    ];
+    for (subject, expected_kind) in subjects {
+        let result = query_solution_explanation(&fixture.app, fixture.scenario_id, subject).await?;
+        assert_eq!(result.explanation.evidence.kind(), expected_kind);
+        assert_eq!(
+            result.explanation.rendered.evidence_checksum,
+            result.explanation.evidence.checksum
+        );
+        result.explanation.validate()?;
+    }
+
+    assert!(matches!(
+        fixture
+            .app
+            .query(AppQuery::SolutionList(SolutionListRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION + 1,
+                scenario_id: fixture.scenario_id,
+            }))
+            .await,
+        Err(AppError::Validation(_))
+    ));
+    let wrong_scenario = ScenarioId::from_uuid(solution_test_id(0x8400, 1)?);
+    assert!(matches!(
+        fixture
+            .app
+            .query(AppQuery::SolutionGetSummary(SolutionSummaryRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION,
+                scenario_id: wrong_scenario,
+                solution_id: current_ref.solution_id,
+            }))
+            .await,
+        Err(AppError::Validation(_))
+    ));
+    let mut wrong_ref = current_ref.clone();
+    wrong_ref.result_checksum = blake3_hex(b"wrong-result-reference");
+    assert!(
+        query_solution_explanation(
+            &fixture.app,
+            fixture.scenario_id,
+            ExplanationRequestSubjectV1::Assignment {
+                result: wrong_ref,
+                assignment_id: fixture
+                    .current
+                    .portable
+                    .accepted_result
+                    .solution
+                    .assignments[0]
+                    .id
+                    .clone(),
+            },
+        )
+        .await
+        .is_err()
+    );
+
+    for subject in [
+        ExplanationRequestSubjectV1::Validation { issue_id: None },
+        ExplanationRequestSubjectV1::Infeasibility {
+            solve_run_id: fixture.current.portable.run_input.run_id,
+            run_manifest_checksum: fixture.current.portable.run_manifest.checksum.clone(),
+            conflict_id: None,
+        },
+    ] {
+        assert!(matches!(
+            fixture
+                .app
+                .query(AppQuery::SolutionExplain(SolutionExplainRequestV1 {
+                    schema_version: SOLUTION_API_SCHEMA_VERSION,
+                    scenario_id: fixture.scenario_id,
+                    request: ExplanationRequestV1::new(subject)?,
+                }))
+                .await,
+            Err(AppError::Unsupported(_))
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn solution_selection_dispatches_typed_viewing_state_without_scenario_mutation()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let other_scenario = create_project(&fixture.app, "Other accepted solutions").await?;
+    let other =
+        persist_application_accepted_result(&fixture.store, other_scenario, Revision::INITIAL, 3)
+            .await?;
+    let current_id = fixture
+        .current
+        .portable
+        .accepted_result
+        .solution
+        .solution_id;
+    let stale_id = fixture.stale.portable.accepted_result.solution.solution_id;
+    let before = scenario_view(&fixture.app, fixture.scenario_id).await?;
+    let library_revision = fixture.store.library_metadata_snapshot().await?.revision;
+
+    let request = SolutionSelectRequestV1 {
+        schema_version: SOLUTION_API_SCHEMA_VERSION,
+        request_id: request_id()?,
+        scenario_id: fixture.scenario_id,
+        expected_revision: before.revision,
+        solution_id: current_id,
+    };
+    let encoded = serde_json::to_value(&request)?;
+    assert_eq!(
+        serde_json::from_value::<SolutionSelectRequestV1>(encoded.clone())?,
+        request
+    );
+    let mut unknown = encoded.clone();
+    unknown
+        .as_object_mut()
+        .ok_or("selection request was not an object")?
+        .insert("unexpected".to_owned(), json!(true));
+    assert!(serde_json::from_value::<SolutionSelectRequestV1>(unknown).is_err());
+    let mut missing = encoded;
+    missing
+        .as_object_mut()
+        .ok_or("selection request was not an object")?
+        .remove("expectedRevision");
+    assert!(serde_json::from_value::<SolutionSelectRequestV1>(missing).is_err());
+
+    let selected = fixture
+        .app
+        .execute(AppCommand::SolutionSelect(request.clone()))
+        .await
+        .boxed()?;
+    let AppCommandResult::SolutionSelected(selected) = selected else {
+        return Err("expected selected-solution command result".into());
+    };
+    assert_eq!(selected.result.solution_id, current_id);
+    assert!(selected.selected);
+    assert!(!selected.stale);
+    let retried = fixture
+        .app
+        .execute(AppCommand::SolutionSelect(request))
+        .await
+        .boxed()?;
+    assert!(matches!(
+        retried,
+        AppCommandResult::SolutionSelected(summary) if summary == selected
+    ));
+
+    let list = match fixture
+        .app
+        .query(AppQuery::SolutionList(SolutionListRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionList(list) => list,
+        other => return Err(format!("unexpected solution list result: {other:?}").into()),
+    };
+    assert_eq!(
+        list.solutions
+            .iter()
+            .filter(|solution| solution.selected)
+            .map(|solution| solution.result.solution_id)
+            .collect::<Vec<_>>(),
+        vec![current_id]
+    );
+    let detail = match fixture
+        .app
+        .query(AppQuery::SolutionGetSummary(SolutionSummaryRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id: fixture.scenario_id,
+            solution_id: current_id,
+        }))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::SolutionSummary(detail) => detail,
+        other => return Err(format!("unexpected solution summary result: {other:?}").into()),
+    };
+    assert!(detail.selected);
+
+    let selected = fixture
+        .app
+        .execute(AppCommand::SolutionSelect(SolutionSelectRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            request_id: request_id()?,
+            scenario_id: fixture.scenario_id,
+            expected_revision: before.revision,
+            solution_id: stale_id,
+        }))
+        .await
+        .boxed()?;
+    assert!(matches!(
+        selected,
+        AppCommandResult::SolutionSelected(summary)
+            if summary.result.solution_id == stale_id && summary.selected && summary.stale
+    ));
+    assert_eq!(
+        scenario_view(&fixture.app, fixture.scenario_id).await?,
+        before
+    );
+    assert_eq!(
+        fixture.store.library_metadata_snapshot().await?.revision,
+        library_revision
+    );
+
+    assert!(matches!(
+        fixture
+            .app
+            .execute(AppCommand::SolutionSelect(SolutionSelectRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION,
+                request_id: request_id()?,
+                scenario_id: fixture.scenario_id,
+                expected_revision: Revision::new(before.revision.value().saturating_sub(1)),
+                solution_id: current_id,
+            }))
+            .await,
+        Err(AppError::Conflict {
+            expected_revision,
+            actual_revision,
+        }) if expected_revision.value() + 1 == actual_revision.value()
+    ));
+    for unavailable in [
+        other.portable.accepted_result.solution.solution_id,
+        SolutionId::from_uuid(solution_test_id(0x8500, 1)?),
+    ] {
+        assert!(matches!(
+            fixture
+                .app
+                .execute(AppCommand::SolutionSelect(SolutionSelectRequestV1 {
+                    schema_version: SOLUTION_API_SCHEMA_VERSION,
+                    request_id: request_id()?,
+                    scenario_id: fixture.scenario_id,
+                    expected_revision: before.revision,
+                    solution_id: unavailable,
+                }))
+                .await,
+            Err(AppError::NotFound(eutheto_types::ResourceRef::Solution(solution_id)))
+                if solution_id == unavailable
+        ));
+    }
+    assert!(matches!(
+        fixture
+            .app
+            .execute(AppCommand::SolutionSelect(SolutionSelectRequestV1 {
+                schema_version: SOLUTION_API_SCHEMA_VERSION + 1,
+                request_id: request_id()?,
+                scenario_id: fixture.scenario_id,
+                expected_revision: before.revision,
+                solution_id: current_id,
+            }))
+            .await,
+        Err(AppError::Validation(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn counterfactual_stale_start_is_durable_idempotent_and_job_bound_cancellable()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let base = &fixture.stale.portable;
+    let expected_revision = Revision::new(base.run_input.scenario_revision);
+    let start_request_id = request_id()?;
+    let request = SolutionStartCounterfactualRequestV1 {
+        schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+        request_id: start_request_id,
+        scenario_id: fixture.scenario_id,
+        expected_revision,
+        base_solution_id: base.accepted_result.solution.solution_id,
+        condition: CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id: DomainAssignmentId::new("tests.counterfactual")?,
+            value: AssignmentValue::Boolean(true),
+        },
+        total_budget_milliseconds: DurationMillis::new(1_000)?,
+    };
+    let mut progress = fixture
+        .app
+        .subscribe(EventTopic::CounterfactualProgress)
+        .await
+        .boxed()?;
+
+    let AppCommandResult::CounterfactualStarted(started) = fixture
+        .app
+        .execute(AppCommand::SolutionStartCounterfactual(request.clone()))
+        .await
+        .boxed()?
+    else {
+        return Err("expected counterfactual start result".into());
+    };
+    assert_eq!(started.schema_version, COUNTERFACTUAL_API_SCHEMA_VERSION);
+    assert_eq!(started.request_id, start_request_id);
+    assert_eq!(started.job.state, CounterfactualJobState::Failed);
+    assert_eq!(
+        started.job.error.as_ref().map(|error| error.kind),
+        Some(CounterfactualFailureKind::StaleRevision)
+    );
+    assert!(started.job.result.is_none());
+    assert!(started.job.started_at.is_none());
+    let encoded = serde_json::to_value(&started)?;
+    assert_eq!(
+        serde_json::from_value::<SolutionStartCounterfactualDtoV1>(encoded.clone())?,
+        started
+    );
+    let mut unknown = encoded;
+    unknown
+        .as_object_mut()
+        .ok_or("start response was not an object")?
+        .insert("unknown".to_owned(), json!(true));
+    assert!(serde_json::from_value::<SolutionStartCounterfactualDtoV1>(unknown).is_err());
+
+    let queued = progress.recv().await.boxed()?;
+    let failed = progress.recv().await.boxed()?;
+    for event in [&queued, &failed] {
+        let EventPayload::CounterfactualProgress {
+            context, job_id, ..
+        } = &event.payload
+        else {
+            return Err("expected counterfactual progress event".into());
+        };
+        assert_eq!(*job_id, started.job.request.job_id);
+        assert_eq!(context.request_id, Some(start_request_id));
+        assert_eq!(context.scenario_id, Some(fixture.scenario_id));
+        assert_eq!(context.revision, Some(expected_revision));
+        assert_eq!(context.solve_run_id, None);
+    }
+    assert!(matches!(
+        queued.payload,
+        EventPayload::CounterfactualProgress {
+            phase: eutheto_types::CounterfactualProgressPhase::Queued,
+            ..
+        }
+    ));
+    assert!(matches!(
+        failed.payload,
+        EventPayload::CounterfactualProgress {
+            phase: eutheto_types::CounterfactualProgressPhase::Failed,
+            ..
+        }
+    ));
+
+    let AppCommandResult::CounterfactualStarted(replayed) = fixture
+        .app
+        .execute(AppCommand::SolutionStartCounterfactual(request))
+        .await
+        .boxed()?
+    else {
+        return Err("expected replayed counterfactual start result".into());
+    };
+    assert_eq!(replayed.job, started.job);
+    assert!(progress.try_recv().boxed()?.is_none());
+
+    let cancel_request_id = request_id()?;
+    let AppCommandResult::CounterfactualCancelled(cancelled) = fixture
+        .app
+        .execute(AppCommand::SolutionCancelCounterfactual(
+            SolutionCancelCounterfactualRequestV1 {
+                schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+                cancel_request_id,
+                scenario_id: fixture.scenario_id,
+                expected_revision,
+                job_id: started.job.request.job_id,
+            },
+        ))
+        .await
+        .boxed()?
+    else {
+        return Err("expected counterfactual cancellation result".into());
+    };
+    assert_eq!(cancelled.cancel_request_id, cancel_request_id);
+    assert_eq!(cancelled.job, started.job);
+    let encoded = serde_json::to_value(&cancelled)?;
+    assert_eq!(
+        serde_json::from_value::<SolutionCancelCounterfactualDtoV1>(encoded.clone())?,
+        cancelled
+    );
+    let mut unknown = encoded;
+    unknown
+        .as_object_mut()
+        .ok_or("cancel response was not an object")?
+        .insert("unknown".to_owned(), json!(true));
+    assert!(serde_json::from_value::<SolutionCancelCounterfactualDtoV1>(unknown).is_err());
+    Ok(())
+}
+
+fn counterfactual_runtime_app(
+    directory: &TempDir,
+    fixture: &SolutionApplicationFixture,
+    registry: SolverRegistry,
+) -> Result<EuthetoApp, Box<dyn Error>> {
+    let mut dependencies = dependencies(directory)?;
+    dependencies.clock = Arc::new(SystemClock);
+    Ok(EuthetoApp::from_initialized_store_with_registries(
+        Arc::clone(&fixture.store),
+        fixture.app.initialization().clone(),
+        dependencies,
+        Arc::new(official_registry()?),
+        Arc::new(registry),
+    ))
+}
+
+fn counterfactual_runtime_request(
+    base: &StoredAcceptedResultV2,
+) -> Result<SolutionStartCounterfactualRequestV1, Box<dyn Error>> {
+    let registry = official_registry()?;
+    let pack = registry.require(&base.portable.run_input.pack_id)?;
+    let problem = pack.compile(
+        &base.document,
+        &CompileContext {
+            scenario_revision: base.portable.run_input.scenario_revision,
+            semantic_metadata: BTreeMap::new(),
+            cancellation: eutheto_types::CancellationToken::new(),
+            planning_limits: PlanningIrLimitsV1::DEFAULT,
+        },
+    )?;
+    let assignment_id = problem
+        .projections
+        .iter()
+        .find_map(|projection| {
+            matches!(&projection.expression, ProjectionExpression::Boolean(_))
+                .then(|| projection.assignment_id.clone())
+        })
+        .ok_or("official fixture had no Boolean assignment projection")?;
+    Ok(SolutionStartCounterfactualRequestV1 {
+        schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+        request_id: request_id()?,
+        scenario_id: base.portable.run_input.scenario_id,
+        expected_revision: Revision::new(base.portable.run_input.scenario_revision),
+        base_solution_id: base.portable.accepted_result.solution.solution_id,
+        condition: CounterfactualConditionPayloadV1::ForceAssignmentValue {
+            assignment_id,
+            value: AssignmentValue::Boolean(false),
+        },
+        total_budget_milliseconds: DurationMillis::new(30_000)?,
+    })
+}
+
+async fn wait_for_counterfactual_terminal(
+    store: &SqliteScenarioStore,
+    job_id: CounterfactualJobId,
+) -> Result<CounterfactualJobRecordV1, Box<dyn Error>> {
+    for _ in 0..10_000 {
+        let job = store.load_counterfactual_job(job_id).await?;
+        if matches!(
+            job.state,
+            CounterfactualJobState::Completed
+                | CounterfactualJobState::Failed
+                | CounterfactualJobState::Cancelled
+                | CounterfactualJobState::Interrupted
+        ) {
+            return Ok(job);
+        }
+        tokio::task::yield_now().await;
+    }
+    Err("counterfactual job did not become terminal".into())
+}
+
+async fn collect_counterfactual_progress(
+    progress: &mut EventSubscription,
+) -> Result<
+    Vec<(
+        eutheto_types::CounterfactualProgressPhase,
+        eutheto_types::EventContext,
+        CounterfactualJobId,
+    )>,
+    Box<dyn Error>,
+> {
+    let mut observed = Vec::new();
+    loop {
+        let event = progress.recv().await.boxed()?;
+        let EventPayload::CounterfactualProgress {
+            context,
+            job_id,
+            phase,
+        } = event.payload
+        else {
+            return Err("counterfactual subscription produced another event type".into());
+        };
+        let terminal = matches!(
+            phase,
+            eutheto_types::CounterfactualProgressPhase::Completed
+                | eutheto_types::CounterfactualProgressPhase::Failed
+                | eutheto_types::CounterfactualProgressPhase::Cancelled
+                | eutheto_types::CounterfactualProgressPhase::Interrupted
+        );
+        observed.push((phase, context, job_id));
+        if terminal {
+            return Ok(observed);
+        }
+    }
+}
+
+#[tokio::test]
+async fn counterfactual_runtime_completes_once_through_compile_review_and_atomic_finalize()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let (registry, backend) = counterfactual_solver_registry(false)?;
+    let app = counterfactual_runtime_app(&directory, &fixture, registry)?;
+    let request = counterfactual_runtime_request(&fixture.current)?;
+    let mut progress = app
+        .subscribe(EventTopic::CounterfactualProgress)
+        .await
+        .boxed()?;
+
+    let AppCommandResult::CounterfactualStarted(started) = app
+        .execute(AppCommand::SolutionStartCounterfactual(request.clone()))
+        .await
+        .boxed()?
+    else {
+        return Err("expected counterfactual start response".into());
+    };
+    let events = collect_counterfactual_progress(&mut progress).await?;
+    let completed =
+        wait_for_counterfactual_terminal(&fixture.store, started.job.request.job_id).await?;
+    assert_eq!(completed.state, CounterfactualJobState::Completed);
+    let result = completed
+        .result
+        .as_ref()
+        .ok_or("completed counterfactual omitted its result")?;
+    let RunTerminalOutcomeV1::Accepted { solution_id, .. } = &result.run_manifest.outcome else {
+        return Err("completed counterfactual did not persist an accepted run".into());
+    };
+    let evidence_preparation = result
+        .run_manifest
+        .phase_timings
+        .evidence_persistence_milliseconds
+        .ok_or("normal counterfactual terminal omitted evidence preparation timing")?;
+    assert!(
+        evidence_preparation
+            <= result
+                .run_manifest
+                .elapsed_milliseconds
+                .ok_or("normal counterfactual terminal omitted elapsed timing")?
+    );
+    let solution_id = *solution_id;
+    let accepted = fixture.store.load_accepted_result(solution_id).await?;
+    assert_eq!(
+        accepted.portable.accepted_result.solution.solution_id,
+        solution_id
+    );
+
+    let phases: Vec<_> = events.iter().map(|(phase, _, _)| *phase).collect();
+    assert_eq!(
+        phases,
+        [
+            eutheto_types::CounterfactualProgressPhase::Queued,
+            eutheto_types::CounterfactualProgressPhase::Compiling,
+            eutheto_types::CounterfactualProgressPhase::Solving,
+            eutheto_types::CounterfactualProgressPhase::Verifying,
+            eutheto_types::CounterfactualProgressPhase::Finalizing,
+            eutheto_types::CounterfactualProgressPhase::Completed,
+        ]
+    );
+    for (index, (_, context, job_id)) in events.iter().enumerate() {
+        assert_eq!(*job_id, completed.request.job_id);
+        assert_eq!(context.request_id, Some(request.request_id));
+        assert_eq!(context.scenario_id, Some(request.scenario_id));
+        assert_eq!(context.revision, Some(request.expected_revision));
+        if index < 2 {
+            assert_eq!(context.solve_run_id, None);
+        } else {
+            assert_eq!(context.solve_run_id, Some(result.run_input.run_id));
+        }
+    }
+
+    let AppCommandResult::CounterfactualStarted(replayed) = app
+        .execute(AppCommand::SolutionStartCounterfactual(request))
+        .await
+        .boxed()?
+    else {
+        return Err("expected replayed counterfactual start response".into());
+    };
+    assert_eq!(replayed.job, completed);
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
+    assert!(progress.try_recv().boxed()?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn counterfactual_runtime_cancels_after_derived_run_without_accepting_a_result()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let (registry, backend) = counterfactual_solver_registry(true)?;
+    let app = counterfactual_runtime_app(&directory, &fixture, registry)?;
+    let request = counterfactual_runtime_request(&fixture.current)?;
+    let condition_checksum = CounterfactualConditionV1::new(request.condition.clone())?.checksum;
+    let mut progress = app
+        .subscribe(EventTopic::CounterfactualProgress)
+        .await
+        .boxed()?;
+
+    let AppCommandResult::CounterfactualStarted(started) = app
+        .execute(AppCommand::SolutionStartCounterfactual(request.clone()))
+        .await
+        .boxed()?
+    else {
+        return Err("expected counterfactual start response".into());
+    };
+    let entry_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !backend.entered.load(Ordering::SeqCst) && std::time::Instant::now() < entry_deadline {
+        tokio::task::yield_now().await;
+    }
+    let before_cancel = fixture
+        .store
+        .load_counterfactual_job(started.job.request.job_id)
+        .await?;
+    assert!(
+        backend.entered.load(Ordering::SeqCst),
+        "backend did not start before cancellation; job={before_cancel:?}"
+    );
+
+    let cancel_request_id = request_id()?;
+    let AppCommandResult::CounterfactualCancelled(cancelled) = app
+        .execute(AppCommand::SolutionCancelCounterfactual(
+            SolutionCancelCounterfactualRequestV1 {
+                schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+                cancel_request_id,
+                scenario_id: request.scenario_id,
+                expected_revision: request.expected_revision,
+                job_id: started.job.request.job_id,
+            },
+        ))
+        .await
+        .boxed()?
+    else {
+        return Err("expected counterfactual cancellation response".into());
+    };
+    assert_eq!(cancelled.cancel_request_id, cancel_request_id);
+    let events = collect_counterfactual_progress(&mut progress).await?;
+    let terminal =
+        wait_for_counterfactual_terminal(&fixture.store, started.job.request.job_id).await?;
+    assert_eq!(terminal.state, CounterfactualJobState::Cancelled);
+    assert_eq!(terminal.cancel_request_id, Some(cancel_request_id));
+    assert!(terminal.result.is_none());
+    assert!(terminal.error.is_none());
+    assert_eq!(
+        fixture
+            .store
+            .list_accepted_results(fixture.scenario_id)
+            .await?
+            .len(),
+        2
+    );
+    assert!(backend.observed_cancel.load(Ordering::SeqCst));
+    assert_eq!(backend.invocations.load(Ordering::SeqCst), 1);
+    let derived_run_id = events
+        .iter()
+        .find_map(|(phase, context, _)| {
+            (*phase == eutheto_types::CounterfactualProgressPhase::Solving)
+                .then_some(context.solve_run_id)
+                .flatten()
+        })
+        .ok_or("cancellation fixture never reached its derived run")?;
+    let derived = fixture.store.load_solve_input(derived_run_id).await?;
+    assert_eq!(
+        derived.input.temporary_condition_hash,
+        Some(condition_checksum)
+    );
+    assert_eq!(
+        events.last().map(|(phase, _, _)| *phase),
+        Some(eutheto_types::CounterfactualProgressPhase::Cancelled)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_counterfactual_cancel_replay_does_not_republish_terminal_progress()
+-> Result<(), Box<dyn Error>> {
+    let directory = private_tempdir()?;
+    let fixture = Box::pin(solution_application_fixture(&directory)).await?;
+    let request = counterfactual_runtime_request(&fixture.current)?;
+    let condition = CounterfactualConditionV1::new(request.condition.clone())?;
+    let base = &fixture.current.portable;
+    let semantics = CounterfactualRequestSemanticsV1 {
+        schema_version: COUNTERFACTUAL_REQUEST_SEMANTICS_SCHEMA_VERSION,
+        scenario_id: request.scenario_id,
+        scenario_revision: request.expected_revision.value(),
+        snapshot_id: base.run_input.snapshot_id,
+        snapshot_document_hash: base.run_input.snapshot_document_hash.clone(),
+        base: AcceptedResultRefV1 {
+            solution_id: base.accepted_result.solution.solution_id,
+            result_checksum: base.accepted_result.checksum.clone(),
+        },
+        base_run_id: base.run_input.run_id,
+        base_run_input_checksum: base.run_input.checksum.clone(),
+        base_model_hash: base.run_input.model_hash.clone(),
+        objective_policy_hash: base.run_input.objective_policy_hash.clone(),
+        condition_checksum: condition.checksum.clone(),
+        total_budget_milliseconds: request.total_budget_milliseconds,
+    };
+    let job_id = CounterfactualJobId::new(&SystemIdGenerator)?;
+    fixture
+        .store
+        .start_counterfactual_job(CounterfactualJobRequestV1::new(
+            job_id,
+            request.request_id,
+            semantics,
+            condition,
+            timestamp("2026-01-10T12:00:00Z")?,
+        )?)
+        .await?;
+    let mut progress = fixture
+        .app
+        .subscribe(EventTopic::CounterfactualProgress)
+        .await
+        .boxed()?;
+    let cancel = SolutionCancelCounterfactualRequestV1 {
+        schema_version: COUNTERFACTUAL_API_SCHEMA_VERSION,
+        cancel_request_id: request_id()?,
+        scenario_id: request.scenario_id,
+        expected_revision: request.expected_revision,
+        job_id,
+    };
+
+    let AppCommandResult::CounterfactualCancelled(first) = fixture
+        .app
+        .execute(AppCommand::SolutionCancelCounterfactual(cancel.clone()))
+        .await
+        .boxed()?
+    else {
+        return Err("expected first queued cancellation response".into());
+    };
+    assert_eq!(first.job.state, CounterfactualJobState::Cancelled);
+    let event = progress.recv().await.boxed()?;
+    assert!(matches!(
+        event.payload,
+        EventPayload::CounterfactualProgress {
+            phase: eutheto_types::CounterfactualProgressPhase::Cancelled,
+            ..
+        }
+    ));
+
+    let AppCommandResult::CounterfactualCancelled(replayed) = fixture
+        .app
+        .execute(AppCommand::SolutionCancelCounterfactual(cancel))
+        .await
+        .boxed()?
+    else {
+        return Err("expected replayed queued cancellation response".into());
+    };
+    assert_eq!(replayed.job, first.job);
+    assert!(progress.try_recv().boxed()?.is_none());
     Ok(())
 }

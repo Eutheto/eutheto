@@ -1,15 +1,17 @@
 use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack};
 use eutheto_domain_api::{
-    CompileContext, DomainBatchCommand, DomainCatalog, DomainExplanation, DomainMutation,
-    DomainPack, DomainPackDescriptor, DomainPackError, DomainShareResult, DomainValidationReport,
-    HistoricalPortableDomainDocument, PortableDomainDocument, PortableImportContext,
-    ShareResultOptions,
+    CompileContext, CounterfactualCompileContext, DomainBatchCommand, DomainCatalog,
+    DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainShareResult,
+    DomainValidationReport, HistoricalPortableDomainDocument, PortableDomainDocument,
+    PortableImportContext, ShareResultOptions,
 };
 use eutheto_domain_ir::{
-    AcceptedResult, AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
-    DomainEntityRef, NormalizedSolution, OptimizationDirection, ScoreCategoryId, ScoreLevelId,
-    ScoreLevelValue, ScoreVector, VERIFICATION_REPORT_SCHEMA_VERSION, VerificationIssue,
-    VerificationIssueId, VerificationReport, VerificationSeverity,
+    AcceptedResult, AssignmentValue, CounterfactualConditionV1, DomainAssignmentId, DomainEntityId,
+    DomainEntityKindId, DomainEntityRef, DomainEvidenceId, EvidenceRenderRequestV1,
+    EvidenceRenderResultV1, ExplanationCapability, NormalizedSolution, OptimizationDirection,
+    RequiredRuleBinding, RuleEvaluation, ScoreCategoryId, ScoreLevelId, ScoreLevelValue,
+    ScoreVector, VerificationContextV1, VerificationFactId, VerificationReport, VerificationScope,
+    VerificationValue, blake3_hex,
 };
 use eutheto_planning_ir::{
     BoolVariable, BoolVariableId, CandidateValues, Capability, ComparisonOp, CompilerId,
@@ -19,10 +21,10 @@ use eutheto_planning_ir::{
     ObjectiveTerm, ObjectiveTermId, ObjectiveTermKind, PLANNING_IR_SCHEMA_VERSION,
     PROJECTION_SCHEMA_VERSION, PlanningConstraintId, PlanningIrLimitsV1, PlanningMetadata,
     PlanningProblem, ProjectionExpression, ProjectionId, ProvenanceId, ProvenanceParameter,
-    ProvenanceRecord, ProvenanceSourceKind, SolutionProjection, Variable, feature_usage, summarize,
-    validate,
+    ProvenanceRecord, ProvenanceSourceKind, SolutionProjection, Variable, canonical_ir_hash,
+    feature_usage, summarize, validate,
 };
-use eutheto_types::{CancellationToken, ScenarioDocument, SolutionId};
+use eutheto_types::{CancellationToken, RuleId, ScenarioDocument, SolutionId};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -34,6 +36,11 @@ const FIXTURE_ENTITY_KIND: &str = "official.test.fixture.option";
 const FIXTURE_SCORE_LEVEL: &str = "official.test.fixture.score.selected";
 const FIXTURE_SCORE_CATEGORY: &str = "official.test.fixture.score.selected-total";
 const MAX_FIXTURE_OPTIONS: u32 = 8;
+const FIXTURE_RULE_EARLY: &str = "0195a5e4-7c00-7000-8000-000000000101";
+const FIXTURE_RULE_OVERLAP: &str = "0195a5e4-7c00-7000-8000-000000000102";
+const FIXTURE_RULE_INELIGIBLE: &str = "0195a5e4-7c00-7000-8000-000000000103";
+const FIXTURE_RULE_NO_OVERLAP: &str = "0195a5e4-7c00-7000-8000-000000000104";
+const FIXTURE_RULE_CUMULATIVE: &str = "0195a5e4-7c00-7000-8000-000000000105";
 
 #[derive(Clone, Copy, Debug)]
 struct FixtureOption {
@@ -198,7 +205,9 @@ struct IntervalFixturePack {
 
 impl DomainPack for IntervalFixturePack {
     fn descriptor(&self) -> Result<DomainPackDescriptor, DomainPackError> {
-        OfficialTestPack.descriptor()
+        let mut descriptor = OfficialTestPack.descriptor()?;
+        descriptor.explanation_capabilities.clear();
+        Ok(descriptor)
     }
 
     fn catalog(&self) -> Result<DomainCatalog, DomainPackError> {
@@ -249,21 +258,38 @@ impl DomainPack for IntervalFixturePack {
         OfficialTestPack.project(problem, candidate, solution_id)
     }
 
+    fn verification_scope(
+        &self,
+        document: &ScenarioDocument,
+        scenario_revision: u64,
+    ) -> Result<VerificationScope, DomainPackError> {
+        if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID {
+            return Err(contract("optional fixture scenario pack mismatch"));
+        }
+        VerificationScope::new(
+            document.scenario_id,
+            scenario_revision,
+            fixture_rule_bindings()?,
+        )
+        .map_err(contract)
+    }
+
     fn verify(
         &self,
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
+        context: &VerificationContextV1,
+        authoritative_score: &ScoreVector,
     ) -> Result<VerificationReport, DomainPackError> {
-        let (score, issues) = assess_interval_fixture(document, solution)?;
-        let report = VerificationReport {
-            schema_version: VERIFICATION_REPORT_SCHEMA_VERSION,
-            scenario_revision: solution.scenario_revision,
-            feasible: issues.is_empty(),
-            issues,
-            score: Some(score),
-        };
-        report.validate().map_err(contract)?;
-        Ok(report)
+        validate_interval_verification_context(*self, document, solution, context)?;
+        VerificationReport::new(
+            context,
+            evaluate_interval_rules(document, solution)?,
+            authoritative_score.clone(),
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .map_err(contract)
     }
 
     fn score(
@@ -271,7 +297,7 @@ impl DomainPack for IntervalFixturePack {
         document: &ScenarioDocument,
         solution: &NormalizedSolution,
     ) -> Result<ScoreVector, DomainPackError> {
-        assess_interval_fixture(document, solution).map(|(score, _)| score)
+        authoritative_interval_score(document, solution)
     }
 
     fn export_portable(
@@ -314,13 +340,25 @@ impl DomainPack for IntervalFixturePack {
         OfficialTestPack.build_view(document, solution, view_id)
     }
 
-    fn explain(
+    fn render_evidence(
         &self,
-        document: &ScenarioDocument,
-        solution: Option<&NormalizedSolution>,
-        request_id: &str,
-    ) -> Result<DomainExplanation, DomainPackError> {
-        OfficialTestPack.explain(document, solution, request_id)
+        _document: &ScenarioDocument,
+        request: &EvidenceRenderRequestV1,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            explanation_capability(request.kind),
+        ))
+    }
+
+    fn compile_counterfactual(
+        &self,
+        _document: &ScenarioDocument,
+        _condition: &CounterfactualConditionV1,
+        _context: &CounterfactualCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            ExplanationCapability::Counterfactual,
+        ))
     }
 }
 
@@ -368,18 +406,21 @@ fn build_interval_problem(
                 ProvenanceSourceKind::Fact,
                 format!("official.test.fixture.option.{}", option.key),
                 entity.clone(),
+                None,
             ),
             provenance_record(
                 eligibility_rule.clone(),
                 ProvenanceSourceKind::RequiredRule,
                 format!("official.test.fixture.eligibility.{}", option.key),
                 entity.clone(),
+                Some(fact.clone()),
             ),
             provenance_record(
                 projection.clone(),
                 ProvenanceSourceKind::Projection,
                 format!("official.test.fixture.projection.{}", option.key),
                 entity.clone(),
+                Some(eligibility_rule.clone()),
             ),
         ]);
 
@@ -627,10 +668,79 @@ fn fixed_integer_constraint(
     })
 }
 
-fn assess_interval_fixture(
+fn fixture_rule_bindings() -> Result<Vec<RequiredRuleBinding>, DomainPackError> {
+    let mut bindings = OPTIONS
+        .into_iter()
+        .map(|option| {
+            Ok(RequiredRuleBinding {
+                rule_id: fixture_rule_id(option)?,
+                semantic_hash: blake3_hex(
+                    format!(
+                        "official.test.fixture.option/v1;key={};start={};duration={};eligible={}",
+                        option.key, option.start, option.duration, option.eligible
+                    )
+                    .as_bytes(),
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, DomainPackError>>()?;
+    bindings.extend([
+        RequiredRuleBinding {
+            rule_id: RuleId::from_str(FIXTURE_RULE_NO_OVERLAP).map_err(contract)?,
+            semantic_hash: blake3_hex(
+                b"official.test.fixture.no-overlap/v1;capacity=1;options=early,ineligible,overlap",
+            ),
+        },
+        RequiredRuleBinding {
+            rule_id: RuleId::from_str(FIXTURE_RULE_CUMULATIVE).map_err(contract)?,
+            semantic_hash: blake3_hex(
+                b"official.test.fixture.cumulative/v1;capacity=1;horizon=0..5;options=early,ineligible,overlap",
+            ),
+        },
+    ]);
+    Ok(bindings)
+}
+
+fn fixture_rule_id(option: FixtureOption) -> Result<RuleId, DomainPackError> {
+    RuleId::from_str(match option.key {
+        "early" => FIXTURE_RULE_EARLY,
+        "overlap" => FIXTURE_RULE_OVERLAP,
+        "ineligible" => FIXTURE_RULE_INELIGIBLE,
+        _ => return Err(contract("unknown optional fixture rule")),
+    })
+    .map_err(contract)
+}
+
+fn validate_interval_verification_context(
+    pack: IntervalFixturePack,
     document: &ScenarioDocument,
     solution: &NormalizedSolution,
-) -> Result<(ScoreVector, Vec<VerificationIssue>), DomainPackError> {
+    context: &VerificationContextV1,
+) -> Result<(), DomainPackError> {
+    context.validate().map_err(contract)?;
+    let document_hash =
+        blake3_hex(&serde_json::to_vec(document).map_err(|error| contract(error.to_string()))?);
+    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    if context.scenario_id != document.scenario_id
+        || context.evaluated_revision != solution.scenario_revision
+        || context.document_hash != document_hash
+        || context.normalized_solution_hash != solution.canonical_hash().map_err(contract)?
+        || context.verification_scope_checksum != scope.checksum
+    {
+        return Err(contract(
+            "optional fixture verification context binding mismatch",
+        ));
+    }
+    Ok(())
+}
+
+// Keep the independent rule evaluator contiguous so its facts and aggregate capacity checks remain
+// auditable against the fixture's domain semantics.
+#[allow(clippy::too_many_lines)]
+fn evaluate_interval_rules(
+    document: &ScenarioDocument,
+    solution: &NormalizedSolution,
+) -> Result<Vec<RuleEvaluation>, DomainPackError> {
     if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID
         || solution.pack_id != document.domain_pack.id
         || solution.scenario_id != document.scenario_id
@@ -656,15 +766,192 @@ fn assess_interval_fixture(
         .iter()
         .map(|assignment| (assignment.id.clone(), assignment))
         .collect();
+    let eligible_fact =
+        VerificationFactId::new("official.test.fixture.fact.eligible").map_err(contract)?;
+    let present_fact =
+        VerificationFactId::new("official.test.fixture.fact.present").map_err(contract)?;
+    let start_fact =
+        VerificationFactId::new("official.test.fixture.fact.start").map_err(contract)?;
+    let duration_fact =
+        VerificationFactId::new("official.test.fixture.fact.duration").map_err(contract)?;
+    let end_fact = VerificationFactId::new("official.test.fixture.fact.end").map_err(contract)?;
+    let assignment_kind_fact =
+        VerificationFactId::new("official.test.fixture.fact.assignment-kind").map_err(contract)?;
     let mut selected = Vec::new();
-    let mut issues = Vec::new();
+    let mut evaluations = Vec::with_capacity(OPTIONS.len() + 2);
+    for option in OPTIONS {
+        let assignment = assignments
+            .get(&fixture_assignment_id(option)?)
+            .ok_or_else(|| contract("optional fixture assignment is missing"))?;
+        let entity = fixture_entity(option)?;
+        if assignment.entity != entity {
+            return Err(contract("optional fixture assignment entity mismatch"));
+        }
+        let mut observed = BTreeMap::from([(
+            present_fact.clone(),
+            VerificationValue::Boolean(!matches!(assignment.value, AssignmentValue::Absent)),
+        )]);
+        let satisfied = match &assignment.value {
+            AssignmentValue::Absent => true,
+            AssignmentValue::Interval(interval) => {
+                observed.extend([
+                    (
+                        start_fact.clone(),
+                        VerificationValue::Integer(interval.start),
+                    ),
+                    (
+                        duration_fact.clone(),
+                        VerificationValue::Integer(interval.duration),
+                    ),
+                    (end_fact.clone(), VerificationValue::Integer(interval.end)),
+                ]);
+                let exact = interval.start == option.start
+                    && interval.duration == option.duration
+                    && interval.end == option.end();
+                if exact && option.eligible {
+                    selected.push((option, *interval));
+                }
+                exact && option.eligible
+            }
+            AssignmentValue::Boolean(_) => {
+                observed.insert(
+                    assignment_kind_fact.clone(),
+                    VerificationValue::Text("boolean".to_owned()),
+                );
+                false
+            }
+            AssignmentValue::Integer(_) => {
+                observed.insert(
+                    assignment_kind_fact.clone(),
+                    VerificationValue::Text("integer".to_owned()),
+                );
+                false
+            }
+        };
+        evaluations.push(RuleEvaluation {
+            rule_id: fixture_rule_id(option)?,
+            satisfied,
+            affected_entities: vec![entity],
+            message_key: "official.test.fixture.verify.option".to_owned(),
+            expected: BTreeMap::from([
+                (
+                    eligible_fact.clone(),
+                    VerificationValue::Boolean(option.eligible),
+                ),
+                (start_fact.clone(), VerificationValue::Integer(option.start)),
+                (
+                    duration_fact.clone(),
+                    VerificationValue::Integer(option.duration),
+                ),
+                (end_fact.clone(), VerificationValue::Integer(option.end())),
+            ]),
+            observed,
+            evidence: vec![
+                DomainEvidenceId::new(fixture_provenance("eligibility", option)?.as_str())
+                    .map_err(contract)?,
+            ],
+        });
+    }
+
+    let no_overlap_fact =
+        VerificationFactId::new("official.test.fixture.fact.no-overlap").map_err(contract)?;
+    let has_overlap = selected.iter().enumerate().any(|(left_index, (_, left))| {
+        selected
+            .iter()
+            .skip(left_index + 1)
+            .any(|(_, right)| left.start < right.end && right.start < left.end)
+    });
+    let affected_entities = fixture_selected_entities(&selected)?;
+    evaluations.push(RuleEvaluation {
+        rule_id: RuleId::from_str(FIXTURE_RULE_NO_OVERLAP).map_err(contract)?,
+        satisfied: !has_overlap,
+        affected_entities: affected_entities.clone(),
+        message_key: "official.test.fixture.verify.no_overlap".to_owned(),
+        expected: BTreeMap::from([(no_overlap_fact.clone(), VerificationValue::Boolean(true))]),
+        observed: BTreeMap::from([(no_overlap_fact, VerificationValue::Boolean(!has_overlap))]),
+        evidence: vec![
+            DomainEvidenceId::new("official_test.fixture.rule.global").map_err(contract)?,
+        ],
+    });
+
+    let max_demand = (0..5)
+        .map(|instant| {
+            selected
+                .iter()
+                .filter(|(_, interval)| interval.start <= instant && instant < interval.end)
+                .count()
+        })
+        .max()
+        .unwrap_or(0);
+    let capacity_fact =
+        VerificationFactId::new("official.test.fixture.fact.capacity").map_err(contract)?;
+    let demand_fact =
+        VerificationFactId::new("official.test.fixture.fact.maximum-demand").map_err(contract)?;
+    evaluations.push(RuleEvaluation {
+        rule_id: RuleId::from_str(FIXTURE_RULE_CUMULATIVE).map_err(contract)?,
+        satisfied: max_demand <= 1,
+        affected_entities,
+        message_key: "official.test.fixture.verify.cumulative".to_owned(),
+        expected: BTreeMap::from([(capacity_fact, VerificationValue::Integer(1))]),
+        observed: BTreeMap::from([(
+            demand_fact,
+            VerificationValue::Integer(i64::try_from(max_demand).map_err(contract)?),
+        )]),
+        evidence: vec![
+            DomainEvidenceId::new("official_test.fixture.rule.global").map_err(contract)?,
+        ],
+    });
+    Ok(evaluations)
+}
+
+fn fixture_selected_entities(
+    selected: &[(FixtureOption, eutheto_domain_ir::AssignedInterval)],
+) -> Result<Vec<DomainEntityRef>, DomainPackError> {
+    let entities = selected
+        .iter()
+        .map(|(option, _)| fixture_entity(*option))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    Ok(entities.into_iter().collect())
+}
+
+fn authoritative_interval_score(
+    document: &ScenarioDocument,
+    solution: &NormalizedSolution,
+) -> Result<ScoreVector, DomainPackError> {
+    if document.domain_pack.id.as_str() != OFFICIAL_TEST_PACK_ID
+        || solution.pack_id != document.domain_pack.id
+        || solution.scenario_id != document.scenario_id
+    {
+        return Err(contract("optional fixture solution scenario mismatch"));
+    }
+    solution.validate().map_err(contract)?;
+    let expected_ids = OPTIONS
+        .into_iter()
+        .map(fixture_assignment_id)
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if solution.assignments.len() != expected_ids.len()
+        || solution
+            .assignments
+            .iter()
+            .any(|assignment| !expected_ids.contains(&assignment.id))
+    {
+        return Err(contract("optional fixture assignment set mismatch"));
+    }
+
+    let assignments = solution
+        .assignments
+        .iter()
+        .map(|assignment| (&assignment.id, assignment))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected = Vec::new();
+    let mut selected_count = 0_i64;
+    let mut feasibility = 0_i64;
     for option in OPTIONS {
         let assignment = assignments
             .get(&fixture_assignment_id(option)?)
             .ok_or_else(|| contract("optional fixture assignment is missing"))?;
         if assignment.entity != fixture_entity(option)? {
-            issues.push(fixture_issue("identity", option.key, &[option])?);
-            continue;
+            return Err(contract("optional fixture assignment entity mismatch"));
         }
         match &assignment.value {
             AssignmentValue::Absent => {}
@@ -673,61 +960,55 @@ fn assess_interval_fixture(
                     && interval.duration == option.duration
                     && interval.end == option.end() =>
             {
+                selected_count = selected_count
+                    .checked_add(1)
+                    .ok_or_else(|| contract("optional fixture selected count overflow"))?;
                 if option.eligible {
-                    selected.push((option, *interval));
+                    selected.push(*interval);
                 } else {
-                    issues.push(fixture_issue("eligibility", option.key, &[option])?);
+                    feasibility = feasibility
+                        .checked_add(1)
+                        .ok_or_else(|| contract("optional fixture feasibility overflow"))?;
                 }
             }
-            AssignmentValue::Interval(_) => {
-                issues.push(fixture_issue("interval_values", option.key, &[option])?);
-            }
-            AssignmentValue::Boolean(_) | AssignmentValue::Integer(_) => {
-                issues.push(fixture_issue("assignment_type", option.key, &[option])?);
+            AssignmentValue::Boolean(_)
+            | AssignmentValue::Integer(_)
+            | AssignmentValue::Interval(_) => {
+                feasibility = feasibility
+                    .checked_add(1)
+                    .ok_or_else(|| contract("optional fixture feasibility overflow"))?;
             }
         }
     }
 
-    for left_index in 0..selected.len() {
-        for right_index in (left_index + 1)..selected.len() {
-            let (left_option, left) = selected[left_index];
-            let (right_option, right) = selected[right_index];
-            if left.start < right.end && right.start < left.end {
-                let key = format!("{}_{}", left_option.key, right_option.key);
-                issues.push(fixture_issue(
-                    "no_overlap",
-                    &key,
-                    &[left_option, right_option],
-                )?);
-            }
-        }
-    }
-    for instant in 0..5 {
-        let demand = selected
+    let has_overlap = selected.iter().enumerate().any(|(left_index, left)| {
+        selected
             .iter()
-            .filter(|(_, interval)| interval.start <= instant && instant < interval.end)
-            .count();
-        if demand > 1 {
-            issues.push(fixture_issue(
-                "cumulative",
-                &instant.to_string(),
-                &selected
-                    .iter()
-                    .map(|(option, _)| *option)
-                    .collect::<Vec<_>>(),
-            )?);
-            break;
-        }
+            .skip(left_index + 1)
+            .any(|right| left.start < right.end && right.start < left.end)
+    });
+    if has_overlap {
+        feasibility = feasibility
+            .checked_add(1)
+            .ok_or_else(|| contract("optional fixture feasibility overflow"))?;
     }
-    issues.sort_by(|left, right| left.id.cmp(&right.id));
-    let selected_count = i64::try_from(selected.len()).map_err(contract)?;
-    let score = fixture_score(selected_count, issues.len())?;
-    Ok((score, issues))
-}
+    let max_demand = (0..5)
+        .map(|instant| {
+            selected
+                .iter()
+                .filter(|interval| interval.start <= instant && instant < interval.end)
+                .count()
+        })
+        .max()
+        .unwrap_or(0);
+    if max_demand > 1 {
+        feasibility = feasibility
+            .checked_add(1)
+            .ok_or_else(|| contract("optional fixture feasibility overflow"))?;
+    }
 
-fn fixture_score(selected_count: i64, issue_count: usize) -> Result<ScoreVector, DomainPackError> {
     Ok(ScoreVector {
-        feasibility: i64::try_from(issue_count).map_err(contract)?,
+        feasibility,
         levels: vec![ScoreLevelValue {
             level_id: ScoreLevelId::new(FIXTURE_SCORE_LEVEL).map_err(contract)?,
             value: selected_count,
@@ -739,25 +1020,6 @@ fn fixture_score(selected_count: i64, issue_count: usize) -> Result<ScoreVector,
             .into_iter()
             .collect(),
         }],
-    })
-}
-
-fn fixture_issue(
-    kind: &str,
-    suffix: &str,
-    options: &[FixtureOption],
-) -> Result<VerificationIssue, DomainPackError> {
-    Ok(VerificationIssue {
-        id: VerificationIssueId::new(format!("official.test.fixture.verify.{kind}.{suffix}"))
-            .map_err(contract)?,
-        severity: VerificationSeverity::Error,
-        message_key: format!("official.test.fixture.verify.{kind}"),
-        entities: options
-            .iter()
-            .copied()
-            .map(fixture_entity)
-            .collect::<Result<_, _>>()?,
-        evidence: Vec::new(),
     })
 }
 
@@ -804,6 +1066,7 @@ fn provenance_record(
     source_kind: ProvenanceSourceKind,
     source_id: String,
     entity: DomainEntityRef,
+    parent: Option<ProvenanceId>,
 ) -> ProvenanceRecord {
     ProvenanceRecord {
         id,
@@ -812,7 +1075,7 @@ fn provenance_record(
         entity_refs: vec![entity],
         message_key: "official.test.fixture.provenance.option".to_owned(),
         parameters: BTreeMap::new(),
-        parent: None,
+        parent,
     }
 }
 
@@ -857,6 +1120,22 @@ fn fixture_context() -> CompileContext {
         planning_limits: PlanningIrLimitsV1::DEFAULT,
     }
 }
+fn fixture_verification_context(
+    pack: &dyn DomainPack,
+    document: &ScenarioDocument,
+    problem: &PlanningProblem,
+    solution: &NormalizedSolution,
+) -> Result<VerificationContextV1, Box<dyn Error>> {
+    let scope = pack.verification_scope(document, solution.scenario_revision)?;
+    Ok(VerificationContextV1::new(
+        document.scenario_id,
+        solution.scenario_revision,
+        blake3_hex(&serde_json::to_vec(document)?),
+        canonical_ir_hash(problem, PlanningIrLimitsV1::DEFAULT)?,
+        solution.canonical_hash()?,
+        scope.checksum,
+    )?)
+}
 
 fn candidate_for(
     problem: &PlanningProblem,
@@ -900,8 +1179,429 @@ fn candidate_for(
     Ok(candidate)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct FixtureTruth {
+    accepted: bool,
+    feasibility: i64,
+    objective: i64,
+    assignments: BTreeMap<DomainAssignmentId, (DomainEntityRef, AssignmentValue)>,
+    rule_satisfaction: BTreeMap<RuleId, bool>,
+}
+
+struct FixtureObservation {
+    compiler_accepts: bool,
+    compiler_objective: i64,
+    solution: NormalizedSolution,
+    score: ScoreVector,
+    report: VerificationReport,
+}
+
+// This is intentionally a truth table over the domain fixture constants, not a restatement of
+// either the planning primitives or the verifier/scorer implementation.
+fn fixture_truth(selected_mask: usize) -> Result<FixtureTruth, DomainPackError> {
+    let mut assignments = BTreeMap::new();
+    let mut rule_satisfaction = BTreeMap::new();
+    let mut selected = Vec::new();
+    let mut feasibility = 0_i64;
+    let mut objective = 0_i64;
+    for (index, option) in OPTIONS.into_iter().enumerate() {
+        let is_selected = selected_mask & (1 << index) != 0;
+        let value = if is_selected {
+            objective = objective
+                .checked_add(1)
+                .ok_or_else(|| contract("fixture oracle objective overflow"))?;
+            let interval = eutheto_domain_ir::AssignedInterval::new(
+                option.start,
+                option.duration,
+                option.end(),
+            )
+            .map_err(contract)?;
+            if option.eligible {
+                selected.push(interval);
+            } else {
+                feasibility = feasibility
+                    .checked_add(1)
+                    .ok_or_else(|| contract("fixture oracle feasibility overflow"))?;
+            }
+            AssignmentValue::Interval(interval)
+        } else {
+            AssignmentValue::Absent
+        };
+        assignments.insert(
+            fixture_assignment_id(option)?,
+            (fixture_entity(option)?, value),
+        );
+        rule_satisfaction.insert(fixture_rule_id(option)?, !is_selected || option.eligible);
+    }
+
+    let has_overlap = selected.iter().enumerate().any(|(left_index, left)| {
+        selected
+            .iter()
+            .skip(left_index + 1)
+            .any(|right| left.start < right.end && right.start < left.end)
+    });
+    let horizon_end = OPTIONS
+        .into_iter()
+        .map(FixtureOption::end)
+        .max()
+        .unwrap_or(0);
+    let exceeds_capacity = (0..horizon_end).any(|instant| {
+        selected
+            .iter()
+            .filter(|interval| interval.start <= instant && instant < interval.end)
+            .count()
+            > 1
+    });
+    rule_satisfaction.insert(
+        RuleId::from_str(FIXTURE_RULE_NO_OVERLAP).map_err(contract)?,
+        !has_overlap,
+    );
+    rule_satisfaction.insert(
+        RuleId::from_str(FIXTURE_RULE_CUMULATIVE).map_err(contract)?,
+        !exceeds_capacity,
+    );
+    feasibility = feasibility
+        .checked_add(i64::from(has_overlap))
+        .and_then(|value| value.checked_add(i64::from(exceeds_capacity)))
+        .ok_or_else(|| contract("fixture oracle feasibility overflow"))?;
+
+    Ok(FixtureTruth {
+        accepted: feasibility == 0,
+        feasibility,
+        objective,
+        assignments,
+        rule_satisfaction,
+    })
+}
+
+fn fixture_expected_score(truth: &FixtureTruth) -> Result<ScoreVector, DomainPackError> {
+    Ok(ScoreVector {
+        feasibility: truth.feasibility,
+        levels: vec![ScoreLevelValue {
+            level_id: ScoreLevelId::new(FIXTURE_SCORE_LEVEL).map_err(contract)?,
+            value: truth.objective,
+            direction: OptimizationDirection::Minimize,
+            category_breakdown: [(
+                ScoreCategoryId::new(FIXTURE_SCORE_CATEGORY).map_err(contract)?,
+                truth.objective,
+            )]
+            .into_iter()
+            .collect(),
+        }],
+    })
+}
+
+fn fixture_literal_value(
+    literal: &Literal,
+    candidate: &CandidateValues,
+) -> Result<bool, DomainPackError> {
+    candidate
+        .booleans
+        .get(&literal.variable)
+        .copied()
+        .map(|value| value == literal.positive)
+        .ok_or_else(|| contract(format!("missing compiler Boolean {}", literal.variable)))
+}
+
+fn fixture_linear_value(
+    expression: &LinearExpression,
+    candidate: &CandidateValues,
+) -> Result<i64, DomainPackError> {
+    let mut value = expression.constant;
+    for term in &expression.terms {
+        let assigned = candidate
+            .integers
+            .get(&term.variable)
+            .copied()
+            .ok_or_else(|| contract(format!("missing compiler integer {}", term.variable)))?;
+        value = value
+            .checked_add(
+                term.coefficient
+                    .checked_mul(assigned)
+                    .ok_or_else(|| contract("compiler expression overflow"))?,
+            )
+            .ok_or_else(|| contract("compiler expression overflow"))?;
+    }
+    Ok(value)
+}
+
+fn fixture_present_interval(
+    problem: &PlanningProblem,
+    candidate: &CandidateValues,
+    id: &IntervalVariableId,
+) -> Result<Option<(i64, i64)>, DomainPackError> {
+    let interval = problem
+        .variables
+        .iter()
+        .find_map(|variable| match variable {
+            Variable::Interval(interval) if interval.id == *id => Some(interval),
+            Variable::Boolean(_) | Variable::Integer(_) | Variable::Interval(_) => None,
+        })
+        .ok_or_else(|| contract(format!("unknown compiler interval {id}")))?;
+    if let Some(presence) = &interval.presence
+        && !fixture_literal_value(presence, candidate)?
+    {
+        return Ok(None);
+    }
+    let start = candidate
+        .integers
+        .get(&interval.start)
+        .copied()
+        .ok_or_else(|| contract(format!("missing compiler integer {}", interval.start)))?;
+    let duration = candidate
+        .integers
+        .get(&interval.duration)
+        .copied()
+        .ok_or_else(|| contract(format!("missing compiler integer {}", interval.duration)))?;
+    let end = candidate
+        .integers
+        .get(&interval.end)
+        .copied()
+        .ok_or_else(|| contract(format!("missing compiler integer {}", interval.end)))?;
+    if duration < 0 || start.checked_add(duration) != Some(end) {
+        return Err(contract(format!("incoherent compiler interval {id}")));
+    }
+    Ok(Some((start, end)))
+}
+
+fn fixture_constraint_value(
+    problem: &PlanningProblem,
+    candidate: &CandidateValues,
+    constraint: &Constraint,
+) -> Result<bool, DomainPackError> {
+    match constraint {
+        Constraint::BoolAnd { literals } => {
+            for literal in literals {
+                if !fixture_literal_value(literal, candidate)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Constraint::LinearComparison(comparison) => {
+            let left = fixture_linear_value(&comparison.expression, candidate)?;
+            Ok(match comparison.op {
+                ComparisonOp::Equal => left == comparison.rhs,
+                ComparisonOp::LessOrEqual => left <= comparison.rhs,
+                ComparisonOp::GreaterOrEqual => left >= comparison.rhs,
+            })
+        }
+        Constraint::NoOverlap { intervals } => {
+            let mut present = Vec::new();
+            for interval in intervals {
+                if let Some(value) = fixture_present_interval(problem, candidate, interval)? {
+                    present.push(value);
+                }
+            }
+            Ok(!present.iter().enumerate().any(|(left_index, left)| {
+                present
+                    .iter()
+                    .skip(left_index + 1)
+                    .any(|right| left.0 < right.1 && right.0 < left.1)
+            }))
+        }
+        Constraint::Cumulative {
+            intervals,
+            demands,
+            capacity,
+        } => {
+            let mut present = Vec::new();
+            for (interval, demand) in intervals.iter().zip(demands) {
+                if let Some((start, end)) = fixture_present_interval(problem, candidate, interval)?
+                {
+                    present.push((start, end, *demand));
+                }
+            }
+            for instant in present.iter().map(|(start, _, _)| *start) {
+                let mut demand = 0_i64;
+                for (start, end, value) in &present {
+                    if *start <= instant && instant < *end {
+                        demand = demand
+                            .checked_add(*value)
+                            .ok_or_else(|| contract("compiler cumulative overflow"))?;
+                    }
+                }
+                if demand > *capacity {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        unsupported => Err(contract(format!(
+            "unsupported primitive in optional fixture: {unsupported:?}"
+        ))),
+    }
+}
+
+fn fixture_compiler_accepts(
+    problem: &PlanningProblem,
+    candidate: &CandidateValues,
+) -> Result<bool, DomainPackError> {
+    for variable in &problem.variables {
+        match variable {
+            Variable::Boolean(variable) => {
+                if !candidate.booleans.contains_key(&variable.id) {
+                    return Err(contract(format!(
+                        "missing compiler Boolean {}",
+                        variable.id
+                    )));
+                }
+            }
+            Variable::Integer(variable) => {
+                let value = candidate
+                    .integers
+                    .get(&variable.id)
+                    .copied()
+                    .ok_or_else(|| contract(format!("missing compiler integer {}", variable.id)))?;
+                if !variable.domain.contains(value) {
+                    return Ok(false);
+                }
+            }
+            Variable::Interval(variable) => {
+                fixture_present_interval(problem, candidate, &variable.id)?;
+            }
+        }
+    }
+    for record in &problem.constraints {
+        let mut enabled = true;
+        for literal in &record.enforcement {
+            if !fixture_literal_value(literal, candidate)? {
+                enabled = false;
+                break;
+            }
+        }
+        if enabled && !fixture_constraint_value(problem, candidate, &record.body)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn fixture_compiler_objective(
+    problem: &PlanningProblem,
+    candidate: &CandidateValues,
+) -> Result<i64, DomainPackError> {
+    let [level] = problem.objectives.levels.as_slice() else {
+        return Err(contract(
+            "optional fixture must have exactly one objective level",
+        ));
+    };
+    let mut objective = 0_i64;
+    for term in &level.terms {
+        if term.kind != ObjectiveTermKind::Penalty {
+            return Err(contract(
+                "optional fixture objective must contain penalties",
+            ));
+        }
+        objective = objective
+            .checked_add(fixture_linear_value(&term.expression, candidate)?)
+            .ok_or_else(|| contract("compiler objective overflow"))?;
+    }
+    Ok(objective)
+}
+
+fn observe_fixture_candidate(
+    pack: IntervalFixturePack,
+    document: &ScenarioDocument,
+    problem: &PlanningProblem,
+    selected_mask: usize,
+) -> Result<FixtureObservation, Box<dyn Error>> {
+    let candidate = candidate_for(problem, selected_mask)?;
+    let compiler_accepts = fixture_compiler_accepts(problem, &candidate)?;
+    let compiler_objective = fixture_compiler_objective(problem, &candidate)?;
+    let solution = pack.project(problem, &candidate, SolutionId::from_str(SOLUTION_ID)?)?;
+    let score = pack.score(document, &solution)?;
+    let verification_context = fixture_verification_context(&pack, document, problem, &solution)?;
+    let report = pack.verify(document, &solution, &verification_context, &score)?;
+    Ok(FixtureObservation {
+        compiler_accepts,
+        compiler_objective,
+        solution,
+        score,
+        report,
+    })
+}
+
+fn assert_fixture_conformance(
+    selected_mask: usize,
+    observation: &FixtureObservation,
+) -> Result<(), DomainPackError> {
+    let truth = fixture_truth(selected_mask)?;
+    if observation.compiler_accepts != truth.accepted {
+        return Err(contract(format!(
+            "compiler feasibility mismatch for mask {selected_mask:#05b}"
+        )));
+    }
+    if observation.compiler_objective != truth.objective {
+        return Err(contract(format!(
+            "compiler objective mismatch for mask {selected_mask:#05b}"
+        )));
+    }
+
+    let actual_assignments = observation
+        .solution
+        .assignments
+        .iter()
+        .map(|assignment| {
+            (
+                assignment.id.clone(),
+                (assignment.entity.clone(), assignment.value.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if actual_assignments != truth.assignments {
+        return Err(contract(format!(
+            "exact projection mismatch for mask {selected_mask:#05b}"
+        )));
+    }
+
+    let expected_score = fixture_expected_score(&truth)?;
+    if observation.score != expected_score {
+        return Err(contract(format!(
+            "authoritative score mismatch for mask {selected_mask:#05b}"
+        )));
+    }
+    let actual_rules = observation
+        .report
+        .required_rule_results
+        .iter()
+        .map(|evaluation| (evaluation.rule_id, evaluation.satisfied))
+        .collect::<BTreeMap<_, _>>();
+    if actual_rules != truth.rule_satisfaction {
+        return Err(contract(format!(
+            "verifier rule mismatch for mask {selected_mask:#05b}"
+        )));
+    }
+    if observation.report.accepted != truth.accepted {
+        return Err(contract(format!(
+            "verifier acceptance mismatch for mask {selected_mask:#05b}"
+        )));
+    }
+    if observation.report.score != expected_score {
+        return Err(contract(format!(
+            "verifier score mismatch for mask {selected_mask:#05b}"
+        )));
+    }
+    Ok(())
+}
+
 fn projected_schedule(solution: &NormalizedSolution) -> Result<String, serde_json::Error> {
     serde_json::to_string(&solution.assignments)
+}
+fn explanation_capability(kind: eutheto_domain_ir::ExplanationKind) -> ExplanationCapability {
+    match kind {
+        eutheto_domain_ir::ExplanationKind::Validation => ExplanationCapability::Validation,
+        eutheto_domain_ir::ExplanationKind::Infeasibility => ExplanationCapability::Infeasibility,
+        eutheto_domain_ir::ExplanationKind::Assignment => ExplanationCapability::Assignment,
+        eutheto_domain_ir::ExplanationKind::Counterfactual => ExplanationCapability::Counterfactual,
+        eutheto_domain_ir::ExplanationKind::SolutionDifference => {
+            ExplanationCapability::SolutionDifference
+        }
+        eutheto_domain_ir::ExplanationKind::Repair => ExplanationCapability::Repair,
+        eutheto_domain_ir::ExplanationKind::OptimalityStatus => {
+            ExplanationCapability::OptimalityStatus
+        }
+    }
 }
 
 fn contract(error: impl std::fmt::Display) -> DomainPackError {
@@ -944,6 +1644,8 @@ fn compile_and_assert_interval_problem(
 }
 
 #[test]
+// This test intentionally exercises the complete optional-interval boundary in one sequence.
+#[allow(clippy::too_many_lines)]
 fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<dyn Error>> {
     let pack = IntervalFixturePack { prune: false };
     let document = fixture_document()?;
@@ -972,14 +1674,45 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
             .iter()
             .all(|assignment| assignment.value == AssignmentValue::Absent)
     );
-    let absent_report = pack.verify(&document, &absent)?;
-    assert!(absent_report.feasible);
+    let absent_score = pack.score(&document, &absent)?;
+    let absent_context = fixture_verification_context(&pack, &document, &first, &absent)?;
+    let absent_report = pack.verify(&document, &absent, &absent_context, &absent_score)?;
+    assert!(absent_report.accepted);
+    assert_eq!(absent_report.score.feasibility, 0);
+    assert_eq!(absent_report.score.levels[0].value, 0);
+    let scope = pack.verification_scope(&document, context.scenario_revision)?;
+    assert_eq!(
+        scope
+            .required_rules
+            .iter()
+            .map(|binding| binding.rule_id.to_string())
+            .collect::<Vec<_>>(),
+        vec![
+            FIXTURE_RULE_EARLY,
+            FIXTURE_RULE_OVERLAP,
+            FIXTURE_RULE_INELIGIBLE,
+            FIXTURE_RULE_NO_OVERLAP,
+            FIXTURE_RULE_CUMULATIVE,
+        ]
+    );
     assert_eq!(
         absent_report
-            .score
-            .as_ref()
-            .map(|score| score.levels[0].value),
-        Some(0)
+            .required_rule_results
+            .iter()
+            .map(|evaluation| evaluation.rule_id)
+            .collect::<Vec<_>>(),
+        scope
+            .required_rules
+            .iter()
+            .map(|binding| binding.rule_id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(absent_report.required_rule_results.len(), OPTIONS.len() + 2);
+    assert!(
+        absent_report
+            .required_rule_results
+            .iter()
+            .all(|evaluation| evaluation.satisfied)
     );
 
     let mut ignored_incoherence = absent_candidate;
@@ -1004,10 +1737,12 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
         &present_candidate,
         SolutionId::from_str(SOLUTION_ID)?,
     )?;
-    let present_report = pack.verify(&document, &present)?;
-    assert!(present_report.feasible);
-    let independently_scored = pack.score(&document, &present)?;
-    assert_eq!(present_report.score.as_ref(), Some(&independently_scored));
+    let present_score = pack.score(&document, &present)?;
+    let present_context = fixture_verification_context(&pack, &document, &first, &present)?;
+    let present_report = pack.verify(&document, &present, &present_context, &present_score)?;
+    assert!(present_report.accepted);
+    assert_eq!(present_report.score.feasibility, 0);
+    assert_eq!(present_report.score, present_score);
     assert!(matches!(
         &present.assignments[0].value,
         AssignmentValue::Interval(interval)
@@ -1035,19 +1770,22 @@ fn optional_intervals_compile_project_and_verify_boundaries() -> Result<(), Box<
         &candidate_for(&first, 0b011)?,
         SolutionId::from_str(SOLUTION_ID)?,
     )?;
-    let overlap_report = pack.verify(&document, &overlap)?;
-    assert!(!overlap_report.feasible);
-    assert!(
+    let overlap_score = pack.score(&document, &overlap)?;
+    let overlap_context = fixture_verification_context(&pack, &document, &first, &overlap)?;
+    let overlap_report = pack.verify(&document, &overlap, &overlap_context, &overlap_score)?;
+    assert!(!overlap_report.accepted);
+    assert_eq!(overlap_report.score.feasibility, 2);
+    assert_eq!(
         overlap_report
-            .issues
+            .required_rule_results
             .iter()
-            .any(|issue| issue.message_key == "official.test.fixture.verify.no_overlap")
-    );
-    assert!(
-        overlap_report
-            .issues
-            .iter()
-            .any(|issue| issue.message_key == "official.test.fixture.verify.cumulative")
+            .filter(|evaluation| !evaluation.satisfied)
+            .map(|evaluation| evaluation.message_key.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "official.test.fixture.verify.no_overlap",
+            "official.test.fixture.verify.cumulative",
+        ]
     );
     Ok(())
 }
@@ -1133,25 +1871,126 @@ fn deterministic_pruning_preserves_every_feasible_schedule_and_score() -> Result
 
     let mut unpruned_feasible = BTreeMap::new();
     let mut pruned_feasible = BTreeMap::new();
-    for mask in 0..(1 << OPTIONS.len()) {
-        for (pack, problem, feasible) in [
-            (unpruned_pack, &unpruned, &mut unpruned_feasible),
-            (pruned_pack, &pruned, &mut pruned_feasible),
-        ] {
-            let solution = pack.project(
-                problem,
-                &candidate_for(problem, mask)?,
-                SolutionId::from_str(SOLUTION_ID)?,
-            )?;
-            let report = pack.verify(&document, &solution)?;
-            let score = pack.score(&document, &solution)?;
-            assert_eq!(report.score.as_ref(), Some(&score));
-            if report.feasible {
-                feasible.insert(projected_schedule(&solution)?, score.levels[0].value);
+    let pruned_bits = OPTIONS
+        .into_iter()
+        .enumerate()
+        .filter(|(_, option)| !option.eligible)
+        .fold(0_usize, |mask, (index, _)| mask | (1 << index));
+    for (pack, problem, feasible) in [
+        (unpruned_pack, &unpruned, &mut unpruned_feasible),
+        (pruned_pack, &pruned, &mut pruned_feasible),
+    ] {
+        for mask in 0..(1 << OPTIONS.len()) {
+            // A pruned option has no decision variable, so only masks representable by that
+            // compiled problem are candidates for its independent compiler evaluation.
+            if pack.prune && mask & pruned_bits != 0 {
+                continue;
+            }
+            let observation = observe_fixture_candidate(pack, &document, problem, mask)?;
+            assert_fixture_conformance(mask, &observation)?;
+            let truth = fixture_truth(mask)?;
+            if truth.accepted {
+                feasible.insert(projected_schedule(&observation.solution)?, truth.objective);
             }
         }
     }
     assert_eq!(unpruned_feasible.len(), 3);
     assert_eq!(unpruned_feasible, pruned_feasible);
+    Ok(())
+}
+
+#[test]
+fn conformance_rejects_one_sided_compiler_constraint_mutation() -> Result<(), Box<dyn Error>> {
+    let pack = IntervalFixturePack { prune: false };
+    let document = fixture_document()?;
+    let mut problem = pack.compile(&document, &fixture_context())?;
+    let record = problem
+        .constraints
+        .iter_mut()
+        .find(|record| record.id.as_str() == "official_test.fixture.fixed_start.early")
+        .ok_or("missing early start constraint")?;
+    let Constraint::LinearComparison(comparison) = &mut record.body else {
+        return Err("early start constraint is not a linear comparison".into());
+    };
+    comparison.rhs = 1;
+
+    let observation = observe_fixture_candidate(pack, &document, &problem, 0b001)?;
+    let Err(error) = assert_fixture_conformance(0b001, &observation) else {
+        return Err("the oracle accepted a one-sided compiler constraint mutation".into());
+    };
+    assert!(error.to_string().contains("compiler feasibility mismatch"));
+    Ok(())
+}
+
+#[test]
+fn conformance_rejects_one_sided_verifier_rule_mutation() -> Result<(), Box<dyn Error>> {
+    let pack = IntervalFixturePack { prune: false };
+    let document = fixture_document()?;
+    let problem = pack.compile(&document, &fixture_context())?;
+    let mut observation = observe_fixture_candidate(pack, &document, &problem, 0b001)?;
+    let early_rule = RuleId::from_str(FIXTURE_RULE_EARLY)?;
+    let mut mutated_rules = observation.report.required_rule_results.clone();
+    mutated_rules
+        .iter_mut()
+        .find(|evaluation| evaluation.rule_id == early_rule)
+        .ok_or("missing early verifier rule")?
+        .satisfied = false;
+    let verification_context =
+        fixture_verification_context(&pack, &document, &problem, &observation.solution)?;
+    observation.report = VerificationReport::new(
+        &verification_context,
+        mutated_rules,
+        observation.report.score.clone(),
+        Vec::new(),
+        BTreeMap::new(),
+    )?;
+
+    let Err(error) = assert_fixture_conformance(0b001, &observation) else {
+        return Err("the oracle accepted a one-sided verifier rule mutation".into());
+    };
+    assert!(error.to_string().contains("verifier rule mismatch"));
+    Ok(())
+}
+
+#[test]
+fn conformance_rejects_one_sided_exact_projection_mutation() -> Result<(), Box<dyn Error>> {
+    let pack = IntervalFixturePack { prune: false };
+    let document = fixture_document()?;
+    let mut problem = pack.compile(&document, &fixture_context())?;
+    let projection_id = fixture_projection_id(OPTIONS[0])?;
+    let projection = problem
+        .projections
+        .iter_mut()
+        .find(|projection| projection.id == projection_id)
+        .ok_or("missing early projection")?;
+    projection.expression = ProjectionExpression::Constant(AssignmentValue::Interval(
+        eutheto_domain_ir::AssignedInterval::new(0, 1, 1)?,
+    ));
+
+    let observation = observe_fixture_candidate(pack, &document, &problem, 0b001)?;
+    let Err(error) = assert_fixture_conformance(0b001, &observation) else {
+        return Err("the oracle accepted a one-sided exact projection mutation".into());
+    };
+    assert!(error.to_string().contains("exact projection mismatch"));
+    Ok(())
+}
+
+#[test]
+fn conformance_rejects_one_sided_in_bounds_score_mutation() -> Result<(), Box<dyn Error>> {
+    let pack = IntervalFixturePack { prune: false };
+    let document = fixture_document()?;
+    let problem = pack.compile(&document, &fixture_context())?;
+    let mut observation = observe_fixture_candidate(pack, &document, &problem, 0)?;
+    let mutated_value = 1_i64;
+    assert!(mutated_value <= problem.objectives.levels[0].upper_bound);
+    observation.score.levels[0].value = mutated_value;
+    observation.score.levels[0]
+        .category_breakdown
+        .insert(ScoreCategoryId::new(FIXTURE_SCORE_CATEGORY)?, mutated_value);
+
+    let Err(error) = assert_fixture_conformance(0, &observation) else {
+        return Err("the oracle accepted a one-sided in-bounds score mutation".into());
+    };
+    assert!(error.to_string().contains("authoritative score mismatch"));
     Ok(())
 }

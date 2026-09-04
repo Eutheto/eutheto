@@ -4,7 +4,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     AppliedPortableScenario, BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp,
-    FoundationStatusService, ProjectScope, SolverSupportMatrixMetadata, SupportCell,
+    FoundationStatusService, ProjectScope, SOLUTION_API_SCHEMA_VERSION, SolutionCompareRequestV1,
+    SolutionExplainRequestV1, SolutionListRequestV1, SolutionSummaryRequestV1,
+    SolutionVerifyRequestV1, SolverSupportMatrixMetadata, SupportCell,
+};
+use eutheto_domain_ir::{
+    AcceptedResultRefV1, DomainAssignmentId, ExplanationRequestSubjectV1, ExplanationRequestV1,
 };
 use eutheto_export::FixedExclusion;
 use eutheto_import::{
@@ -14,8 +19,8 @@ use eutheto_import::{
 use eutheto_types::{
     ActorRef, AppError, BackendId, CancellationToken, CommandBatch, CommandEnvelope, CommandId,
     CommandSource, DomainPackRef, GapPolicy, Horizon, IanaTimeZone, LocaleTag, PackId, RequestId,
-    Revision, ScenarioCommand, ScenarioId, ScenarioSettings, SystemClock, SystemIdGenerator,
-    UnitSystem,
+    Revision, ScenarioCommand, ScenarioId, ScenarioSettings, SolutionId, SystemClock,
+    SystemIdGenerator, UnitSystem,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, json};
@@ -29,6 +34,7 @@ use tokio::io::AsyncReadExt;
 const API_VERSION: &str = "eutheto/cli-result/v1";
 const COMMAND_JSON_LIMIT: u64 = 16 * 1024 * 1024;
 const BUNDLE_LIMIT: u64 = 64 * 1024 * 1024;
+const HUMAN_SOLUTION_LIST_LIMIT: usize = 20;
 
 /// Stable process exit codes for the working CLI contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,7 +176,7 @@ enum Command {
     Settings(SettingsArgs),
     /// Solve a scenario (catalogued but unavailable in Phase 02).
     Solve(SolveArgs),
-    /// Inspect or export solutions (catalogued but unavailable in Phase 02).
+    /// Inspect and independently verify accepted solutions.
     Solutions(SolutionsArgs),
     /// Inspect registered solver backends and the Phase-02 support matrix.
     Solvers(SolversArgs),
@@ -479,20 +485,31 @@ struct SolutionsArgs {
 #[derive(Debug, Subcommand)]
 enum SolutionsCommand {
     List {
-        input_or_id: String,
+        #[arg(value_name = "SCENARIO")]
+        scenario: String,
     },
     Verify {
-        scenario: PathBuf,
-        solution: PathBuf,
+        #[arg(value_name = "SCENARIO")]
+        scenario: String,
+        #[arg(value_name = "SOLUTION")]
+        solution: String,
     },
     Compare {
-        scenario: PathBuf,
-        solution_a: PathBuf,
-        solution_b: PathBuf,
+        #[arg(value_name = "SCENARIO")]
+        scenario: String,
+        #[arg(value_name = "BASE_SOLUTION")]
+        solution_a: String,
+        #[arg(value_name = "CANDIDATE_SOLUTION")]
+        solution_b: String,
     },
     Explain {
-        scenario: PathBuf,
-        solution: PathBuf,
+        #[arg(value_name = "SCENARIO")]
+        scenario: String,
+        #[arg(value_name = "SOLUTION")]
+        solution: String,
+        /// Stable assignment identity to explain within the accepted solution.
+        #[arg(long = "assignment-id", value_name = "ASSIGNMENT")]
+        assignment: String,
     },
     Export {
         scenario: PathBuf,
@@ -741,7 +758,7 @@ where
                     "Invalid command-line arguments; use --help for the command catalog.",
                 );
                 if requested_json {
-                    let _ = write_error_json(&mut stdout, "usage", &safe);
+                    let _ = write_error_json(&mut stderr, "usage", &safe);
                 } else {
                     let _ = writeln!(stderr, "optimizer: {}: {}", safe.code, safe.message);
                 }
@@ -793,7 +810,7 @@ where
                 interrupt_signal.cancel();
             }
         });
-        let result = execute_cli(cli, cancellation).await;
+        let result = Box::pin(execute_cli(cli, cancellation)).await;
         watcher.abort();
         result
     });
@@ -856,14 +873,11 @@ async fn execute_cli(
                 "Service mode is a post-MVP capability and is unavailable.",
             ),
         )),
-        Command::Solutions(_) => {
-            execute_deferred(
-                cli.data_dir,
-                "solutions",
-                DeferredCapability::Solution,
-                &cancellation,
-            )
-            .await
+        Command::Solutions(args) => {
+            let app = open_app(cli.data_dir, &cancellation)
+                .await
+                .map_err(|error| ("solutions", error))?;
+            execute_solutions(&app, args).await
         }
         Command::Solvers(args) => {
             let app = open_app(cli.data_dir, &cancellation)
@@ -1120,6 +1134,244 @@ async fn execute_solvers(
     }
 }
 
+async fn execute_solutions(
+    app: &EuthetoApp,
+    args: SolutionsArgs,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    match args.command {
+        SolutionsCommand::List { scenario } => execute_solution_list(app, &scenario).await,
+        SolutionsCommand::Verify { scenario, solution } => {
+            execute_solution_verify(app, &scenario, &solution).await
+        }
+        SolutionsCommand::Compare {
+            scenario,
+            solution_a,
+            solution_b,
+        } => execute_solution_compare(app, &scenario, &solution_a, &solution_b).await,
+        SolutionsCommand::Explain {
+            scenario,
+            solution,
+            assignment,
+        } => execute_solution_explain(app, &scenario, &solution, &assignment).await,
+        SolutionsCommand::Export { .. } => execute_solution_export(app).await,
+    }
+}
+
+async fn execute_solution_list(
+    app: &EuthetoApp,
+    scenario: &str,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    let scenario_id = scenario_id(scenario).map_err(|error| ("solutions.list", error))?;
+    let AppQueryResult::SolutionList(list) = app
+        .query(AppQuery::SolutionList(SolutionListRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id,
+        }))
+        .await
+        .map_err(|error| ("solutions.list", app_error(error)))?
+    else {
+        return Err(("solutions.list", unexpected_result()));
+    };
+    let mut human = list
+        .solutions
+        .iter()
+        .take(HUMAN_SOLUTION_LIST_LIMIT)
+        .map(|solution| {
+            format!(
+                "{}\trevision {}{}{}",
+                solution.result.solution_id,
+                solution.scenario_revision.value(),
+                if solution.stale { "\tstale" } else { "" },
+                if solution.selected { "\tselected" } else { "" },
+            )
+        })
+        .collect::<Vec<_>>();
+    if list.solutions.is_empty() {
+        human.push(format!("No accepted solutions for scenario {scenario_id}."));
+    } else if list.solutions.len() > HUMAN_SOLUTION_LIST_LIMIT {
+        human.push(format!(
+            "{} additional accepted solutions omitted.",
+            list.solutions.len() - HUMAN_SOLUTION_LIST_LIMIT
+        ));
+    }
+    Ok(Outcome::new(
+        "solutions.list",
+        "listed",
+        to_value(list).map_err(|error| ("solutions.list", error))?,
+        human,
+    ))
+}
+
+async fn execute_solution_verify(
+    app: &EuthetoApp,
+    scenario: &str,
+    solution: &str,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    let scenario_id = scenario_id(scenario).map_err(|error| ("solutions.verify", error))?;
+    let solution_id = solution_id(solution).map_err(|error| ("solutions.verify", error))?;
+    let AppQueryResult::SolutionVerification(verified) = app
+        .query(AppQuery::SolutionVerify(SolutionVerifyRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id,
+            solution_id,
+        }))
+        .await
+        .map_err(|error| ("solutions.verify", app_error(error)))?
+    else {
+        return Err(("solutions.verify", unexpected_result()));
+    };
+    let warnings = verified
+        .verification
+        .warnings
+        .iter()
+        .map(|warning| SafeCliWarning {
+            code: warning.id.to_string(),
+            message: warning.message_key.clone(),
+            details: Some(json!({
+                "affectedEntities": warning.affected_entities.clone(),
+                "facts": warning.facts.clone(),
+            })),
+        })
+        .collect();
+    let human = vec![format!(
+        "Solution {} independently verified for scenario {} revision {}.",
+        verified.result.solution_id,
+        verified.scenario_id,
+        verified.scenario_revision.value(),
+    )];
+    let mut outcome = Outcome::new(
+        "solutions.verify",
+        "verified",
+        to_value(&verified).map_err(|error| ("solutions.verify", error))?,
+        human,
+    );
+    outcome.warnings = warnings;
+    Ok(outcome)
+}
+
+async fn execute_solution_compare(
+    app: &EuthetoApp,
+    scenario: &str,
+    solution_a: &str,
+    solution_b: &str,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    let scenario_id = scenario_id(scenario).map_err(|error| ("solutions.compare", error))?;
+    let base_solution_id = solution_id(solution_a).map_err(|error| ("solutions.compare", error))?;
+    let candidate_solution_id =
+        solution_id(solution_b).map_err(|error| ("solutions.compare", error))?;
+    let AppQueryResult::SolutionComparison(comparison) = app
+        .query(AppQuery::SolutionCompare(SolutionCompareRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id,
+            base_solution_id,
+            candidate_solution_id,
+        }))
+        .await
+        .map_err(|error| ("solutions.compare", app_error(error)))?
+    else {
+        return Err(("solutions.compare", unexpected_result()));
+    };
+    let detail = &comparison.comparison;
+    let human = vec![
+        format!(
+            "Compared candidate {} with base {} for scenario {}.",
+            detail.candidate.accepted_result.solution_id,
+            detail.base.accepted_result.solution_id,
+            comparison.scenario_id,
+        ),
+        format!(
+            "{} assignment changes, {} required-rule changes, {} affected entities.",
+            detail.assignments.len(),
+            detail.rules.len(),
+            detail.affected_entities.len(),
+        ),
+    ];
+    Ok(Outcome::new(
+        "solutions.compare",
+        "compared",
+        to_value(&comparison).map_err(|error| ("solutions.compare", error))?,
+        human,
+    ))
+}
+
+async fn execute_solution_explain(
+    app: &EuthetoApp,
+    scenario: &str,
+    solution: &str,
+    assignment: &str,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    let scenario_id = scenario_id(scenario).map_err(|error| ("solutions.explain", error))?;
+    let solution_id = solution_id(solution).map_err(|error| ("solutions.explain", error))?;
+    let AppQueryResult::SolutionSummary(detail) = app
+        .query(AppQuery::SolutionGetSummary(SolutionSummaryRequestV1 {
+            schema_version: SOLUTION_API_SCHEMA_VERSION,
+            scenario_id,
+            solution_id,
+        }))
+        .await
+        .map_err(|error| ("solutions.explain", app_error(error)))?
+    else {
+        return Err(("solutions.explain", unexpected_result()));
+    };
+    let assignment_id = assignment.parse::<DomainAssignmentId>().map_err(|_| {
+        (
+            "solutions.explain",
+            SafeCliError::validation(
+                "solution.explanation_request_invalid",
+                "The explanation request contains an invalid assignment identifier.",
+            ),
+        )
+    })?;
+    let result = AcceptedResultRefV1::from_result(&detail.result)
+        .map_err(|_| ("solutions.explain", unexpected_result()))?;
+    let request = SolutionExplainRequestV1 {
+        schema_version: SOLUTION_API_SCHEMA_VERSION,
+        scenario_id,
+        request: ExplanationRequestV1::new(ExplanationRequestSubjectV1::Assignment {
+            result,
+            assignment_id,
+        })
+        .map_err(|_| {
+            (
+                "solutions.explain",
+                SafeCliError::validation(
+                    "solution.explanation_request_invalid",
+                    "The explanation request is invalid.",
+                ),
+            )
+        })?,
+    };
+    let AppQueryResult::SolutionExplanation(explanation) = app
+        .query(AppQuery::SolutionExplain(request))
+        .await
+        .map_err(|error| ("solutions.explain", app_error(error)))?
+    else {
+        return Err(("solutions.explain", unexpected_result()));
+    };
+    let human = vec![format!(
+        "Generated an explanation for assignment {assignment} in solution {solution_id} ({} messages).",
+        explanation.explanation.rendered.messages.len(),
+    )];
+    Ok(Outcome::new(
+        "solutions.explain",
+        "explained",
+        to_value(&explanation).map_err(|error| ("solutions.explain", error))?,
+        human,
+    ))
+}
+
+async fn execute_solution_export(
+    app: &EuthetoApp,
+) -> Result<Outcome, (&'static str, SafeCliError)> {
+    match app
+        .query(AppQuery::Deferred(DeferredCapability::Solution))
+        .await
+    {
+        Ok(_) => Err(("solutions.export", unexpected_result())),
+        Err(error) => Err(("solutions.export", app_error(error))),
+    }
+}
+
 async fn describe_solver(
     app: &EuthetoApp,
     solver_id: String,
@@ -1325,6 +1577,7 @@ async fn open_app(
             safety_backups: root.join("safety-backups"),
         },
         clock: Arc::new(SystemClock),
+        monotonic_clock: Arc::new(eutheto_types::SystemMonotonicClock::new()),
         ids: Arc::new(SystemIdGenerator),
         cancellation: cancellation.clone(),
     })
@@ -2948,6 +3201,15 @@ fn scenario_id(input: &str) -> Result<ScenarioId, SafeCliError> {
     })
 }
 
+fn solution_id(input: &str) -> Result<SolutionId, SafeCliError> {
+    input.parse().map_err(|_| {
+        SafeCliError::validation(
+            "solution.id_invalid",
+            "The solution identifier must be a UUIDv7.",
+        )
+    })
+}
+
 fn operation_request_id() -> Result<RequestId, SafeCliError> {
     RequestId::new(&SystemIdGenerator).map_err(|_| {
         SafeCliError::new(
@@ -3256,7 +3518,7 @@ fn render_success(
 }
 
 fn render_error(
-    stdout: &mut impl Write,
+    _stdout: &mut impl Write,
     stderr: &mut impl Write,
     format: OutputFormat,
     command: &'static str,
@@ -3270,7 +3532,7 @@ fn render_error(
             }
             Ok(())
         }
-        OutputFormat::Json => write_error_json(stdout, command, error),
+        OutputFormat::Json => write_error_json(stderr, command, error),
     }
 }
 
@@ -3311,7 +3573,7 @@ mod tests {
     use eutheto_types::CancellationToken;
     use eutheto_types::{
         AppError, ProtocolFailure, RequestId, Revision, StorageFailure, ValidationIssue,
-        ValidationReport, ValidationSeverity,
+        ValidationReport, ValidationSeverity, VerificationFailure,
     };
     use std::error::Error;
 
@@ -3454,8 +3716,8 @@ mod tests {
             "projects.export",
             &cancelled,
         )?;
-        assert!(stderr.is_empty());
-        let rendered = String::from_utf8(stdout)?;
+        assert!(stdout.is_empty());
+        let rendered = String::from_utf8(stderr)?;
         assert_eq!(rendered.lines().count(), 1);
         let envelope: serde_json::Value = serde_json::from_str(&rendered)?;
         assert_eq!(envelope["error"]["code"], "operation.cancelled");
@@ -3474,6 +3736,38 @@ mod tests {
         assert_eq!(
             String::from_utf8(stderr)?,
             "optimizer: operation.cancelled: The operation was cancelled.\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn independent_verification_alarm_is_exit_7_on_stderr() -> Result<(), Box<dyn Error>> {
+        let alarm = app_error(AppError::Verification(VerificationFailure {
+            code: "solution.reverification_mismatch".to_owned(),
+            message: "Fresh independent verification did not match the retained accepted result."
+                .to_owned(),
+            retryable: false,
+            diagnostic_id: None,
+        }));
+        assert_eq!(alarm.exit, CliExitCode::Verification);
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        render_error(
+            &mut stdout,
+            &mut stderr,
+            OutputFormat::Json,
+            "solutions.verify",
+            &alarm,
+        )?;
+        assert!(stdout.is_empty());
+        let rendered = String::from_utf8(stderr)?;
+        assert_eq!(rendered.lines().count(), 1);
+        let envelope: serde_json::Value = serde_json::from_str(&rendered)?;
+        assert_eq!(envelope["command"], "solutions.verify");
+        assert_eq!(
+            envelope["error"]["code"],
+            "solution.reverification_mismatch"
         );
         Ok(())
     }

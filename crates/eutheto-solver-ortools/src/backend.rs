@@ -12,10 +12,10 @@ use eutheto_protocol::{
 use eutheto_solver_api::{
     BACKEND_STATISTIC_MAX_V1, BackendAppliedParameterEvidence, BackendError,
     BackendExecutionEvidence, BackendModelCountEvidence, BackendOutputSink,
-    BackendReproducibilityEvidence, BackendSolveFuture, BackendSolveOutcome,
-    BackendTerminationReason, BackendTimingEvidence, BackendWorkerStatistics, CapabilityMatrix,
-    CompatibilityLevel, CompatibilityReport, RegistryError, SolveDispatchBudget, SolverBackend,
-    SolverDescriptor, SolverRegistry, preflight,
+    BackendReproducibilityEvidence, BackendRuntimeIdentity, BackendRuntimeIdentityError,
+    BackendSolveFuture, BackendSolveOutcome, BackendTerminationReason, BackendTimingEvidence,
+    BackendWorkerStatistics, CapabilityMatrix, CompatibilityLevel, CompatibilityReport,
+    RegistryError, SolveDispatchBudget, SolverBackend, SolverDescriptor, SolverRegistry, preflight,
 };
 use eutheto_types::{DurationMillis, ReproducibilityMode, SolveOptions, WorkerThreadPolicy};
 use prost::bytes::Bytes;
@@ -48,8 +48,25 @@ const WORKER_CAPABILITIES: [Capability; 7] = [
 /// The production OR-Tools adapter bound to one manifest-verified worker runtime closure.
 pub struct OrToolsBackend {
     descriptor: SolverDescriptor,
+    runtime_identity: BackendRuntimeIdentity,
     matrix: CapabilityMatrix,
     artifact: VerifiedWorkerArtifact,
+}
+
+fn ortools_runtime_identity(
+    descriptor: &SolverDescriptor,
+) -> Result<BackendRuntimeIdentity, OrToolsBackendBuildError> {
+    let policy = checked_in_policy()?;
+    BackendRuntimeIdentity::new(
+        descriptor.id.clone(),
+        ORTOOLS_VERSION.to_owned(),
+        ORTOOLS_ADAPTER_VERSION.to_owned(),
+        WORKER_VERSION.to_owned(),
+        ORTOOLS_VERSION.to_owned(),
+        policy.protocol_major(),
+        policy.protocol_minor(),
+    )
+    .map_err(OrToolsBackendBuildError::from)
 }
 
 impl OrToolsBackend {
@@ -57,27 +74,30 @@ impl OrToolsBackend {
     ///
     /// # Errors
     ///
-    /// Returns an error when the reviewed descriptor or generated support matrix is inconsistent.
+    /// Returns an error when the reviewed descriptor, runtime identity, protocol policy, or
+    /// generated support matrix is inconsistent.
     pub fn new(
         matrix: CapabilityMatrix,
         artifact: VerifiedWorkerArtifact,
     ) -> Result<Self, OrToolsBackendBuildError> {
         let descriptor = ortools_descriptor()?;
         matrix.validate_descriptor(&descriptor)?;
+        let runtime_identity = ortools_runtime_identity(&descriptor)?;
         Ok(Self {
             descriptor,
+            runtime_identity,
             matrix,
             artifact,
         })
     }
 
-    fn worker_identity() -> WorkerIdentity {
+    fn worker_identity(&self) -> WorkerIdentity {
         WorkerIdentity {
             worker_identity: WORKER_IDENTITY.to_owned(),
-            worker_version: WORKER_VERSION.to_owned(),
+            worker_version: self.runtime_identity.worker_version().to_owned(),
             backend_id: WORKER_BACKEND_ID.to_owned(),
-            ortools_version: ORTOOLS_VERSION.to_owned(),
-            adapter_version: ORTOOLS_ADAPTER_VERSION.to_owned(),
+            ortools_version: self.runtime_identity.solver_version().to_owned(),
+            adapter_version: self.runtime_identity.adapter_version().to_owned(),
             required_capabilities: WORKER_CAPABILITIES.to_vec(),
             advertised_capabilities: WORKER_CAPABILITIES.to_vec(),
         }
@@ -117,7 +137,7 @@ impl OrToolsBackend {
 
         let session = SessionRequest {
             executable: self.artifact.executable(),
-            identity: Self::worker_identity(),
+            identity: self.worker_identity(),
             core_version: env!("CARGO_PKG_VERSION").to_owned(),
             solve: worker_request,
         };
@@ -182,12 +202,7 @@ impl OrToolsBackend {
         translation_milliseconds: DurationMillis,
         session: &Result<SessionCompletion, SessionFailure>,
     ) -> Result<BackendExecutionEvidence, BackendError> {
-        let policy = checked_in_policy().map_err(|_| {
-            safe_backend_error(
-                "solver.ortools.protocol_policy",
-                "The checked-in worker protocol policy is invalid.",
-            )
-        })?;
+        let runtime_identity = self.runtime_identity();
         let session_timings = match session {
             Ok(completion) => Some(&completion.timings),
             Err(failure) => failure.timings.as_ref(),
@@ -225,12 +240,12 @@ impl OrToolsBackend {
             },
             worker_statistics,
             reproducibility: BackendReproducibilityEvidence {
-                backend_version: self.descriptor.version.clone(),
-                adapter_version: self.descriptor.adapter_version.clone(),
-                worker_version: WORKER_VERSION.to_owned(),
-                engine_version: ORTOOLS_VERSION.to_owned(),
-                protocol_major: policy.protocol_major(),
-                protocol_minor: policy.protocol_minor(),
+                backend_version: runtime_identity.backend_version().to_owned(),
+                adapter_version: runtime_identity.adapter_version().to_owned(),
+                worker_version: runtime_identity.worker_version().to_owned(),
+                engine_version: runtime_identity.solver_version().to_owned(),
+                protocol_major: runtime_identity.protocol_major(),
+                protocol_minor: runtime_identity.protocol_minor(),
                 applied_options: request.options().clone(),
                 applied_parameters,
                 model_fingerprint_sha256: request_evidence.model_fingerprint_sha256.clone(),
@@ -243,6 +258,10 @@ impl OrToolsBackend {
 impl SolverBackend for OrToolsBackend {
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
+    }
+
+    fn runtime_identity(&self) -> &BackendRuntimeIdentity {
+        &self.runtime_identity
     }
 
     fn compatibility(
@@ -590,7 +609,33 @@ pub enum OrToolsBackendBuildError {
     #[error(transparent)]
     Descriptor(#[from] OrToolsDescriptorError),
     #[error(transparent)]
+    RuntimeIdentity(#[from] BackendRuntimeIdentityError),
+    #[error(transparent)]
+    Protocol(#[from] eutheto_protocol::ProtocolFault),
+    #[error(transparent)]
     Matrix(#[from] eutheto_solver_api::SupportMatrixError),
     #[error(transparent)]
     Registry(#[from] RegistryError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_runtime_identity_uses_exact_reviewed_versions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let descriptor = ortools_descriptor()?;
+        let identity = ortools_runtime_identity(&descriptor)?;
+        let policy = checked_in_policy()?;
+
+        assert_eq!(identity.backend_id(), &descriptor.id);
+        assert_eq!(identity.backend_version(), ORTOOLS_VERSION);
+        assert_eq!(identity.adapter_version(), ORTOOLS_ADAPTER_VERSION);
+        assert_eq!(identity.worker_version(), WORKER_VERSION);
+        assert_eq!(identity.solver_version(), ORTOOLS_VERSION);
+        assert_eq!(identity.protocol_major(), policy.protocol_major());
+        assert_eq!(identity.protocol_minor(), policy.protocol_minor());
+        Ok(())
+    }
 }

@@ -21,7 +21,7 @@ pub enum CandidateReview {
 }
 
 /// Authority injected by the application layer after projection and independent verification exist.
-pub trait CandidateReviewer {
+pub trait CandidateReviewer: Send {
     fn review(&mut self, backend_id: &BackendId, candidate: &BackendCandidate) -> CandidateReview;
 }
 

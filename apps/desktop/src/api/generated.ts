@@ -3,6 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export const API_SCHEMA_VERSION = 1 as const;
+export const SOLUTION_API_SCHEMA_VERSION = 1 as const;
+export const COUNTERFACTUAL_API_SCHEMA_VERSION = 1 as const;
+export const COUNTERFACTUAL_TOTAL_BUDGET_MAX_MILLISECONDS_V1 = 30_000 as const;
 export const PROVISIONAL_PORTABLE_EXTENSION = ".eutheto" as const;
 
 export type UuidV7 = string;
@@ -57,6 +60,20 @@ export interface ValidationIssue {
   readonly message: string;
   readonly fieldPath: string | null;
   readonly resource: ResourceRef | null;
+}
+export type ChangeKind = "added" | "updated" | "removed" | "locked" | "unlocked";
+export interface Change {
+  readonly kind: ChangeKind;
+  readonly path: string;
+  readonly before: JsonValue | null;
+  readonly after: JsonValue | null;
+}
+export interface ChangeSet {
+  readonly changes: readonly Change[];
+}
+export interface ValidationDelta {
+  readonly added: readonly ValidationIssue[];
+  readonly resolved: readonly string[];
 }
 
 export interface FieldErrorDto {
@@ -160,6 +177,15 @@ export type DomainCapability =
   | "uiManifest"
   | "aiTools";
 
+export type ExplanationCapability =
+  | "validation"
+  | "infeasibility"
+  | "assignment"
+  | "counterfactual"
+  | "solutionDifference"
+  | "repair"
+  | "optimalityStatus";
+
 export interface DomainPackDescriptorDto {
   readonly id: string;
   readonly displayName: LocalizedTextDto;
@@ -171,6 +197,7 @@ export interface DomainPackDescriptorDto {
   };
   readonly iconId: string;
   readonly capabilities: readonly DomainCapability[];
+  readonly explanationCapabilities: readonly ExplanationCapability[];
   readonly portableSchemaVersion: number;
   readonly portableCapabilities: readonly string[];
   readonly shareResultSchemaVersion: number;
@@ -617,9 +644,645 @@ export interface ScenarioViewDto {
 
 export interface CommandResultDto {
   readonly newRevision: Revision;
-  readonly changeSet: unknown;
-  readonly validationDelta: unknown;
+  readonly changeSet: ChangeSet;
+  readonly validationDelta: ValidationDelta;
   readonly inverse: ScenarioCommand | null;
+}
+
+export type SolutionId = UuidV7;
+export type SolveRunId = UuidV7;
+export type CounterfactualJobId = UuidV7;
+export type DomainAssignmentId = string;
+export type Int64 = string;
+export type Uint64 = number | string;
+
+export interface AcceptedResultRefV1 {
+  readonly solutionId: SolutionId;
+  readonly resultChecksum: string;
+}
+
+export type OptimizationDirection = "minimize" | "maximize";
+export interface ScoreLevelValue {
+  readonly levelId: string;
+  readonly value: Int64;
+  readonly direction: OptimizationDirection;
+  readonly categoryBreakdown: Readonly<Record<string, Int64>>;
+}
+export interface ScoreVector {
+  readonly feasibility: Int64;
+  readonly levels: readonly ScoreLevelValue[];
+}
+
+export interface DomainEntityRef {
+  readonly kind: string;
+  readonly id: string;
+}
+export interface AssignedInterval {
+  readonly start: Int64;
+  readonly duration: Int64;
+  readonly end: Int64;
+}
+export type AssignmentValue =
+  | { readonly type: "boolean"; readonly value: boolean }
+  | { readonly type: "integer"; readonly value: Int64 }
+  | { readonly type: "interval"; readonly value: AssignedInterval }
+  | { readonly type: "absent" };
+export interface DomainAssignment {
+  readonly id: DomainAssignmentId;
+  readonly entity: DomainEntityRef;
+  readonly value: AssignmentValue;
+  readonly evidence: readonly string[];
+}
+export interface NormalizedSolution {
+  readonly schemaVersion: number;
+  readonly packId: string;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly projectionVersion: number;
+  readonly solutionId: SolutionId;
+  readonly assignments: readonly DomainAssignment[];
+}
+
+export type VerificationValue =
+  | { readonly type: "boolean"; readonly value: boolean }
+  | { readonly type: "integer"; readonly value: Int64 }
+  | { readonly type: "text"; readonly value: string }
+  | { readonly type: "entity"; readonly value: DomainEntityRef };
+export type MetricValue =
+  | { readonly type: "integer"; readonly value: Int64 }
+  | {
+      readonly type: "ratio";
+      readonly value: { readonly numerator: Int64; readonly denominator: Uint64 };
+    };
+export interface RuleEvaluation {
+  readonly ruleId: UuidV7;
+  readonly satisfied: boolean;
+  readonly affectedEntities: readonly DomainEntityRef[];
+  readonly messageKey: string;
+  readonly expected: Readonly<Record<string, VerificationValue>>;
+  readonly observed: Readonly<Record<string, VerificationValue>>;
+  readonly evidence: readonly string[];
+}
+export interface VerificationWarning {
+  readonly id: string;
+  readonly messageKey: string;
+  readonly affectedEntities: readonly DomainEntityRef[];
+  readonly facts: Readonly<Record<string, VerificationValue>>;
+}
+export interface VerificationReport {
+  readonly schemaVersion: number;
+  readonly accepted: boolean;
+  readonly scenarioId: UuidV7;
+  readonly evaluatedRevision: Revision;
+  readonly documentHash: string;
+  readonly planningModelHash: string;
+  readonly normalizedSolutionHash: string;
+  readonly verificationScopeChecksum: string;
+  readonly requiredRuleResults: readonly RuleEvaluation[];
+  readonly score: ScoreVector;
+  readonly warnings: readonly VerificationWarning[];
+  readonly metrics: Readonly<Record<string, MetricValue>>;
+  readonly checksum: string;
+}
+export interface AcceptedResult {
+  readonly schemaVersion: number;
+  readonly solution: NormalizedSolution;
+  readonly verification: VerificationReport;
+  readonly checksum: string;
+}
+export type BackendSelection =
+  { readonly kind: "auto" } | { readonly kind: "specific"; readonly backendId: string };
+export type SolveMode = "quick" | "balanced" | "deep" | "custom";
+export type WorkerThreadPolicy =
+  { readonly kind: "auto" } | { readonly kind: "exact"; readonly count: number };
+export type ExplanationMode = "none" | "standard" | "detailed";
+export type PreservationPolicy = "none" | "preferExisting" | "requireExisting";
+export type ReproducibilityMode = "performance" | "deterministic";
+export interface ResourceLimits {
+  readonly maxEntities: number;
+  readonly maxRules: number;
+  readonly maxVariables: Uint64;
+  readonly maxConstraints: Uint64;
+}
+export interface SolveOptions {
+  readonly backend: BackendSelection;
+  readonly mode: SolveMode;
+  readonly timeLimitMilliseconds: number;
+  readonly memoryLimitBytes: Uint64 | null;
+  readonly workerThreads: WorkerThreadPolicy;
+  readonly randomSeed: Uint64;
+  readonly solutionLimit: number | null;
+  readonly stopAfterFirstFeasible: boolean;
+  readonly collectIntermediateSolutions: boolean;
+  readonly explanationMode: ExplanationMode;
+  readonly preserveExisting: PreservationPolicy;
+  readonly reproducibility: ReproducibilityMode;
+  readonly resourceLimits: ResourceLimits;
+}
+export interface RunInputV1 {
+  readonly schemaVersion: number;
+  readonly runId: SolveRunId;
+  readonly requestId: UuidV7;
+  readonly requestHash: string;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly snapshotId: UuidV7;
+  readonly snapshotDocumentHash: string;
+  readonly snapshotCreatedAt: string;
+  readonly packId: string;
+  readonly packSchemaVersion: number;
+  readonly planningIrSchemaVersion: number;
+  readonly compilerVersion: string;
+  readonly applicationVersion: string;
+  readonly backendId: string;
+  readonly backendVersion: string;
+  readonly adapterVersion: string;
+  readonly workerVersion: string;
+  readonly solverVersion: string;
+  readonly protocolMajor: number;
+  readonly protocolMinor: number;
+  readonly modelHash: string;
+  readonly objectivePolicyHash: string;
+  readonly solveOptions: SolveOptions;
+  readonly scenarioTimezone: string;
+  readonly temporaryConditionHash: string | null;
+  readonly checksum: string;
+}
+export interface RunPhaseTimingsV1 {
+  readonly compileMilliseconds: number | null;
+  readonly backendMilliseconds: number | null;
+  readonly projectionMilliseconds: number | null;
+  readonly structuralValidationMilliseconds: number | null;
+  readonly scoreRecomputationMilliseconds: number | null;
+  readonly requiredRuleVerificationMilliseconds: number | null;
+  readonly evidencePersistenceMilliseconds: number | null;
+  readonly optionalExplanationMilliseconds: number | null;
+}
+export type RunTerminalOutcomeV1 =
+  | {
+      readonly type: "accepted";
+      readonly status: "optimal" | "feasible";
+      readonly solutionId: SolutionId;
+      readonly acceptedResultChecksum: string;
+      readonly verificationChecksum: string;
+    }
+  | {
+      readonly type: "noResult";
+      readonly status:
+        | "infeasible"
+        | "unbounded"
+        | "noSolutionWithinLimit"
+        | "cancelled"
+        | "invalidModel"
+        | "backendUnavailable"
+        | "backendFailed";
+    }
+  | { readonly type: "verificationAlarm"; readonly diagnosticCode: string }
+  | { readonly type: "interrupted" };
+export interface RunManifestV1 {
+  readonly schemaVersion: number;
+  readonly runId: SolveRunId;
+  readonly runInputChecksum: string;
+  readonly outcome: RunTerminalOutcomeV1;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly elapsedMilliseconds: number | null;
+  readonly firstIncumbentMilliseconds: number | null;
+  readonly firstVerifiedFeasibleMilliseconds: number | null;
+  readonly phaseTimings: RunPhaseTimingsV1;
+  readonly verificationWarnings: readonly VerificationWarning[];
+  readonly checksum: string;
+}
+
+export interface SolutionSummaryDtoV1 {
+  readonly schemaVersion: number;
+  readonly result: AcceptedResultRefV1;
+  readonly runId: SolveRunId;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly currentRevision: Revision;
+  readonly stale: boolean;
+  readonly selected: boolean;
+  readonly status: SolveStatus;
+  readonly score: ScoreVector;
+  readonly verificationChecksum: string;
+  readonly finishedAt: string;
+}
+export interface SolutionListDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly solutions: readonly SolutionSummaryDtoV1[];
+}
+export interface SolutionDetailDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly scenarioRevision: Revision;
+  readonly selected: boolean;
+  readonly result: AcceptedResult;
+}
+export interface DomainView {
+  readonly viewId: string;
+  readonly data: JsonValue;
+}
+export interface SolutionViewDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly scenarioRevision: Revision;
+  readonly result: AcceptedResultRefV1;
+  readonly view: DomainView;
+}
+export interface SolutionVerificationDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly scenarioRevision: Revision;
+  readonly result: AcceptedResultRefV1;
+  readonly verification: VerificationReport;
+}
+
+export type ComparisonOrdering = "better" | "equivalent" | "worse";
+export interface ComparisonBindingV1 {
+  readonly packId: string;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly documentHash: string;
+  readonly projectionVersion: number;
+  readonly verificationScopeChecksum: string;
+  readonly acceptedResult: AcceptedResultRefV1;
+}
+export type AssignmentComparisonV1 =
+  | { readonly type: "added"; readonly after: DomainAssignment }
+  | { readonly type: "removed"; readonly before: DomainAssignment }
+  | {
+      readonly type: "changed";
+      readonly before: DomainAssignment;
+      readonly after: DomainAssignment;
+    };
+export interface RuleComparisonV1 {
+  readonly ruleId: UuidV7;
+  readonly before: RuleEvaluation | null;
+  readonly after: RuleEvaluation | null;
+}
+export interface ScoreCategoryComparisonV1 {
+  readonly categoryId: string;
+  readonly before: Int64 | null;
+  readonly after: Int64 | null;
+  readonly delta: Int64 | null;
+}
+export interface ScoreLevelComparisonV1 {
+  readonly levelId: string;
+  readonly direction: OptimizationDirection;
+  readonly before: Int64;
+  readonly after: Int64;
+  readonly delta: Int64;
+  readonly categories: readonly ScoreCategoryComparisonV1[];
+}
+export interface MetricComparisonV1 {
+  readonly metricId: string;
+  readonly before: MetricValue | null;
+  readonly after: MetricValue | null;
+}
+export interface LockComparisonV1 {
+  readonly assignmentId: DomainAssignmentId;
+  readonly before: AssignmentLockStateV1;
+  readonly after: AssignmentLockStateV1;
+  readonly preserved: boolean;
+}
+export interface RunComparisonSideV1 {
+  readonly runId: SolveRunId;
+  readonly runManifestChecksum: string;
+  readonly outcome: RunTerminalOutcomeV1;
+  readonly certainty: ExplanationCertainty;
+}
+export interface RunComparisonV1 {
+  readonly base: RunComparisonSideV1;
+  readonly candidate: RunComparisonSideV1;
+}
+export interface SolutionComparisonV1 {
+  readonly schemaVersion: number;
+  readonly base: ComparisonBindingV1;
+  readonly candidate: ComparisonBindingV1;
+  readonly baseScore: ScoreVector;
+  readonly candidateScore: ScoreVector;
+  readonly assignments: readonly AssignmentComparisonV1[];
+  readonly rules: readonly RuleComparisonV1[];
+  readonly scoreLevels: readonly ScoreLevelComparisonV1[];
+  readonly metrics: readonly MetricComparisonV1[];
+  readonly locks: readonly LockComparisonV1[];
+  readonly runs: RunComparisonV1 | null;
+  readonly affectedEntities: readonly DomainEntityRef[];
+  readonly ordering: ComparisonOrdering;
+  readonly checksum: string;
+}
+export interface SolutionComparisonDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly comparison: SolutionComparisonV1;
+}
+
+export type ExplanationRequestSubjectV1 =
+  | { readonly kind: "validation"; readonly issueId: string | null }
+  | {
+      readonly kind: "infeasibility";
+      readonly solveRunId: SolveRunId;
+      readonly runManifestChecksum: string;
+      readonly conflictId: string | null;
+    }
+  | {
+      readonly kind: "assignment";
+      readonly result: AcceptedResultRefV1;
+      readonly assignmentId: DomainAssignmentId;
+    }
+  | {
+      readonly kind: "counterfactual";
+      readonly jobId: CounterfactualJobId;
+      readonly base: AcceptedResultRefV1;
+    }
+  | {
+      readonly kind: "solutionDifference";
+      readonly left: AcceptedResultRefV1;
+      readonly right: AcceptedResultRefV1;
+    }
+  | {
+      readonly kind: "repair";
+      readonly current: AcceptedResultRefV1;
+      readonly base: AcceptedResultRefV1;
+    }
+  | {
+      readonly kind: "optimalityStatus";
+      readonly solveRunId: SolveRunId;
+      readonly runManifestChecksum: string;
+      readonly result: AcceptedResultRefV1 | null;
+    };
+export interface ExplanationRequestV1 {
+  readonly schemaVersion: number;
+  readonly subject: ExplanationRequestSubjectV1;
+}
+export type ExplanationKind =
+  | "validation"
+  | "infeasibility"
+  | "assignment"
+  | "counterfactual"
+  | "solutionDifference"
+  | "repair"
+  | "optimalityStatus";
+export type ExplanationCertainty =
+  | "deterministic"
+  | "independentlyVerified"
+  | "backendProof"
+  | "sufficientConflict"
+  | "provenMinimalConflict"
+  | "inconclusive"
+  | "unavailable";
+export type ExplanationValidationSeverity =
+  "mustFix" | "likelyProblem" | "reviewSuggested" | "information";
+export interface ValidationIssueEvidenceV1 {
+  readonly issueId: string;
+  readonly severity: ExplanationValidationSeverity;
+  readonly messageKey: string;
+  readonly parameters: Readonly<Record<string, VerificationValue>>;
+  readonly fieldPath: readonly string[] | null;
+  readonly entity: DomainEntityRef | null;
+  readonly ruleId: UuidV7 | null;
+}
+export type ConflictMinimality = "sufficient" | "provenMinimal";
+export type ConflictShrinkStopReason =
+  "completed" | "notAttempted" | "trialLimit" | "budgetExpired" | "cancelled" | "inconclusive";
+export interface ConflictShrinkSummaryV1 {
+  readonly initialGroupCount: number;
+  readonly remainingGroupCount: number;
+  readonly attemptedTrials: number;
+  readonly maxTrials: number;
+  readonly stopReason: ConflictShrinkStopReason;
+}
+export interface ConflictGroupV1 {
+  readonly groupId: string;
+  readonly requiredRules: readonly UuidV7[];
+}
+export type ConflictUnavailableReason =
+  | "assumptionsUnavailable"
+  | "foundationalInfeasibility"
+  | "conflictNotReturned"
+  | "invalidAssumptionCore";
+export type InfeasibilityEvidenceV1 =
+  | {
+      readonly type: "conflict";
+      readonly groups: readonly ConflictGroupV1[];
+      readonly minimality: ConflictMinimality;
+      readonly shrink: ConflictShrinkSummaryV1;
+    }
+  | { readonly type: "unavailable"; readonly reason: ConflictUnavailableReason };
+export interface ScoreContributionV1 {
+  readonly evidenceId: string;
+  readonly levelId: string;
+  readonly categoryId: string | null;
+  readonly value: Int64;
+}
+export type AssignmentLockStateV1 =
+  { readonly state: "unlocked" } | { readonly state: "locked"; readonly value: AssignmentValue };
+export interface AssignmentEvidenceV1 {
+  readonly assignment: DomainAssignment;
+  readonly relatedRules: readonly RuleEvaluation[];
+  readonly scoreContributions: readonly ScoreContributionV1[];
+  readonly metrics: Readonly<Record<string, MetricValue>>;
+  readonly lockState: AssignmentLockStateV1 | null;
+}
+export type RepairCausalityV1 = "notEstablished";
+export interface RepairEvidenceV1 {
+  readonly comparison: SolutionComparisonV1;
+  readonly causality: RepairCausalityV1;
+}
+export interface OptimalityStatusEvidenceV1 {
+  readonly runInput: RunInputV1;
+  readonly runManifest: RunManifestV1;
+  readonly result: AcceptedResultRefV1 | null;
+}
+
+export type ExplanationEvidencePayloadV1 =
+  | { readonly kind: "validation"; readonly issue: ValidationIssueEvidenceV1 }
+  | { readonly kind: "infeasibility"; readonly infeasibility: InfeasibilityEvidenceV1 }
+  | { readonly kind: "assignment"; readonly assignment: AssignmentEvidenceV1 }
+  | { readonly kind: "counterfactual"; readonly result: CounterfactualResultV1 }
+  | { readonly kind: "solutionDifference"; readonly comparison: SolutionComparisonV1 }
+  | { readonly kind: "repair"; readonly repair: RepairEvidenceV1 }
+  | { readonly kind: "optimalityStatus"; readonly status: OptimalityStatusEvidenceV1 };
+export interface ExplanationEvidenceV1 {
+  readonly schemaVersion: number;
+  readonly certainty: ExplanationCertainty;
+  readonly evidence: ExplanationEvidencePayloadV1;
+  readonly checksum: string;
+}
+export interface EvidenceMessageV1 {
+  readonly messageKey: string;
+  readonly parameters: Readonly<Record<string, VerificationValue>>;
+  readonly entities: readonly DomainEntityRef[];
+  readonly rules: readonly UuidV7[];
+  readonly assignments: readonly DomainAssignmentId[];
+  readonly evidence: readonly string[];
+}
+export interface EvidenceRenderResultV1 {
+  readonly schemaVersion: number;
+  readonly kind: ExplanationKind;
+  readonly evidenceChecksum: string;
+  readonly messages: readonly EvidenceMessageV1[];
+}
+export interface ExplanationResultV1 {
+  readonly schemaVersion: number;
+  readonly evidence: ExplanationEvidenceV1;
+  readonly rendered: EvidenceRenderResultV1;
+  readonly checksum: string;
+}
+export interface SolutionExplanationDtoV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly scenarioRevisions: readonly Revision[];
+  readonly explanation: ExplanationResultV1;
+}
+
+export type CounterfactualConditionPayloadV1 =
+  | {
+      readonly type: "forceAssignmentValue";
+      readonly assignmentId: DomainAssignmentId;
+      readonly value: AssignmentValue;
+    }
+  | {
+      readonly type: "forbidAssignmentValue";
+      readonly assignmentId: DomainAssignmentId;
+      readonly value: AssignmentValue;
+    };
+export interface CounterfactualConditionV1 {
+  readonly schemaVersion: number;
+  readonly condition: CounterfactualConditionPayloadV1;
+  readonly checksum: string;
+}
+export interface CounterfactualCompilationBindingV1 {
+  readonly schemaVersion: number;
+  readonly baseModelHash: string;
+  readonly conditionChecksum: string;
+  readonly derivedModelHash: string;
+  readonly objectivePolicyHash: string;
+  readonly checksum: string;
+}
+export type CounterfactualJobState =
+  "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+export interface CounterfactualRequestSemanticsV1 {
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+  readonly scenarioRevision: Revision;
+  readonly snapshotId: UuidV7;
+  readonly snapshotDocumentHash: string;
+  readonly base: AcceptedResultRefV1;
+  readonly baseRunId: SolveRunId;
+  readonly baseRunInputChecksum: string;
+  readonly baseModelHash: string;
+  readonly objectivePolicyHash: string;
+  readonly conditionChecksum: string;
+  readonly totalBudgetMilliseconds: number;
+}
+export interface CounterfactualJobRequestV1 {
+  readonly schemaVersion: number;
+  readonly jobId: CounterfactualJobId;
+  readonly requestId: UuidV7;
+  readonly semantics: CounterfactualRequestSemanticsV1;
+  readonly condition: CounterfactualConditionV1;
+  readonly requestHash: string;
+  readonly createdAt: string;
+}
+export type CounterfactualFailureKind =
+  | "staleRevision"
+  | "budgetExhausted"
+  | "backendUnavailable"
+  | "backendFailed"
+  | "invalidModel"
+  | "invalidCandidate"
+  | "compilationFailed"
+  | "invalidBinding";
+export type CounterfactualConclusionV1 =
+  | { readonly type: "provenImpossible" }
+  | {
+      readonly type: "verifiedAlternative";
+      readonly alternative: AcceptedResultRefV1;
+      readonly comparison: SolutionComparisonV1;
+      readonly ordering: ComparisonOrdering;
+    }
+  | { readonly type: "notDistinguishedWithinBudget" };
+export interface CounterfactualResultV1 {
+  readonly schemaVersion: number;
+  readonly request: CounterfactualJobRequestV1;
+  readonly baseRunInput: RunInputV1;
+  readonly baseRunManifest: RunManifestV1;
+  readonly compilation: CounterfactualCompilationBindingV1;
+  readonly runInput: RunInputV1;
+  readonly runManifest: RunManifestV1;
+  readonly conclusion: CounterfactualConclusionV1;
+  readonly checksum: string;
+}
+export interface CounterfactualJobRecordV1 {
+  readonly schemaVersion: number;
+  readonly request: CounterfactualJobRequestV1;
+  readonly state: CounterfactualJobState;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly cancelRequestId: UuidV7 | null;
+  readonly cancelRequestedAt: string | null;
+  readonly result: CounterfactualResultV1 | null;
+  readonly error: { readonly kind: CounterfactualFailureKind } | null;
+}
+export interface SolutionStartCounterfactualDtoV1 {
+  readonly schemaVersion: number;
+  readonly requestId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly job: CounterfactualJobRecordV1;
+}
+export interface SolutionCancelCounterfactualDtoV1 {
+  readonly schemaVersion: number;
+  readonly cancelRequestId: UuidV7;
+  readonly currentRevision: Revision;
+  readonly job: CounterfactualJobRecordV1;
+}
+
+export interface SolutionListRequestV1 {
+  readonly requestId: UuidV7;
+  readonly schemaVersion: number;
+  readonly scenarioId: UuidV7;
+}
+export interface SolutionSummaryRequestV1 extends SolutionListRequestV1 {
+  readonly solutionId: SolutionId;
+}
+export interface SolutionViewRequestV1 extends SolutionSummaryRequestV1 {
+  readonly viewId: string;
+}
+export interface SolutionSelectRequestV1 extends SolutionSummaryRequestV1 {
+  readonly expectedRevision: Revision;
+}
+export type SolutionVerifyRequestV1 = SolutionSummaryRequestV1;
+export interface SolutionCompareRequestV1 extends SolutionListRequestV1 {
+  readonly baseSolutionId: SolutionId;
+  readonly candidateSolutionId: SolutionId;
+}
+export interface SolutionExplainRequestV1 extends SolutionListRequestV1 {
+  readonly request: ExplanationRequestV1;
+}
+export interface SolutionStartCounterfactualRequestV1 {
+  readonly schemaVersion: number;
+  readonly requestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly baseSolutionId: SolutionId;
+  readonly condition: CounterfactualConditionPayloadV1;
+  readonly totalBudgetMilliseconds: number;
+}
+export interface SolutionCancelCounterfactualRequestV1 {
+  readonly schemaVersion: number;
+  readonly cancelRequestId: UuidV7;
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly jobId: CounterfactualJobId;
 }
 
 export type EventTopic =
@@ -644,6 +1307,16 @@ export interface EventContextDto {
 }
 
 export type SolvePhase = "queued" | "compiling" | "solving" | "verifying" | "explaining";
+export type CounterfactualProgressPhase =
+  | "queued"
+  | "compiling"
+  | "solving"
+  | "verifying"
+  | "finalizing"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
 export type SolveStatus =
   | "optimal"
   | "feasible"
@@ -679,17 +1352,31 @@ export type AppEventDto =
       };
     }
   | {
+      readonly topic: "counterfactual://progress";
+      readonly payload: {
+        readonly type: "counterfactualProgress";
+        readonly payload: {
+          readonly context: EventContextDto;
+          readonly jobId: UuidV7;
+          readonly phase: CounterfactualProgressPhase;
+        };
+      };
+    }
+  | {
       readonly topic: "scenario://changed";
       readonly payload: {
         readonly type: "scenarioChanged";
-        readonly payload: { readonly context: EventContextDto; readonly changeSet: unknown };
+        readonly payload: { readonly context: EventContextDto; readonly changeSet: ChangeSet };
       };
     }
   | {
       readonly topic: "scenario://validation-changed";
       readonly payload: {
         readonly type: "scenarioValidationChanged";
-        readonly payload: { readonly context: EventContextDto; readonly validationDelta: unknown };
+        readonly payload: {
+          readonly context: EventContextDto;
+          readonly validationDelta: ValidationDelta;
+        };
       };
     }
   | {
@@ -704,6 +1391,14 @@ export type AppEventDto =
       };
     };
 
+export type SolveProgressEvent = Extract<
+  AppEventDto,
+  { readonly topic: "solve://progress" }
+>["payload"];
+export type SolveCompletedEvent = Extract<
+  AppEventDto,
+  { readonly topic: "solve://completed" }
+>["payload"];
 export type ScenarioChangedEvent = Extract<
   AppEventDto,
   { readonly topic: "scenario://changed" }
@@ -712,12 +1407,32 @@ export type ScenarioValidationChangedEvent = Extract<
   AppEventDto,
   { readonly topic: "scenario://validation-changed" }
 >["payload"];
+export type CounterfactualProgressEvent = Extract<
+  AppEventDto,
+  { readonly topic: "counterfactual://progress" }
+>["payload"];
 export type AppNotificationEvent = Extract<
   AppEventDto,
   { readonly topic: "app://notification" }
 >["payload"];
 export interface LibraryRefreshRequiredEvent {
   readonly reason: "event-subscription-lagged";
+}
+
+export function onSolveProgress(
+  listener: (event: SolveProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SolveProgressEvent>("solve://progress", ({ payload }) => {
+    listener(payload);
+  });
+}
+
+export function onSolveCompleted(
+  listener: (event: SolveCompletedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SolveCompletedEvent>("solve://completed", ({ payload }) => {
+    listener(payload);
+  });
 }
 
 export function onScenarioChanged(
@@ -732,6 +1447,14 @@ export function onScenarioValidationChanged(
   listener: (event: ScenarioValidationChangedEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<ScenarioValidationChangedEvent>("scenario://validation-changed", ({ payload }) => {
+    listener(payload);
+  });
+}
+
+export function onCounterfactualProgress(
+  listener: (event: CounterfactualProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<CounterfactualProgressEvent>("counterfactual://progress", ({ payload }) => {
     listener(payload);
   });
 }
@@ -867,6 +1590,30 @@ function newRequestId(): UuidV7 {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+const INT64_MIN = -(1n << 63n);
+const INT64_MAX = (1n << 63n) - 1n;
+const CANONICAL_DECIMAL_INTEGER = /^(?:0|-?[1-9][0-9]*)$/;
+
+function assertInt64(value: unknown, field: string): asserts value is Int64 {
+  if (typeof value !== "string" || !CANONICAL_DECIMAL_INTEGER.test(value)) {
+    throw new RangeError(`${field} must be a canonical signed 64-bit decimal string`);
+  }
+  const parsed = BigInt(value);
+  if (parsed < INT64_MIN || parsed > INT64_MAX) {
+    throw new RangeError(`${field} is outside the signed 64-bit range`);
+  }
+}
+
+function assertAssignmentValue(value: AssignmentValue): void {
+  if (value.type === "integer") {
+    assertInt64(value.value, "Assignment integer");
+  } else if (value.type === "interval") {
+    assertInt64(value.value.start, "Assignment interval start");
+    assertInt64(value.value.duration, "Assignment interval duration");
+    assertInt64(value.value.end, "Assignment interval end");
+  }
+}
+
 async function call<T>(command: CatalogCommand, request: object): Promise<ApiResponseDto<T>> {
   const revision = (request as { readonly expectedRevision?: unknown }).expectedRevision;
   if (
@@ -874,6 +1621,19 @@ async function call<T>(command: CatalogCommand, request: object): Promise<ApiRes
     (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0)
   ) {
     throw new RangeError("Revision must be a non-negative JavaScript safe integer");
+  }
+  const budget = (request as { readonly totalBudgetMilliseconds?: unknown })
+    .totalBudgetMilliseconds;
+  if (
+    budget !== undefined &&
+    (typeof budget !== "number" ||
+      !Number.isSafeInteger(budget) ||
+      budget <= 0 ||
+      budget > COUNTERFACTUAL_TOTAL_BUDGET_MAX_MILLISECONDS_V1)
+  ) {
+    throw new RangeError(
+      "Counterfactual budget must be an integer between 1 and 30000 milliseconds",
+    );
   }
   return invoke<ApiResponseDto<T>>(command, { request });
 }
@@ -1079,6 +1839,121 @@ export function getScenarioHistory(
   scenarioId: UuidV7,
 ): Promise<ApiResponseDto<{ readonly entries: readonly HistoryEntryDto[] }>> {
   return call("scenario_get_history", { requestId: newRequestId(), scenarioId });
+}
+
+export function listSolutions(scenarioId: UuidV7): Promise<ApiResponseDto<SolutionListDtoV1>> {
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    scenarioId,
+  } satisfies SolutionListRequestV1;
+  return call("solution_list", request);
+}
+
+export function getSolutionSummary(
+  scenarioId: UuidV7,
+  solutionId: SolutionId,
+): Promise<ApiResponseDto<SolutionDetailDtoV1>> {
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    scenarioId,
+    solutionId,
+  } satisfies SolutionSummaryRequestV1;
+  return call("solution_get_summary", request);
+}
+
+export function getSolutionView(input: {
+  readonly scenarioId: UuidV7;
+  readonly solutionId: SolutionId;
+  readonly viewId: string;
+}): Promise<ApiResponseDto<SolutionViewDtoV1>> {
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    ...input,
+  } satisfies SolutionViewRequestV1;
+  return call("solution_get_view", request);
+}
+
+export function selectSolution(input: {
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly solutionId: SolutionId;
+}): Promise<ApiResponseDto<SolutionSummaryDtoV1>> {
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    ...input,
+  } satisfies SolutionSelectRequestV1;
+  return call("solution_select", request);
+}
+
+export function verifySolution(
+  scenarioId: UuidV7,
+  solutionId: SolutionId,
+): Promise<ApiResponseDto<SolutionVerificationDtoV1>> {
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    scenarioId,
+    solutionId,
+  } satisfies SolutionVerifyRequestV1;
+  return call("solution_verify", request);
+}
+
+export function compareSolutions(input: {
+  readonly scenarioId: UuidV7;
+  readonly baseSolutionId: SolutionId;
+  readonly candidateSolutionId: SolutionId;
+}): Promise<ApiResponseDto<SolutionComparisonDtoV1>> {
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    ...input,
+  } satisfies SolutionCompareRequestV1;
+  return call("solution_compare", request);
+}
+
+export function explainSolution(input: {
+  readonly scenarioId: UuidV7;
+  readonly request: ExplanationRequestV1;
+}): Promise<ApiResponseDto<SolutionExplanationDtoV1>> {
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: SOLUTION_API_SCHEMA_VERSION,
+    ...input,
+  } satisfies SolutionExplainRequestV1;
+  return call("solution_explain", request);
+}
+
+export function startCounterfactual(input: {
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly baseSolutionId: SolutionId;
+  readonly condition: CounterfactualConditionPayloadV1;
+  readonly totalBudgetMilliseconds: number;
+}): Promise<ApiResponseDto<SolutionStartCounterfactualDtoV1>> {
+  assertAssignmentValue(input.condition.value);
+  const request = {
+    requestId: newRequestId(),
+    schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
+    ...input,
+  } satisfies SolutionStartCounterfactualRequestV1;
+  return call("solution_start_counterfactual", request);
+}
+
+export function cancelCounterfactual(input: {
+  readonly scenarioId: UuidV7;
+  readonly expectedRevision: Revision;
+  readonly jobId: CounterfactualJobId;
+}): Promise<ApiResponseDto<SolutionCancelCounterfactualDtoV1>> {
+  const request = {
+    cancelRequestId: newRequestId(),
+    schemaVersion: COUNTERFACTUAL_API_SCHEMA_VERSION,
+    ...input,
+  } satisfies SolutionCancelCounterfactualRequestV1;
+  return call("solution_cancel_counterfactual", request);
 }
 
 export function getSetting(

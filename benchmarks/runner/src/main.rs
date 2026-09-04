@@ -990,7 +990,7 @@ mod tests {
             "format":"eutheto/planning-ir-benchmark-corpus",
             "schemaVersion":1,
             "corpusVersion":1,
-            "planningIrSchemaVersion":1,
+            "planningIrSchemaVersion":2,
             "provenance":{
                 "source":"benchmarks/corpus/solver/phase03-primitives.json",
                 "method":"checked-in-hand-authored-planning-ir"

@@ -61,8 +61,8 @@ fn later_solver_command_is_catalogued_but_typed_unavailable() -> Result<(), Box<
         .output()?;
 
     assert_eq!(output.status.code(), Some(6));
-    assert!(output.stderr.is_empty());
-    let value: Value = serde_json::from_slice(&output.stdout)?;
+    assert!(output.stdout.is_empty());
+    let value: Value = serde_json::from_slice(&output.stderr)?;
     assert_eq!(value["apiVersion"], "eutheto/cli-result/v1");
     assert_eq!(value["command"], "solve");
     assert_eq!(value["ok"], false);

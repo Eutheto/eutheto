@@ -112,28 +112,55 @@ impl TryFrom<Duration> for DurationMillis {
     }
 }
 
-/// Cloneable process-local cancellation token shared by all cancellable work.
+/// Cloneable process-local cancellation token with hierarchical propagation.
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
+    node: Arc<CancellationNode>,
+}
+
+#[derive(Debug, Default)]
+struct CancellationNode {
+    cancelled: AtomicBool,
+    parent: Option<Arc<CancellationNode>>,
 }
 
 impl CancellationToken {
-    /// Creates an uncancelled token.
+    /// Creates an uncancelled root token.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Permanently marks this token and all of its clones as cancelled.
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+    /// Creates an independently cancellable child that observes ancestor cancellation.
+    #[must_use]
+    pub fn child(&self) -> Self {
+        Self {
+            node: Arc::new(CancellationNode {
+                cancelled: AtomicBool::new(false),
+                parent: Some(Arc::clone(&self.node)),
+            }),
+        }
     }
 
-    /// Returns whether cancellation has been requested.
+    /// Permanently marks this token's shared local node as cancelled.
+    ///
+    /// Descendants observe the cancellation through ancestor lookup, but their
+    /// local flags and independently cancellable sibling nodes remain unchanged.
+    pub fn cancel(&self) {
+        self.node.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Returns whether cancellation has been requested locally or by an ancestor.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        let mut node = Some(self.node.as_ref());
+        while let Some(current) = node {
+            if current.cancelled.load(Ordering::Acquire) {
+                return true;
+            }
+            node = current.parent.as_deref();
+        }
+        false
     }
 }
 
@@ -434,13 +461,39 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_propagates_across_clones() {
+    fn cancellation_clones_share_a_node() {
         let original = CancellationToken::new();
         let clone = original.clone();
         assert!(!original.is_cancelled());
         clone.cancel();
         assert!(original.is_cancelled());
         assert!(clone.is_cancelled());
+    }
+
+    #[test]
+    fn parent_cancellation_propagates_to_descendants() {
+        let parent = CancellationToken::new();
+        let child = parent.child();
+        let grandchild = child.child();
+
+        parent.cancel();
+
+        assert!(parent.is_cancelled());
+        assert!(child.is_cancelled());
+        assert!(grandchild.is_cancelled());
+    }
+
+    #[test]
+    fn child_cancellation_is_isolated_from_parent_and_sibling() {
+        let parent = CancellationToken::new();
+        let child = parent.child();
+        let sibling = parent.child();
+
+        child.cancel();
+
+        assert!(child.is_cancelled());
+        assert!(!parent.is_cancelled());
+        assert!(!sibling.is_cancelled());
     }
 
     #[test]

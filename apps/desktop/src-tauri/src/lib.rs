@@ -6,7 +6,10 @@ use std::sync::Arc;
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
     BackendSupportColumn, BackupAssetSelection, BackupSelection, DeferredCapability, EuthetoApp,
-    PreparedPortableBinding, ProjectScope, SolverSupportMatrixMetadata, SupportCell,
+    PreparedPortableBinding, ProjectScope, SolutionCancelCounterfactualRequestV1,
+    SolutionCompareRequestV1, SolutionExplainRequestV1, SolutionListRequestV1,
+    SolutionSelectRequestV1, SolutionStartCounterfactualRequestV1, SolutionSummaryRequestV1,
+    SolutionVerifyRequestV1, SolutionViewRequestV1, SolverSupportMatrixMetadata, SupportCell,
     SupportFeature, SupportFeatureId,
 };
 use eutheto_export::{
@@ -26,7 +29,8 @@ use eutheto_types::{
     ScenarioViewDto, SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator,
     ValidationIssue, ValidationReport, ValidationSeverity,
 };
-use serde::{Deserialize, Serialize};
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -256,11 +260,35 @@ struct DesktopState {
 
 type ApiError = Box<ApiErrorDto>;
 type ApiResult<T> = Result<ApiResponseDto<T>, ApiError>;
+type SolutionApiResult = Result<tauri::ipc::Response, ApiError>;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RequestOnly {
     request_id: RequestId,
+}
+
+#[derive(Clone, Debug)]
+struct CorrelatedRequest<T> {
+    request_id: RequestId,
+    operation: T,
+}
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for CorrelatedRequest<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let Value::Object(mut fields) = Value::deserialize(deserializer)? else {
+            return Err(D::Error::custom("request must be an object"));
+        };
+        let request_id = fields
+            .remove("requestId")
+            .ok_or_else(|| D::Error::missing_field("requestId"))
+            .and_then(|value| serde_json::from_value(value).map_err(D::Error::custom))?;
+        let operation = serde_json::from_value(Value::Object(fields)).map_err(D::Error::custom)?;
+        Ok(Self {
+            request_id,
+            operation,
+        })
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -822,6 +850,123 @@ fn response<T>(
         warnings,
         result,
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct JavascriptIntegerFormatter;
+
+impl serde_json::ser::Formatter for JavascriptIntegerFormatter {
+    fn write_i64<W>(&mut self, writer: &mut W, value: i64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        write!(writer, "\"{value}\"")
+    }
+
+    fn write_u64<W>(&mut self, writer: &mut W, value: u64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if value > 9_007_199_254_740_991 {
+            write!(writer, "\"{value}\"")
+        } else {
+            write!(writer, "{value}")
+        }
+    }
+}
+
+fn solution_response<T: Serialize>(
+    request_id: RequestId,
+    current_revision: Revision,
+    result: T,
+) -> SolutionApiResult {
+    let envelope = response(request_id, Some(current_revision), Vec::new(), result);
+    let mut bytes = Vec::new();
+    let mut serializer =
+        serde_json::Serializer::with_formatter(&mut bytes, JavascriptIntegerFormatter);
+    envelope
+        .serialize(&mut serializer)
+        .map_err(|_| -> ApiError {
+            boundary_error(
+                "protocol.response_serialization_failed",
+                "The solution response could not be translated safely.",
+                None,
+            )
+            .into()
+        })?;
+    let json = String::from_utf8(bytes).map_err(|_| -> ApiError {
+        boundary_error(
+            "protocol.response_serialization_failed",
+            "The solution response could not be translated safely.",
+            None,
+        )
+        .into()
+    })?;
+    Ok(tauri::ipc::Response::new(json))
+}
+
+fn invalid_solution_request() -> ApiErrorDto {
+    boundary_error(
+        "solution.request_invalid",
+        "The solution request is missing or malformed.",
+        Some("/request"),
+    )
+}
+
+fn decode_solution_value<T: DeserializeOwned>(request: Value) -> Result<T, ApiError> {
+    serde_json::from_value(request).map_err(|_| Box::new(invalid_solution_request()))
+}
+
+fn decode_solution_request<T: DeserializeOwned>(request: Option<Value>) -> Result<T, ApiError> {
+    decode_solution_value(request.ok_or_else(|| Box::new(invalid_solution_request()))?)
+}
+
+fn normalize_i64_string(value: &mut Value) -> Result<(), ApiError> {
+    let Value::String(decimal) = value else {
+        return Err(Box::new(invalid_solution_request()));
+    };
+    let parsed = decimal
+        .parse::<i64>()
+        .map_err(|_| Box::new(invalid_solution_request()))?;
+    *value = Value::Number(parsed.into());
+    Ok(())
+}
+
+fn normalize_counterfactual_int64(request: &mut Value) -> Result<(), ApiError> {
+    let Some(assignment_value) = request.pointer_mut("/condition/value") else {
+        return Ok(());
+    };
+    let Value::Object(assignment) = assignment_value else {
+        return Ok(());
+    };
+    match assignment.get("type").and_then(Value::as_str) {
+        Some("integer") => assignment
+            .get_mut("value")
+            .ok_or_else(|| Box::new(invalid_solution_request()))
+            .and_then(normalize_i64_string),
+        Some("interval") => {
+            let Some(Value::Object(interval)) = assignment.get_mut("value") else {
+                return Err(Box::new(invalid_solution_request()));
+            };
+            for field in ["start", "duration", "end"] {
+                normalize_i64_string(
+                    interval
+                        .get_mut(field)
+                        .ok_or_else(|| Box::new(invalid_solution_request()))?,
+                )?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn decode_counterfactual_start_request(
+    request: Option<Value>,
+) -> Result<SolutionStartCounterfactualRequestV1, ApiError> {
+    let mut request = request.ok_or_else(|| Box::new(invalid_solution_request()))?;
+    normalize_counterfactual_int64(&mut request)?;
+    decode_solution_value(request)
 }
 fn metadata_value<T: Serialize + ?Sized>(value: &T) -> Result<Value, ApiError> {
     serde_json::to_value(value).map_err(|_| {
@@ -1550,6 +1695,15 @@ fn app_get_capabilities(request: RequestOnly) -> ApiResponseDto<AppCapabilitiesD
         "scenario_undo",
         "scenario_redo",
         "scenario_get_history",
+        "solution_list",
+        "solution_get_summary",
+        "solution_get_view",
+        "solution_select",
+        "solution_verify",
+        "solution_compare",
+        "solution_explain",
+        "solution_start_counterfactual",
+        "solution_cancel_counterfactual",
         "settings_get",
         "settings_update",
         "settings_reset_section",
@@ -2940,6 +3094,245 @@ async fn settings_reset_section(
     }
 }
 
+#[tauri::command]
+async fn solution_list(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionListRequestV1> = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionList(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionList(result) => {
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solution-list result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_get_summary(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionSummaryRequestV1> = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionGetSummary(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionSummary(result) => {
+            let result = *result;
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solution-summary result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_get_view(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionViewRequestV1> = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionGetView(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionView(result) => {
+            let result = *result;
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solution-view result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_select(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolutionSelectRequestV1 = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .execute(AppCommand::SolutionSelect(request))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppCommandResult::SolutionSelected(result) => {
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solution-selection result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_verify(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionVerifyRequestV1> = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionVerify(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionVerification(result) => {
+            let result = *result;
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solution-verification result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_compare(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionCompareRequestV1> = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionCompare(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionComparison(result) => {
+            let result = *result;
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solution-comparison result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_explain(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: CorrelatedRequest<SolutionExplainRequestV1> = decode_solution_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .query(AppQuery::SolutionExplain(request.operation))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppQueryResult::SolutionExplanation(result) => {
+            let result = *result;
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected solution-explanation result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_start_counterfactual(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request = decode_counterfactual_start_request(request)?;
+    let request_id = request.request_id;
+    match state
+        .app
+        .execute(AppCommand::SolutionStartCounterfactual(request))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppCommandResult::CounterfactualStarted(result) => {
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected counterfactual-start result.",
+            None,
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+async fn solution_cancel_counterfactual(
+    state: State<'_, DesktopState>,
+    request: Option<Value>,
+) -> SolutionApiResult {
+    let request: SolutionCancelCounterfactualRequestV1 = decode_solution_request(request)?;
+    let request_id = request.cancel_request_id;
+    match state
+        .app
+        .execute(AppCommand::SolutionCancelCounterfactual(request))
+        .await
+        .map_err(map_app_error)?
+    {
+        AppCommandResult::CounterfactualCancelled(result) => {
+            let current_revision = result.current_revision;
+            solution_response(request_id, current_revision, result)
+        }
+        _ => Err(boundary_error(
+            "protocol.result_mismatch",
+            "The application returned an unexpected counterfactual-cancellation result.",
+            None,
+        )
+        .into()),
+    }
+}
+
 macro_rules! unsupported_commands {
     ($($name:ident => ($code:literal, $capability:literal)),+ $(,)?) => {
         $(
@@ -2993,15 +3386,6 @@ core_deferred_commands!(
 
 core_deferred_commands!(
     DeferredCapability::Solution;
-    solution_list,
-    solution_get_summary,
-    solution_get_view,
-    solution_select,
-    solution_verify,
-    solution_compare,
-    solution_explain,
-    solution_start_counterfactual,
-    solution_cancel_counterfactual,
     solution_lock_assignment,
     solution_unlock_assignment,
     solution_create_repair_request,
@@ -3030,6 +3414,21 @@ core_deferred_commands!(
     ai_reject_proposal,
     ai_delete_conversation,
 );
+
+const FORWARDED_EVENTS: &[(EventTopic, &str)] = &[
+    (EventTopic::SolveProgress, "solve://progress"),
+    (EventTopic::SolveCompleted, "solve://completed"),
+    (EventTopic::ScenarioChanged, "scenario://changed"),
+    (
+        EventTopic::ScenarioValidationChanged,
+        "scenario://validation-changed",
+    ),
+    (
+        EventTopic::CounterfactualProgress,
+        "counterfactual://progress",
+    ),
+    (EventTopic::AppNotification, "app://notification"),
+];
 
 fn spawn_event_forwarder(
     handle: AppHandle,
@@ -3087,6 +3486,7 @@ pub fn run() -> tauri::Result<()> {
                     safety_backups: backup_dir.clone(),
                 },
                 clock: Arc::new(SystemClock),
+                monotonic_clock: Arc::new(eutheto_types::SystemMonotonicClock::new()),
                 ids: Arc::new(SystemIdGenerator),
                 cancellation: CancellationToken::default(),
             };
@@ -3109,24 +3509,9 @@ pub fn run() -> tauri::Result<()> {
                 std::io::Error::other(format!("application startup failed: {error:?}"))
             })?;
             std::fs::create_dir_all(&cache_dir)?;
-            spawn_event_forwarder(
-                handle.handle().clone(),
-                app.clone(),
-                EventTopic::ScenarioChanged,
-                "scenario://changed",
-            );
-            spawn_event_forwarder(
-                handle.handle().clone(),
-                app.clone(),
-                EventTopic::ScenarioValidationChanged,
-                "scenario://validation-changed",
-            );
-            spawn_event_forwarder(
-                handle.handle().clone(),
-                app.clone(),
-                EventTopic::AppNotification,
-                "app://notification",
-            );
+            for &(topic, event_name) in FORWARDED_EVENTS {
+                spawn_event_forwarder(handle.handle().clone(), app.clone(), topic, event_name);
+            }
             handle.manage(DesktopState {
                 app,
                 cache_dir,
@@ -3156,26 +3541,29 @@ mod tests {
     use eutheto_types::{
         ActorRef, AddEntity, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
         CancellationToken, CommandEnvelope, CommandId, CommandResult, CommandSource, DomainPackRef,
-        PersonId, ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId, Revision,
-        SafeDiagnosticValue, ScenarioCommand, ScenarioSettings, ScenarioViewDto, SystemClock,
-        SystemIdGenerator,
+        EventTopic, PersonId, ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId,
+        Revision, SafeDiagnosticValue, ScenarioCommand, ScenarioSettings, ScenarioViewDto,
+        SystemClock, SystemIdGenerator,
     };
     use serde::de::DeserializeOwned;
     use serde_json::{Value, json};
 
     use super::{
-        BackupCreateRequest, BackupSummaryDto, DesktopState, ExportCreateRequest, NativeFileError,
-        PortableCancelRequest, PortablePreviewRequest, PreparedPortableCache, PreparedPortableKind,
+        BackupCreateRequest, BackupSummaryDto, CorrelatedRequest, DesktopState,
+        ExportCreateRequest, FORWARDED_EVENTS, NativeFileError, PortableCancelRequest,
+        PortablePreviewRequest, PreparedPortableCache, PreparedPortableKind,
         PreparedPortableOutput, ProjectListRequest, ProjectScopeDto, REGISTERED_COMMANDS,
-        backup_summary, cancel_portable_preview_impl, core_unavailable,
-        exact_reexport_unopened_bundle_to_path, inspect_unopened_bundle_bytes, map_app_error,
-        map_native_file_error, native_file_task, pack_describe, pack_list, preview_portable_bytes,
+        RequestOnly, SolutionExplainRequestV1, SolutionStartCounterfactualRequestV1,
+        app_get_capabilities, backup_summary, cancel_portable_preview_impl, core_unavailable,
+        decode_counterfactual_start_request, exact_reexport_unopened_bundle_to_path,
+        inspect_unopened_bundle_bytes, map_app_error, map_native_file_error, native_file_task,
+        normalize_counterfactual_int64, pack_describe, pack_list, preview_portable_bytes,
         project_archive, project_create, project_delete, project_import_apply, project_list,
         project_list_impl, project_restore_apply, project_unarchive, read_bounded_portable,
         revision_diagnostic_value, scenario_apply_command, scenario_get_view, scenario_redo,
-        scenario_undo, selected_basename, solver_describe, solver_get_deferred_gates,
-        solver_get_support_matrix, solver_list, solver_support_matrix_dto,
-        suggested_portable_filename,
+        scenario_undo, selected_basename, solution_explain, solution_list, solution_response,
+        solver_describe, solver_get_deferred_gates, solver_get_support_matrix, solver_list,
+        solver_support_matrix_dto, suggested_portable_filename,
     };
 
     type IpcResult = Result<tauri::ipc::InvokeResponseBody, Value>;
@@ -3604,7 +3992,7 @@ mod tests {
         let backend_id = BackendId::new("solver.fixture")?;
         let matrix = CapabilityMatrix::new(
             1,
-            1,
+            2,
             vec![
                 SupportFeature {
                     id: degraded_id.clone(),
@@ -3710,6 +4098,322 @@ mod tests {
             .collect();
         assert_eq!(permission_commands, REGISTERED_COMMANDS);
     }
+
+    #[test]
+    fn phase_04_solution_capabilities_and_event_topics_are_exact() -> Result<(), Box<dyn Error>> {
+        let capabilities = app_get_capabilities(RequestOnly {
+            request_id: RequestId::new(&SystemIdGenerator)?,
+        })
+        .result;
+        for command in [
+            "solution_list",
+            "solution_get_summary",
+            "solution_get_view",
+            "solution_select",
+            "solution_verify",
+            "solution_compare",
+            "solution_explain",
+            "solution_start_counterfactual",
+            "solution_cancel_counterfactual",
+        ] {
+            assert!(capabilities.available_commands.contains(&command));
+            assert!(!capabilities.unavailable_commands.contains(&command));
+        }
+        for command in [
+            "solution_lock_assignment",
+            "solution_unlock_assignment",
+            "solution_create_repair_request",
+            "solution_export_preview",
+            "solution_export",
+            "solution_share_preview",
+            "solution_share_create",
+            "solution_export_cancel",
+        ] {
+            assert!(!capabilities.available_commands.contains(&command));
+            assert!(capabilities.unavailable_commands.contains(&command));
+        }
+
+        for expected in [
+            (EventTopic::SolveProgress, "solve://progress"),
+            (EventTopic::SolveCompleted, "solve://completed"),
+            (
+                EventTopic::ScenarioValidationChanged,
+                "scenario://validation-changed",
+            ),
+            (
+                EventTopic::CounterfactualProgress,
+                "counterfactual://progress",
+            ),
+        ] {
+            assert_eq!(
+                FORWARDED_EVENTS
+                    .iter()
+                    .filter(|mapping| **mapping == expected)
+                    .count(),
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    // The successful command, full safe error envelope, and malformed matrix stay auditable together.
+    #[allow(clippy::too_many_lines)]
+    async fn solution_list_ipc_is_strict_and_serializes_the_core_dto() -> Result<(), Box<dyn Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let app = EuthetoApp::open(AppDependencies {
+            paths: AppPaths {
+                database: directory.path().join("solutions.sqlite3"),
+                safety_backups: directory.path().join("solution-backups"),
+            },
+            clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
+            ids: Arc::new(SystemIdGenerator),
+            cancellation: CancellationToken::default(),
+        })
+        .await
+        .map_err(|error| format!("solution app setup failed: {error:?}"))?;
+        let settings: ScenarioSettings = serde_json::from_value(json!({
+            "timeZone": "UTC",
+            "locale": "en-US",
+            "units": "metric",
+            "horizon": {
+                "start": "2026-09-01T00:00:00Z",
+                "end": "2026-10-01T00:00:00Z"
+            },
+            "gapPolicy": "reject",
+            "overlapPolicy": "earlier"
+        }))?;
+        let scenario_id = match app
+            .execute(AppCommand::CreateProject {
+                request_id: RequestId::new(&SystemIdGenerator)?,
+                title: "Solution adapter fixture".to_owned(),
+                description: String::new(),
+                domain_pack: DomainPackRef {
+                    id: "official.test".parse()?,
+                    schema_version: 1,
+                },
+                settings,
+            })
+            .await
+            .map_err(|error| format!("solution project setup failed: {error:?}"))?
+        {
+            AppCommandResult::Project(project) => project.scenario_id,
+            result => return Err(format!("unexpected solution project result: {result:?}").into()),
+        };
+        let state = DesktopState {
+            app,
+            cache_dir: directory.path().join("solution-cache"),
+            backup_dir: directory.path().join("solution-backups"),
+            prepared_outputs: Arc::default(),
+        };
+        let desktop = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![solution_explain, solution_list])
+            .manage(state)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))?;
+        let webview =
+            tauri::WebviewWindowBuilder::new(&desktop, "main", tauri::WebviewUrl::default())
+                .build()?;
+        let result: ApiResponseDto<Value> = invoke_ok(
+            &webview,
+            "solution_list",
+            &json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "scenarioId": scenario_id,
+            }),
+        )?;
+        assert_eq!(result.current_revision, Some(Revision::INITIAL));
+        assert_eq!(
+            result.result,
+            json!({
+                "schemaVersion": 1,
+                "scenarioId": scenario_id,
+                "currentRevision": 0,
+                "solutions": [],
+            })
+        );
+        let explanation_request = json!({
+            "schemaVersion": 1,
+            "subject": {
+                "kind": "validation",
+                "issueId": null,
+            },
+        });
+        let explanation_envelope = json!({
+            "requestId": RequestId::new(&SystemIdGenerator)?,
+            "schemaVersion": 1,
+            "scenarioId": scenario_id,
+            "request": explanation_request,
+        });
+        let _: CorrelatedRequest<SolutionExplainRequestV1> =
+            serde_json::from_value(explanation_envelope.clone())?;
+        let explanation = invoke_ipc(&webview, "solution_explain", &explanation_envelope)?;
+        let Err(explanation) = explanation else {
+            return Err("unavailable validation explanation unexpectedly succeeded".into());
+        };
+        assert_eq!(
+            explanation["code"],
+            "solution.explanation_validation_unavailable"
+        );
+
+        let malformed = invoke_ipc(
+            &webview,
+            "solution_list",
+            &json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "scenarioId": scenario_id,
+                "unexpected": true,
+            }),
+        )?;
+        let Err(malformed) = malformed else {
+            return Err("malformed solution request unexpectedly succeeded".into());
+        };
+        let expected_error = json!({
+            "code": "solution.request_invalid",
+            "message": "The solution request is missing or malformed.",
+            "category": "validation",
+            "retryable": false,
+            "fieldErrors": [{
+                "field": "/request",
+                "code": "solution.request_invalid",
+                "message": "The solution request is missing or malformed.",
+            }],
+            "details": null,
+            "diagnosticId": null,
+        });
+        assert_eq!(malformed, expected_error);
+        for malformed_request in [
+            json!("not an object"),
+            json!({
+                "schemaVersion": 1,
+                "scenarioId": scenario_id,
+            }),
+            json!({
+                "requestId": RequestId::new(&SystemIdGenerator)?,
+                "schemaVersion": 1,
+                "scenarioId": "not-a-uuid",
+            }),
+        ] {
+            let malformed = invoke_ipc(&webview, "solution_list", &malformed_request)?;
+            let Err(malformed) = malformed else {
+                return Err("malformed solution request unexpectedly succeeded".into());
+            };
+            assert_eq!(malformed, expected_error);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn solution_response_preserves_every_wide_integer_losslessly() -> Result<(), Box<dyn Error>> {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct IntegerFixture {
+            minimum: i64,
+            beyond_safe_integer: i64,
+            maximum: i64,
+            safe_unsigned: u64,
+            wide_unsigned: u64,
+        }
+
+        let response = solution_response(
+            RequestId::new(&SystemIdGenerator)?,
+            Revision::INITIAL,
+            IntegerFixture {
+                minimum: i64::MIN,
+                beyond_safe_integer: 9_007_199_254_740_993,
+                maximum: i64::MAX,
+                safe_unsigned: 9_007_199_254_740_991,
+                wide_unsigned: u64::MAX,
+            },
+        )
+        .map_err(|error| format!("integer fixture serialization failed: {}", error.message))?;
+        let body = tauri::ipc::IpcResponse::body(response)?;
+        let tauri::ipc::InvokeResponseBody::Json(json) = body else {
+            return Err("solution response was not emitted as JSON".into());
+        };
+        let value: Value = serde_json::from_str(&json)?;
+        assert_eq!(value["result"]["minimum"], i64::MIN.to_string());
+        assert_eq!(value["result"]["beyondSafeInteger"], "9007199254740993");
+        assert_eq!(value["result"]["maximum"], i64::MAX.to_string());
+        assert_eq!(value["result"]["safeUnsigned"], 9_007_199_254_740_991_u64);
+        assert_eq!(value["result"]["wideUnsigned"], u64::MAX.to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn counterfactual_start_normalizes_lossless_signed_interval_strings()
+    -> Result<(), Box<dyn Error>> {
+        let request_id = RequestId::new(&SystemIdGenerator)?;
+        let scenario_id = eutheto_types::ScenarioId::new(&SystemIdGenerator)?;
+        let solution_id = eutheto_types::SolutionId::new(&SystemIdGenerator)?;
+        let request = json!({
+            "schemaVersion": 1,
+            "requestId": request_id,
+            "scenarioId": scenario_id,
+            "expectedRevision": 0,
+            "baseSolutionId": solution_id,
+            "condition": {
+                "type": "forceAssignmentValue",
+                "assignmentId": "assignment.fixture",
+                "value": {
+                    "type": "interval",
+                    "value": {
+                        "start": i64::MIN.to_string(),
+                        "duration": "9007199254740993",
+                        "end": i64::MAX.to_string(),
+                    },
+                },
+            },
+            "totalBudgetMilliseconds": 1000,
+        });
+        let mut normalized = request.clone();
+        normalize_counterfactual_int64(&mut normalized)
+            .map_err(|error| format!("integer normalization failed: {}", error.message))?;
+        let direct: SolutionStartCounterfactualRequestV1 = serde_json::from_value(normalized)?;
+        let decoded = decode_counterfactual_start_request(Some(request))
+            .map_err(|error| format!("counterfactual request decode failed: {}", error.message))?;
+        assert_eq!(decoded, direct);
+        let decoded = serde_json::to_value(decoded)?;
+        assert_eq!(
+            decoded.pointer("/condition/value/value/start"),
+            Some(&json!(i64::MIN))
+        );
+        assert_eq!(
+            decoded.pointer("/condition/value/value/duration"),
+            Some(&json!(9_007_199_254_740_993_i64))
+        );
+        assert_eq!(
+            decoded.pointer("/condition/value/value/end"),
+            Some(&json!(i64::MAX))
+        );
+
+        let invalid = decode_counterfactual_start_request(Some(json!({
+            "schemaVersion": 1,
+            "requestId": request_id,
+            "scenarioId": scenario_id,
+            "expectedRevision": 0,
+            "baseSolutionId": solution_id,
+            "condition": {
+                "type": "forbidAssignmentValue",
+                "assignmentId": "assignment.fixture",
+                "value": {
+                    "type": "integer",
+                    "value": "9223372036854775808",
+                },
+            },
+            "totalBudgetMilliseconds": 1000,
+        })));
+        let Err(invalid) = invalid else {
+            return Err("out-of-range signed integer unexpectedly decoded".into());
+        };
+        assert_eq!(invalid.code, "solution.request_invalid");
+        assert_eq!(invalid.category, ApiErrorCategoryDto::Validation);
+        assert_eq!(invalid.field_errors[0].field, "/request");
+        Ok(())
+    }
     // One adapter flow ties every Phase 02 metadata view to the same registry-backed state.
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
@@ -3722,6 +4426,7 @@ mod tests {
                 safety_backups: directory.path().join("metadata-backups"),
             },
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
             ids: Arc::new(SystemIdGenerator),
             cancellation: CancellationToken::default(),
         })
@@ -3858,6 +4563,7 @@ mod tests {
                 safety_backups: directory.path().join("unopened-backups"),
             },
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
             ids: Arc::new(SystemIdGenerator),
             cancellation: CancellationToken::default(),
         })
@@ -4011,6 +4717,7 @@ mod tests {
                 safety_backups: directory.path().join("backups"),
             },
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
             ids: Arc::new(SystemIdGenerator),
             cancellation: CancellationToken::default(),
         })
@@ -4067,6 +4774,7 @@ mod tests {
                 safety_backups: directory.path().join("source-backups"),
             },
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
             ids: Arc::new(SystemIdGenerator),
             cancellation: CancellationToken::default(),
         })
@@ -4104,6 +4812,7 @@ mod tests {
                 safety_backups: directory.path().join("target-backups"),
             },
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
             ids: Arc::new(SystemIdGenerator),
             cancellation: CancellationToken::default(),
         };
@@ -4386,6 +5095,7 @@ mod tests {
                 safety_backups: directory.path().join("backups"),
             },
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
             ids: Arc::new(SystemIdGenerator),
             cancellation: CancellationToken::default(),
         };

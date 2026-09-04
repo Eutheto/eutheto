@@ -1,11 +1,16 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# `eutheto-verify` (reserved)
+# `eutheto-verify`
 
-This directory reserves the roadmap boundary for **future independent projection, feasibility, and authoritative score recomputation.** No `Cargo.toml` is present, so this is not a Cargo workspace member, implemented crate, or published API.
+Independent, solver-neutral candidate acceptance policy.
 
 ## Boundary
 
-It verifies against the original normalized domain scenario and must not treat backend status or compiled backend constraints as the sole oracle.
+This crate projects backend values through a compiled-in domain pack, validates the projected
+solution against the planning IR, requires complete independent rule evaluation and authoritative
+score integrity, and constructs accepted-result data only after every binding passes. Backend
+status, generated backend constraints, and backend objective values are never acceptance
+authority.
 
-The owning roadmap phase must confirm that this boundary still warrants a separate crate, choose its dependencies, and add implementation and tests. The exact future crate inventory is an explicit architecture gate; the reserved name alone does not settle it.
+The crate may depend on domain, planning, and solver API contracts. It must not depend on the
+router, solver adapters, persistence, application services, Tauri, or presentation code.

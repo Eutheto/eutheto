@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauri = vi.hoisted(() => ({ invoke: vi.fn() }));
+const tauriEvents = vi.hoisted(() => ({ listen: vi.fn() }));
 
 vi.mock("@tauri-apps/api/core", () => tauri);
+vi.mock("@tauri-apps/api/event", () => tauriEvents);
 
 import * as generated from "./generated";
 import type {
@@ -43,7 +45,7 @@ const REPRESENTATIVE_COMMANDS = [
 
 const REPRESENTATIVE_DEFERRED_COMMANDS = [
   "solve_start",
-  "solution_get_view",
+  "solution_lock_assignment",
   "ai_send_turn",
 ] as const satisfies readonly CatalogCommand[];
 
@@ -64,6 +66,7 @@ function collectKeys(value: unknown): readonly string[] {
 describe("generated desktop API", () => {
   beforeEach(() => {
     tauri.invoke.mockReset();
+    tauriEvents.listen.mockReset();
     vi.stubGlobal("window", {
       crypto: {
         getRandomValues(bytes: Uint8Array) {
@@ -229,6 +232,428 @@ describe("generated desktop API", () => {
     expect(tauri.invoke).not.toHaveBeenCalled();
   });
 
+  it("exports exactly one wrapper for every implemented solution command", () => {
+    expect(generated).toMatchObject({
+      listSolutions: expect.any(Function),
+      getSolutionSummary: expect.any(Function),
+      getSolutionView: expect.any(Function),
+      selectSolution: expect.any(Function),
+      verifySolution: expect.any(Function),
+      compareSolutions: expect.any(Function),
+      explainSolution: expect.any(Function),
+      startCounterfactual: expect.any(Function),
+      cancelCounterfactual: expect.any(Function),
+    });
+    expect(tauri.invoke).not.toHaveBeenCalled();
+  });
+
+  it("invokes all solution commands with strict versioned identity-based request shapes", async () => {
+    const scenarioId = "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a";
+    const solutionId = "01900000-0000-7000-8000-000000000070";
+    const candidateSolutionId = "01900000-0000-7000-8000-000000000071";
+    const jobId = "01900000-0000-7000-8000-000000000072";
+    const explanation = {
+      schemaVersion: 1,
+      subject: { kind: "validation", issueId: null },
+    } as const satisfies generated.ExplanationRequestV1;
+    const condition = {
+      type: "forceAssignmentValue",
+      assignmentId: "shift.primary",
+      value: { type: "boolean", value: true },
+    } as const satisfies generated.CounterfactualConditionPayloadV1;
+    tauri.invoke.mockResolvedValue(undefined);
+
+    await generated.listSolutions(scenarioId);
+    await generated.getSolutionSummary(scenarioId, solutionId);
+    await generated.getSolutionView({ scenarioId, solutionId, viewId: "schedule" });
+    await generated.selectSolution({ scenarioId, solutionId, expectedRevision: 7 });
+    await generated.verifySolution(scenarioId, solutionId);
+    await generated.compareSolutions({
+      scenarioId,
+      baseSolutionId: solutionId,
+      candidateSolutionId,
+    });
+    await generated.explainSolution({ scenarioId, request: explanation });
+    await generated.startCounterfactual({
+      scenarioId,
+      expectedRevision: 7,
+      baseSolutionId: solutionId,
+      condition,
+      totalBudgetMilliseconds: 5_000,
+    });
+    await generated.cancelCounterfactual({ scenarioId, expectedRevision: 7, jobId });
+
+    const calls = tauri.invoke.mock.calls;
+    expect(calls.map(([command]) => command)).toEqual([
+      "solution_list",
+      "solution_get_summary",
+      "solution_get_view",
+      "solution_select",
+      "solution_verify",
+      "solution_compare",
+      "solution_explain",
+      "solution_start_counterfactual",
+      "solution_cancel_counterfactual",
+    ]);
+    expect(calls[0]?.[1]).toEqual({
+      request: {
+        requestId: expect.stringMatching(UUID_V7_PATTERN),
+        schemaVersion: generated.SOLUTION_API_SCHEMA_VERSION,
+        scenarioId,
+      },
+    });
+    expect(calls[5]?.[1]).toEqual({
+      request: {
+        requestId: expect.stringMatching(UUID_V7_PATTERN),
+        schemaVersion: generated.SOLUTION_API_SCHEMA_VERSION,
+        scenarioId,
+        baseSolutionId: solutionId,
+        candidateSolutionId,
+      },
+    });
+    expect(calls[6]?.[1]).toEqual({
+      request: {
+        requestId: expect.stringMatching(UUID_V7_PATTERN),
+        schemaVersion: generated.SOLUTION_API_SCHEMA_VERSION,
+        scenarioId,
+        request: explanation,
+      },
+    });
+    expect(calls[7]?.[1]).toEqual({
+      request: {
+        requestId: expect.stringMatching(UUID_V7_PATTERN),
+        schemaVersion: generated.COUNTERFACTUAL_API_SCHEMA_VERSION,
+        scenarioId,
+        expectedRevision: 7,
+        baseSolutionId: solutionId,
+        condition,
+        totalBudgetMilliseconds: 5_000,
+      },
+    });
+    expect(calls[8]?.[1]).toEqual({
+      request: {
+        cancelRequestId: expect.stringMatching(UUID_V7_PATTERN),
+        schemaVersion: generated.COUNTERFACTUAL_API_SCHEMA_VERSION,
+        scenarioId,
+        expectedRevision: 7,
+        jobId,
+      },
+    });
+  });
+
+  it("models every explanation discriminant and nullable counterfactual lifecycle state", () => {
+    const scenarioId = "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a";
+    const solutionId = "01900000-0000-7000-8000-000000000070";
+    const runId = "01900000-0000-7000-8000-000000000071";
+    const assignment = {
+      id: "shift.primary",
+      entity: { kind: "shift", id: "primary" },
+      value: { type: "integer", value: "9007199254740993" },
+      evidence: [],
+    } as const satisfies generated.DomainAssignment;
+    const score = {
+      feasibility: "0",
+      levels: [
+        {
+          levelId: "preference",
+          value: "9007199254740993",
+          direction: "maximize",
+          categoryBreakdown: { fairness: "9007199254740993" },
+        },
+      ],
+    } as const satisfies generated.ScoreVector;
+    const binding = {
+      packId: "official.test",
+      scenarioId,
+      scenarioRevision: 7,
+      documentHash: "a".repeat(64),
+      projectionVersion: 1,
+      verificationScopeChecksum: "b".repeat(64),
+      acceptedResult: { solutionId, resultChecksum: "c".repeat(64) },
+    } satisfies generated.ComparisonBindingV1;
+    const comparison = {
+      schemaVersion: 1,
+      base: binding,
+      candidate: binding,
+      baseScore: score,
+      candidateScore: score,
+      assignments: [],
+      rules: [],
+      scoreLevels: [],
+      metrics: [],
+      locks: [],
+      runs: null,
+      affectedEntities: [],
+      ordering: "equivalent",
+      checksum: "d".repeat(64),
+    } satisfies generated.SolutionComparisonV1;
+    const solveOptions = {
+      backend: { kind: "auto" },
+      mode: "balanced",
+      timeLimitMilliseconds: 1_000,
+      memoryLimitBytes: "18446744073709551615",
+      workerThreads: { kind: "auto" },
+      randomSeed: "18446744073709551615",
+      solutionLimit: null,
+      stopAfterFirstFeasible: false,
+      collectIntermediateSolutions: false,
+      explanationMode: "standard",
+      preserveExisting: "none",
+      reproducibility: "deterministic",
+      resourceLimits: {
+        maxEntities: 10,
+        maxRules: 10,
+        maxVariables: "18446744073709551615",
+        maxConstraints: "18446744073709551615",
+      },
+    } as const satisfies generated.SolveOptions;
+    const runInput = {
+      schemaVersion: 1,
+      runId,
+      requestId: "01900000-0000-7000-8000-000000000072",
+      requestHash: "e".repeat(64),
+      scenarioId,
+      scenarioRevision: 7,
+      snapshotId: "01900000-0000-7000-8000-000000000073",
+      snapshotDocumentHash: "f".repeat(64),
+      snapshotCreatedAt: "2026-09-04T00:00:00Z",
+      packId: "official.test",
+      packSchemaVersion: 1,
+      planningIrSchemaVersion: 1,
+      compilerVersion: "1",
+      applicationVersion: "1",
+      backendId: "synthetic.test",
+      backendVersion: "1",
+      adapterVersion: "1",
+      workerVersion: "1",
+      solverVersion: "1",
+      protocolMajor: 1,
+      protocolMinor: 0,
+      modelHash: "1".repeat(64),
+      objectivePolicyHash: "2".repeat(64),
+      solveOptions,
+      scenarioTimezone: "UTC",
+      temporaryConditionHash: null,
+      checksum: "3".repeat(64),
+    } satisfies generated.RunInputV1;
+    const runManifest = {
+      schemaVersion: 1,
+      runId,
+      runInputChecksum: runInput.checksum,
+      outcome: { type: "noResult", status: "infeasible" },
+      startedAt: "2026-09-04T00:00:00Z",
+      finishedAt: "2026-09-04T00:00:01Z",
+      elapsedMilliseconds: 1_000,
+      firstIncumbentMilliseconds: null,
+      firstVerifiedFeasibleMilliseconds: null,
+      phaseTimings: {
+        compileMilliseconds: 10,
+        backendMilliseconds: 900,
+        projectionMilliseconds: null,
+        structuralValidationMilliseconds: null,
+        scoreRecomputationMilliseconds: null,
+        requiredRuleVerificationMilliseconds: null,
+        evidencePersistenceMilliseconds: 10,
+        optionalExplanationMilliseconds: null,
+      },
+      verificationWarnings: [],
+      checksum: "4".repeat(64),
+    } as const satisfies generated.RunManifestV1;
+    const condition = {
+      schemaVersion: 1,
+      condition: {
+        type: "forceAssignmentValue",
+        assignmentId: assignment.id,
+        value: assignment.value,
+      },
+      checksum: "5".repeat(64),
+    } as const satisfies generated.CounterfactualConditionV1;
+    const counterfactualRequest = {
+      schemaVersion: 1,
+      jobId: "01900000-0000-7000-8000-000000000074",
+      requestId: "01900000-0000-7000-8000-000000000075",
+      semantics: {
+        schemaVersion: 1,
+        scenarioId,
+        scenarioRevision: 7,
+        snapshotId: runInput.snapshotId,
+        snapshotDocumentHash: runInput.snapshotDocumentHash,
+        base: binding.acceptedResult,
+        baseRunId: runId,
+        baseRunInputChecksum: runInput.checksum,
+        baseModelHash: runInput.modelHash,
+        objectivePolicyHash: runInput.objectivePolicyHash,
+        conditionChecksum: condition.checksum,
+        totalBudgetMilliseconds: 1_000,
+      },
+      condition,
+      requestHash: "6".repeat(64),
+      createdAt: "2026-09-04T00:00:00Z",
+    } satisfies generated.CounterfactualJobRequestV1;
+    const counterfactual = {
+      schemaVersion: 1,
+      request: counterfactualRequest,
+      baseRunInput: runInput,
+      baseRunManifest: runManifest,
+      compilation: {
+        schemaVersion: 1,
+        baseModelHash: runInput.modelHash,
+        conditionChecksum: condition.checksum,
+        derivedModelHash: "7".repeat(64),
+        objectivePolicyHash: runInput.objectivePolicyHash,
+        checksum: "8".repeat(64),
+      },
+      runInput,
+      runManifest,
+      conclusion: { type: "provenImpossible" },
+      checksum: "9".repeat(64),
+    } as const satisfies generated.CounterfactualResultV1;
+    const payloads = [
+      {
+        kind: "validation",
+        issue: {
+          issueId: "validation.issue",
+          severity: "mustFix",
+          messageKey: "validation.issue",
+          parameters: {},
+          fieldPath: ["scenario"],
+          entity: null,
+          ruleId: null,
+        },
+      },
+      {
+        kind: "infeasibility",
+        infeasibility: { type: "unavailable", reason: "assumptionsUnavailable" },
+      },
+      {
+        kind: "assignment",
+        assignment: {
+          assignment,
+          relatedRules: [],
+          scoreContributions: [
+            {
+              evidenceId: "evidence.preference",
+              levelId: "preference",
+              categoryId: "fairness",
+              value: "9007199254740993",
+            },
+          ],
+          metrics: {},
+          lockState: { state: "unlocked" },
+        },
+      },
+      { kind: "counterfactual", result: counterfactual },
+      { kind: "solutionDifference", comparison },
+      { kind: "repair", repair: { comparison, causality: "notEstablished" } },
+      {
+        kind: "optimalityStatus",
+        status: { runInput, runManifest, result: null },
+      },
+    ] as const satisfies readonly generated.ExplanationEvidencePayloadV1[];
+    const records = [
+      {
+        schemaVersion: 1,
+        request: counterfactualRequest,
+        state: "queued",
+        startedAt: null,
+        finishedAt: null,
+        cancelRequestId: null,
+        cancelRequestedAt: null,
+        result: null,
+        error: null,
+      },
+      {
+        schemaVersion: 1,
+        request: counterfactualRequest,
+        state: "completed",
+        startedAt: "2026-09-04T00:00:00Z",
+        finishedAt: "2026-09-04T00:00:01Z",
+        cancelRequestId: null,
+        cancelRequestedAt: null,
+        result: counterfactual,
+        error: null,
+      },
+      {
+        schemaVersion: 1,
+        request: counterfactualRequest,
+        state: "failed",
+        startedAt: null,
+        finishedAt: "2026-09-04T00:00:01Z",
+        cancelRequestId: null,
+        cancelRequestedAt: null,
+        result: null,
+        error: { kind: "backendFailed" },
+      },
+    ] as const satisfies readonly generated.CounterfactualJobRecordV1[];
+
+    expect(payloads.map((payload) => payload.kind)).toEqual([
+      "validation",
+      "infeasibility",
+      "assignment",
+      "counterfactual",
+      "solutionDifference",
+      "repair",
+      "optimalityStatus",
+    ]);
+    expect(records.map((record) => record.state)).toEqual(["queued", "completed", "failed"]);
+  });
+
+  it("listens on each Phase-04 event topic without changing payloads", async () => {
+    const unlisten = vi.fn();
+    tauriEvents.listen.mockResolvedValue(unlisten);
+    const listener = vi.fn();
+    const scenarioId = "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a";
+
+    await generated.onSolveProgress(listener);
+    await generated.onSolveCompleted(listener);
+    await generated.onScenarioValidationChanged(listener);
+    await generated.onCounterfactualProgress(listener);
+
+    expect(tauriEvents.listen.mock.calls.map(([topic]) => topic)).toEqual([
+      "solve://progress",
+      "solve://completed",
+      "scenario://validation-changed",
+      "counterfactual://progress",
+    ]);
+    const forwardedPayload = {
+      type: "solveCompleted",
+      payload: {
+        context: {
+          eventVersion: 1,
+          timestamp: "2026-09-04T00:00:00Z",
+          requestId: null,
+          scenarioId,
+          revision: 7,
+          solveRunId: null,
+        },
+        status: "optimal",
+        solutionId: null,
+      },
+    } satisfies generated.SolveCompletedEvent;
+    const validationPayload = {
+      type: "scenarioValidationChanged",
+      payload: {
+        context: forwardedPayload.payload.context,
+        validationDelta: {
+          added: [
+            {
+              code: "validation.required",
+              severity: "error",
+              message: "A required value is missing.",
+              fieldPath: "/rules/0",
+              resource: null,
+            },
+          ],
+          resolved: ["validation.previous"],
+        },
+      },
+    } satisfies generated.ScenarioValidationChangedEvent;
+    tauriEvents.listen.mock.calls[1]?.[1]({ payload: forwardedPayload });
+    tauriEvents.listen.mock.calls[2]?.[1]({ payload: validationPayload });
+    expect(listener).toHaveBeenNthCalledWith(1, forwardedPayload);
+    expect(listener).toHaveBeenNthCalledWith(2, validationPayload);
+  });
+
   it("keeps native file selections out of project transfer invoke payloads", async () => {
     const options = {
       restoreMode: "import-scenario",
@@ -319,6 +744,15 @@ describe("generated desktop API", () => {
       scenarioVersions: { latest: 1, migratableFrom: [0] },
       iconId: "official.test",
       capabilities: ["commands", "portableData"],
+      explanationCapabilities: [
+        "validation",
+        "infeasibility",
+        "assignment",
+        "counterfactual",
+        "solutionDifference",
+        "repair",
+        "optimalityStatus",
+      ],
       portableSchemaVersion: 1,
       portableCapabilities: [],
       shareResultSchemaVersion: 1,
@@ -328,7 +762,7 @@ describe("generated desktop API", () => {
     } satisfies DomainPackDescriptorDto;
     const matrix = {
       schemaVersion: 1,
-      planningIrSchemaVersion: 1,
+      planningIrSchemaVersion: 2,
       features: [
         {
           id: "solve.cancellation",
@@ -377,7 +811,7 @@ describe("generated desktop API", () => {
   it("preserves exact unsupported and degraded solver matrix cells", async () => {
     const matrix = {
       schemaVersion: 1,
-      planningIrSchemaVersion: 1,
+      planningIrSchemaVersion: 2,
       features: [
         {
           id: "primitive.fixture-unsupported",
@@ -458,6 +892,68 @@ describe("generated desktop API", () => {
     await expect(generated.redoScenario(scenarioId, revision)).rejects.toThrow(
       "Revision must be a non-negative JavaScript safe integer",
     );
+    expect(tauri.invoke).not.toHaveBeenCalled();
+  });
+
+  it("forwards lossless signed 64-bit assignment values without number coercion", async () => {
+    const value = "9007199254740993";
+    tauri.invoke.mockResolvedValue(undefined);
+
+    await generated.startCounterfactual({
+      scenarioId: "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a",
+      expectedRevision: 0,
+      baseSolutionId: "01900000-0000-7000-8000-000000000070",
+      condition: {
+        type: "forceAssignmentValue",
+        assignmentId: "shift.primary",
+        value: { type: "integer", value },
+      },
+      totalBudgetMilliseconds: 1_000,
+    });
+
+    expect(tauri.invoke).toHaveBeenCalledWith("solution_start_counterfactual", {
+      request: expect.objectContaining({
+        condition: expect.objectContaining({
+          value: { type: "integer", value },
+        }),
+      }),
+    });
+  });
+
+  it.each(["9223372036854775808", "-9223372036854775809", "01", "-0"])(
+    "rejects invalid signed 64-bit assignment value %s before invoking Tauri",
+    (value) => {
+      expect(() =>
+        generated.startCounterfactual({
+          scenarioId: "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a",
+          expectedRevision: 0,
+          baseSolutionId: "01900000-0000-7000-8000-000000000070",
+          condition: {
+            type: "forceAssignmentValue",
+            assignmentId: "shift.primary",
+            value: { type: "integer", value },
+          },
+          totalBudgetMilliseconds: 1_000,
+        }),
+      ).toThrow(/signed 64-bit/);
+      expect(tauri.invoke).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects oversized counterfactual budgets before invoking Tauri", async () => {
+    await expect(
+      generated.startCounterfactual({
+        scenarioId: "018f47f8-62a1-7a2a-aa2a-2a2a2a2a2a2a",
+        expectedRevision: 0,
+        baseSolutionId: "01900000-0000-7000-8000-000000000070",
+        condition: {
+          type: "forceAssignmentValue",
+          assignmentId: "shift.primary",
+          value: { type: "boolean", value: true },
+        },
+        totalBudgetMilliseconds: generated.COUNTERFACTUAL_TOTAL_BUDGET_MAX_MILLISECONDS_V1 + 1,
+      }),
+    ).rejects.toThrow("Counterfactual budget must be an integer between 1 and 30000 milliseconds");
     expect(tauri.invoke).not.toHaveBeenCalled();
   });
 

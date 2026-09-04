@@ -42,7 +42,7 @@ enum Command {
         #[command(subcommand)]
         command: FixturesCommand,
     },
-    /// Verify workspace dependency direction and Phase-02 crate boundaries.
+    /// Verify workspace dependency direction and required architecture crates.
     Architecture {
         #[command(subcommand)]
         command: ArchitectureCommand,
@@ -71,7 +71,7 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum ArchitectureCommand {
-    /// Reject missing Phase-02 crates and forbidden transitive dependency paths.
+    /// Reject missing architecture crates and forbidden transitive dependency paths.
     Verify,
 }
 

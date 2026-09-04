@@ -4,12 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const REQUIRED_PHASE02_PACKAGES: &[&str] = &[
+const REQUIRED_ARCHITECTURE_PACKAGES: &[&str] = &[
     "eutheto-domain-api",
     "eutheto-domain-ir",
     "eutheto-planning-ir",
     "eutheto-solver-api",
     "eutheto-solver-router",
+    "eutheto-verify",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -47,15 +48,15 @@ pub fn verify(repo_root: &Path) -> Result<()> {
     let metadata: Metadata =
         serde_json::from_slice(&output.stdout).context("cargo metadata emitted invalid JSON")?;
     verify_metadata(repo_root, &metadata)?;
-    println!("verified Phase-02 workspace dependency boundaries");
+    println!("verified workspace dependency boundaries");
     Ok(())
 }
 
 fn verify_metadata(repo_root: &Path, metadata: &Metadata) -> Result<()> {
     let packages = workspace_packages(metadata);
-    for required in REQUIRED_PHASE02_PACKAGES {
+    for required in REQUIRED_ARCHITECTURE_PACKAGES {
         if !packages.contains_key(required) {
-            bail!("required Phase-02 workspace package `{required}` is missing")
+            bail!("required architecture workspace package `{required}` is missing")
         }
     }
     let graph = workspace_graph(&packages);
@@ -77,6 +78,8 @@ fn verify_metadata(repo_root: &Path, metadata: &Metadata) -> Result<()> {
                             "eutheto-store"
                                 | "eutheto-import"
                                 | "eutheto-export"
+                                | "eutheto-verify"
+                                | "eutheto-explain"
                                 | "eutheto-desktop"
                         )
                 },
@@ -97,6 +100,8 @@ fn verify_metadata(repo_root: &Path, metadata: &Metadata) -> Result<()> {
                                 | "eutheto-store"
                                 | "eutheto-import"
                                 | "eutheto-export"
+                                | "eutheto-verify"
+                                | "eutheto-explain"
                                 | "eutheto-desktop"
                         )
                 },
@@ -116,6 +121,8 @@ fn verify_metadata(repo_root: &Path, metadata: &Metadata) -> Result<()> {
                             | "eutheto-store"
                             | "eutheto-import"
                             | "eutheto-export"
+                            | "eutheto-verify"
+                            | "eutheto-explain"
                             | "eutheto-desktop"
                     ) || packages.get(candidate).is_some_and(|candidate_package| {
                         candidate_package
@@ -128,9 +135,37 @@ fn verify_metadata(repo_root: &Path, metadata: &Metadata) -> Result<()> {
                 "solver code must not reach official domains, application services, or infrastructure",
             )?;
         }
+        if matches!(*name, "eutheto-verify" | "eutheto-explain") {
+            reject_reachable(
+                name,
+                &graph,
+                verification_forbidden,
+                "verification and explanation code must remain independent of routing, adapters, and infrastructure",
+            )?;
+        }
+        if *name == "eutheto-store" {
+            reject_reachable(
+                name,
+                &graph,
+                |candidate| matches!(candidate, "eutheto-verify" | "eutheto-explain"),
+                "persistence must not depend on verification or explanation policy",
+            )?;
+        }
     }
 
     Ok(())
+}
+fn verification_forbidden(candidate: &str) -> bool {
+    (candidate.starts_with("eutheto-solver-") && candidate != "eutheto-solver-api")
+        || matches!(
+            candidate,
+            "eutheto-command"
+                | "eutheto-core"
+                | "eutheto-store"
+                | "eutheto-import"
+                | "eutheto-export"
+                | "eutheto-desktop"
+        )
 }
 
 fn workspace_packages(metadata: &Metadata) -> BTreeMap<&str, &Package> {
@@ -201,7 +236,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::reject_reachable;
+    use super::{reject_reachable, verification_forbidden};
 
     #[test]
     fn transitive_forbidden_edges_are_rejected() {
@@ -217,6 +252,15 @@ mod tests {
             "test boundary",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn verification_reaches_only_solver_neutral_contracts() {
+        assert!(!verification_forbidden("eutheto-solver-api"));
+        assert!(!verification_forbidden("eutheto-domain-api"));
+        assert!(verification_forbidden("eutheto-solver-router"));
+        assert!(verification_forbidden("eutheto-solver-ortools"));
+        assert!(verification_forbidden("eutheto-store"));
     }
 
     #[test]
