@@ -6,6 +6,7 @@ allowBuilds:
   edgedriver: false
   esbuild: false
   geckodriver: false
+  vue-demi: false
 
 supportedArchitectures:
   os:
