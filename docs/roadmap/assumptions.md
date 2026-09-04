@@ -350,7 +350,7 @@ Every K item is represented below. “Version selected” does not mean the buil
 | Windows WebView2 strategy | **Open/critical** | Bootstrap/runtime/offline/managed-host tests |
 | Wayland/X11 | **Open** | Phase 11/12 Linux manual/E2E |
 | AppImage/deb/rpm mix | **Open** | Clean-machine results control |
-| macOS x86_64 runner/support | **Native `macos-15-intel` Nix shell/source-build lane configured; successful run and signed-package smoke remain open** | Runner availability plus Phase 11/12 signed package smoke |
+| macOS x86_64 runner/support | **Tier 2 through the first public MVP:** native `macos-15-intel` source and unsigned-package lanes run for sensitive pull requests, every merge-group candidate, `main`, version tags, manual dispatches, and weekly validation; final signed-package support remains open | Runner availability plus Phase 11/12 signed package smoke; retire when the declared macOS security-support window closes or required tooling no longer supports the target proportionately |
 | Updater endpoint/signing-key lifecycle | **Open** | Protected endpoint/key custody/rotation/revocation tests |
 | Standalone HTML supported browsers and PDF renderer | **Open**; one-file `file://`, zero-required-network, accessible interaction/list parity and controlled local PDF are required | Phase 07/09 implementation evidence; Phase 11 support statement; Phase 12 exact-candidate browser/platform/print/PDF gate |
 

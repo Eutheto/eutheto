@@ -2,51 +2,24 @@ name: OR-Tools Worker
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/ortools-worker.yml"
-      - "workers/ortools/**"
-      - "apps/desktop/**"
-      - "crates/**"
-      - "protocol/**"
-      - "nix/ortools-worker.nix"
-      - "xtask/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "flake.nix"
-      - "flake.lock"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - "Justfile"
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/ortools-worker.yml"
-      - "workers/ortools/**"
-      - "protocol/**"
-      - "apps/desktop/**"
-      - "crates/**"
-      - "nix/ortools-worker.nix"
-      - "xtask/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "Justfile"
-      - "flake.nix"
-      - "flake.lock"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
+    tags:
+      - "v*"
+  merge_group:
+    types:
+      - checks_requested
+  schedule:
+    - cron: "17 05 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ortools-worker-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ortools-worker-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 env:
   CI: "true"
@@ -54,27 +27,138 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
+  select-targets:
+    name: Select packaged-worker target matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.policy.outputs.matrix }}
+      run_workers: ${{ steps.policy.outputs.run_workers }}
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select path-relevant targets
+        id: policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          event_name = os.environ["EVENT_NAME"]
+          changed = []
+          if event_name == "pull_request":
+              base_sha = os.environ["BASE_SHA"]
+              changed = subprocess.run(
+                  ["git", "diff", "--name-only", f"{base_sha}...HEAD"],
+                  check=True,
+                  stdout=subprocess.PIPE,
+                  text=True,
+              ).stdout.splitlines()
+
+          worker_prefixes = (
+              "apps/desktop/",
+              "crates/",
+              "nix/",
+              "protocol/",
+              "workers/ortools/",
+              "xtask/",
+          )
+          worker_exact = {
+              ".github/workflows/ortools-worker.yml",
+              "Cargo.lock",
+              "Cargo.toml",
+              "Justfile",
+              "flake.lock",
+              "flake.nix",
+              "package.json",
+              "pnpm-lock.yaml",
+              "pnpm-workspace.yaml",
+              "rust-toolchain.toml",
+          }
+          intel_prefixes = (
+              ".cargo/",
+              "apps/desktop/src-tauri/",
+              "nix/",
+              "workers/ortools/",
+              "xtask/",
+          )
+          intel_exact = {
+              ".envrc",
+              ".github/workflows/ortools-worker.yml",
+              ".github/workflows/portable.yml",
+              "Cargo.lock",
+              "Cargo.toml",
+              "Justfile",
+              "flake.lock",
+              "flake.nix",
+              "rust-toolchain.toml",
+          }
+
+          def matches(path, prefixes, exact):
+              return (
+                  path in exact
+                  or path.endswith("/Cargo.toml")
+                  or path.startswith(prefixes)
+              )
+
+          run_workers = event_name != "pull_request" or any(
+              matches(path, worker_prefixes, worker_exact) for path in changed
+          )
+          include_intel = event_name != "pull_request" or any(
+              matches(path, intel_prefixes, intel_exact) for path in changed
+          )
+          run_workers = run_workers or include_intel
+          targets = [
+              {
+                  "name": "Linux x86_64",
+                  "os": "ubuntu-24.04",
+                  "nix-system": "x86_64-linux",
+                  "native-arch": "x86_64",
+                  "nix-installer-tag": "v3.22.2",
+              },
+              {
+                  "name": "macOS arm64",
+                  "os": "macos-15",
+                  "nix-system": "aarch64-darwin",
+                  "native-arch": "arm64",
+                  "nix-installer-tag": "v3.22.2",
+              },
+          ]
+          if include_intel:
+              targets.insert(
+                  1,
+                  {
+                      "name": "macOS x86_64",
+                      "os": "macos-15-intel",
+                      "nix-system": "x86_64-darwin",
+                      "native-arch": "x86_64",
+                      "nix-installer-tag": "v3.12.2",
+                  },
+              )
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"run_workers={str(run_workers).lower()}\n")
+              output.write(f"matrix={json.dumps({'include': targets}, separators=(',', ':'))}\n")
+          PY
+
   unix-packaged-worker:
     name: ${{ matrix.name }} / unsigned packaged worker and app
+    needs: select-targets
+    if: needs.select-targets.outputs.run_workers == 'true'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86_64
-            os: ubuntu-24.04
-            nix-system: x86_64-linux
-            native-arch: x86_64
-            nix-installer-tag: v3.22.2
-          - name: macOS x86_64
-            os: macos-15-intel
-            nix-system: x86_64-darwin
-            native-arch: x86_64
-            nix-installer-tag: v3.12.2
-          - name: macOS arm64
-            os: macos-15
-            nix-system: aarch64-darwin
-            native-arch: arm64
-            nix-installer-tag: v3.22.2
+      matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     steps:
@@ -118,6 +202,8 @@ jobs:
           corepack install
           test "$(node --version)" = "v24.20.0"
           test "$(pnpm --version)" = "11.24.0"
+          # The nested shell, not this shell, expands PROTOC.
+          # shellcheck disable=SC2016
           protoc="$(nix develop --no-update-lock-file --command sh -c 'test -x "$PROTOC"; printf "__EUTHETO_PROTOC__=%s\n" "$PROTOC"' | sed -n 's/^__EUTHETO_PROTOC__=//p')"
           test "$("$protoc" --version)" = "libprotoc 33.1"
           printf 'PROTOC=%s\n' "$protoc" >> "$GITHUB_ENV"
@@ -298,6 +384,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   windows-native-worker:
+    needs: select-targets
+    if: needs.select-targets.outputs.run_workers == 'true'
     name: Windows x86_64 / approved worker and unsigned package
     runs-on: windows-2025
     timeout-minutes: 180
@@ -472,3 +560,29 @@ jobs:
 
           It does not sign, upload, publish, or establish Phase-04 candidate acceptance. No executable or installer leaves the runner.
           "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+  worker-gate:
+    name: OR-Tools worker integration gate
+    if: always()
+    needs:
+      - select-targets
+      - unix-packaged-worker
+      - windows-native-worker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected packaged-worker target
+        env:
+          PLAN_RESULT: ${{ needs.select-targets.result }}
+          RUN_WORKERS: ${{ needs.select-targets.outputs.run_workers }}
+          UNIX_RESULT: ${{ needs.unix-packaged-worker.result }}
+          WINDOWS_RESULT: ${{ needs.windows-native-worker.result }}
+        run: |
+          test "$PLAN_RESULT" = "success"
+          if [ "$RUN_WORKERS" = "true" ]; then
+            test "$UNIX_RESULT" = "success"
+            test "$WINDOWS_RESULT" = "success"
+          else
+            test "$UNIX_RESULT" = "skipped"
+            test "$WINDOWS_RESULT" = "skipped"
+          fi
