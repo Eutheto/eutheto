@@ -99,9 +99,22 @@ jobs:
             'Zlib', 'BSL-1.0', 'CC0-1.0'
           ]);
           // Package-scoped reviews accept these metadata candidates for the
-          // locked Phase-00 build graph; they do not make a legal conclusion.
+          // locked dependency graph; they do not make a legal conclusion.
           const reviewed = new Map([
-            ['minimatch@10.2.6', 'BlueOak-1.0.0'],
+            ['@isaacs/cliui@9.0.0', 'BlueOak-1.0.0'],
+            ['atob@2.1.2', '(MIT OR Apache-2.0)'],
+            ['caniuse-lite@1.0.30001810', 'CC-BY-4.0'],
+            ['glob@11.1.0', 'BlueOak-1.0.0'],
+            ['jackspeak@4.2.3', 'BlueOak-1.0.0'],
+            ['lightningcss@1.32.0', 'MPL-2.0'],
+            ['lightningcss-darwin-arm64@1.32.0', 'MPL-2.0'],
+            ['lightningcss-darwin-x64@1.32.0', 'MPL-2.0'],
+            ['lightningcss-linux-arm64-gnu@1.32.0', 'MPL-2.0'],
+            ['lightningcss-linux-arm64-musl@1.32.0', 'MPL-2.0'],
+            ['lightningcss-linux-x64-gnu@1.32.0', 'MPL-2.0'],
+            ['lightningcss-linux-x64-musl@1.32.0', 'MPL-2.0'],
+            ['lightningcss-win32-arm64-msvc@1.32.0', 'MPL-2.0'],
+            ['lightningcss-win32-x64-msvc@1.32.0', 'MPL-2.0'],
             ['lightningcss@1.33.0', 'MPL-2.0'],
             ['lightningcss-darwin-arm64@1.33.0', 'MPL-2.0'],
             ['lightningcss-darwin-x64@1.33.0', 'MPL-2.0'],
@@ -110,7 +123,14 @@ jobs:
             ['lightningcss-linux-x64-gnu@1.33.0', 'MPL-2.0'],
             ['lightningcss-linux-x64-musl@1.33.0', 'MPL-2.0'],
             ['lightningcss-win32-arm64-msvc@1.33.0', 'MPL-2.0'],
-            ['lightningcss-win32-x64-msvc@1.33.0', 'MPL-2.0']
+            ['lightningcss-win32-x64-msvc@1.33.0', 'MPL-2.0'],
+            ['lru-cache@11.5.2', 'BlueOak-1.0.0'],
+            ['minimatch@10.2.6', 'BlueOak-1.0.0'],
+            ['minipass@7.1.3', 'BlueOak-1.0.0'],
+            ['package-json-from-dist@1.0.1', 'BlueOak-1.0.0'],
+            ['path-scurry@2.0.2', 'BlueOak-1.0.0'],
+            ['tslib@2.8.1', '0BSD'],
+            ['type-fest@4.41.0', '(MIT OR CC0-1.0)']
           ]);
           // esbuild's locked script selects the platform package, links its binary,
           // checks version, and verifies any registry fallback against pinned hashes.
