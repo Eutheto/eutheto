@@ -132,10 +132,14 @@ jobs:
             ['tslib@2.8.1', '0BSD'],
             ['type-fest@4.41.0', '(MIT OR CC0-1.0)']
           ]);
-          // esbuild's locked script selects the platform package, links its binary,
-          // checks version, and verifies any registry fallback against pinned hashes.
+          // esbuild selects and verifies its pinned platform binary. vue-demi
+          // reads the installed Vue major and rewrites only its package-local
+          // compatibility entry points; neither reviewed script uses the network.
           const reviewedScripts = new Map([
-            ['esbuild@0.28.2', { postinstall: 'node install.js' }]
+            ['esbuild@0.28.2', { postinstall: 'node install.js' }],
+            ['vue-demi@0.14.10', {
+              postinstall: 'node -e "try{require(\'./scripts/postinstall.js\')}catch(e){}"'
+            }]
           ]);
           const blocked = /(?:^|[^A-Za-z])(?:A?GPL|SSPL|BUSL|Commons-Clause|NC|ND|Proprietary)(?:[^A-Za-z]|$)/i;
           const root = 'node_modules/.pnpm';
