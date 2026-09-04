@@ -2,8 +2,8 @@
 
 use crate::budget::DurationMillis;
 use crate::ids::{
-    AssignmentId, BackendId, CommandId, PackId, PersonId, RequestId, RuleId, ScenarioId,
-    SolutionId, SolveRunId,
+    AssignmentId, BackendId, CommandId, CounterfactualJobId, PackId, PersonId, RequestId, RuleId,
+    ScenarioId, SolutionId, SolveRunId,
 };
 use crate::values::{
     GapPolicy, Horizon, IanaTimeZone, LocaleTag, OverlapPolicy, Revision, Rfc3339Timestamp,
@@ -11,6 +11,7 @@ use crate::values::{
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// Current scenario envelope format version.
 pub const SCENARIO_FORMAT_VERSION: u32 = 1;
@@ -559,7 +560,12 @@ pub enum AppError {
 
 /// Selection of an automatic or explicit solver backend.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "backendId")]
+#[serde(
+    rename_all = "camelCase",
+    tag = "kind",
+    content = "backendId",
+    deny_unknown_fields
+)]
 pub enum BackendSelection {
     /// Let the deterministic router choose.
     Auto,
@@ -583,7 +589,12 @@ pub enum SolveMode {
 
 /// Worker thread allocation policy.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind", content = "count")]
+#[serde(
+    rename_all = "camelCase",
+    tag = "kind",
+    content = "count",
+    deny_unknown_fields
+)]
 pub enum WorkerThreadPolicy {
     /// Let the application apply its bounded default.
     Auto,
@@ -665,6 +676,30 @@ pub enum SolvePhase {
     Explaining,
 }
 
+/// Stable coarse phase used by counterfactual progress events.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CounterfactualProgressPhase {
+    /// Waiting for the job to begin execution.
+    Queued,
+    /// Compiling the base and temporary counterfactual models.
+    Compiling,
+    /// Running the selected backend.
+    Solving,
+    /// Independently reviewing a candidate.
+    Verifying,
+    /// Persisting the authoritative terminal outcome.
+    Finalizing,
+    /// The job committed a completed result.
+    Completed,
+    /// The job committed a failure.
+    Failed,
+    /// The job committed cancellation.
+    Cancelled,
+    /// The job was interrupted before a normal terminal outcome.
+    Interrupted,
+}
+
 /// Bounded resources shared by compile, solve, projection, and verification.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -710,6 +745,44 @@ pub struct SolveOptions {
     /// Shared generation and execution limits.
     pub resource_limits: ResourceLimits,
 }
+
+impl SolveOptions {
+    /// Validates nonzero optional limits and exact worker allocation.
+    ///
+    /// # Errors
+    /// Rejects a zero memory limit, exact worker count, or solution limit.
+    pub fn validate(&self) -> Result<(), SolveOptionsError> {
+        if self.memory_limit_bytes == Some(0) {
+            return Err(SolveOptionsError::ZeroMemoryLimit);
+        }
+        if matches!(self.worker_threads, WorkerThreadPolicy::Exact(0)) {
+            return Err(SolveOptionsError::ZeroWorkerThreads);
+        }
+        if self.solution_limit == Some(0) {
+            return Err(SolveOptionsError::ZeroSolutionLimit);
+        }
+        Ok(())
+    }
+}
+
+/// Invalid canonical solve options.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SolveOptionsError {
+    /// A present process memory ceiling is zero.
+    ZeroMemoryLimit,
+    /// An exact worker allocation is zero.
+    ZeroWorkerThreads,
+    /// A present accepted-solution ceiling is zero.
+    ZeroSolutionLimit,
+}
+
+impl fmt::Display for SolveOptionsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid solve options: {self:?}")
+    }
+}
+
+impl std::error::Error for SolveOptionsError {}
 
 /// Project list item returned by application APIs.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1010,7 +1083,13 @@ pub struct EventContext {
 
 /// Basic Phase-01 event payloads; later phases add topic-specific detail versions.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type", content = "payload")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type",
+    content = "payload",
+    deny_unknown_fields
+)]
 pub enum EventPayload {
     /// Bounded solver progress.
     SolveProgress {
@@ -1020,6 +1099,15 @@ pub enum EventPayload {
         phase: SolvePhase,
         /// Optional integer percentage in the inclusive range 0–100.
         percent: Option<u8>,
+    },
+    /// Coarse progress for one counterfactual job.
+    CounterfactualProgress {
+        /// Common event metadata.
+        context: EventContext,
+        /// Stable counterfactual job identity.
+        job_id: CounterfactualJobId,
+        /// Current truthful coarse phase.
+        phase: CounterfactualProgressPhase,
     },
     /// Final normalized solve outcome.
     SolveCompleted {
@@ -1057,7 +1145,10 @@ pub enum EventPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::{SCENARIO_FORMAT_VERSION, ScenarioCommand, ScenarioDocument, SolveOptions};
+    use super::{
+        CounterfactualProgressPhase, EventPayload, SCENARIO_FORMAT_VERSION, ScenarioCommand,
+        ScenarioDocument, SolveOptions, SolveOptionsError,
+    };
     use serde_json::{Value, json};
 
     fn scenario_json() -> Value {
@@ -1183,6 +1274,105 @@ mod tests {
         let mut unknown_old_field = solve_options_json();
         unknown_old_field["timeLimit"] = json!(5);
         assert!(serde_json::from_value::<SolveOptions>(unknown_old_field).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn solve_options_reject_zero_optional_limits_and_exact_workers() -> Result<(), serde_json::Error>
+    {
+        let mut options: SolveOptions = serde_json::from_value(solve_options_json())?;
+        options.memory_limit_bytes = Some(0);
+        assert_eq!(options.validate(), Err(SolveOptionsError::ZeroMemoryLimit));
+
+        options.memory_limit_bytes = None;
+        options.worker_threads = super::WorkerThreadPolicy::Exact(0);
+        assert_eq!(
+            options.validate(),
+            Err(SolveOptionsError::ZeroWorkerThreads)
+        );
+
+        options.worker_threads = super::WorkerThreadPolicy::Auto;
+        options.solution_limit = Some(0);
+        assert_eq!(
+            options.validate(),
+            Err(SolveOptionsError::ZeroSolutionLimit)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn solve_option_tagged_enums_reject_unknown_fields() {
+        let mut backend = solve_options_json();
+        backend["backend"]["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<SolveOptions>(backend).is_err());
+
+        let mut workers = solve_options_json();
+        workers["workerThreads"] = json!({"kind": "exact", "count": 1, "unexpected": true});
+        assert!(serde_json::from_value::<SolveOptions>(workers).is_err());
+    }
+    #[test]
+    fn counterfactual_progress_event_has_strict_stable_json()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let input = json!({
+            "type": "counterfactualProgress",
+            "payload": {
+                "context": {
+                    "eventVersion": 1,
+                    "timestamp": "2026-09-04T12:34:56Z",
+                    "requestId": "018f47f2-e880-7000-8000-000000000010",
+                    "scenarioId": "018f47f2-e880-7000-8000-000000000001",
+                    "revision": 42,
+                    "solveRunId": null
+                },
+                "jobId": "018f47f2-e880-7000-8000-000000000020",
+                "phase": "finalizing"
+            }
+        });
+        let event: EventPayload = serde_json::from_value(input.clone())?;
+
+        let EventPayload::CounterfactualProgress {
+            context,
+            job_id,
+            phase,
+        } = &event
+        else {
+            return Err("counterfactual progress JSON decoded as the wrong event variant".into());
+        };
+        assert_eq!(context.event_version, 1);
+        assert_eq!(context.timestamp.to_string(), "2026-09-04T12:34:56Z");
+        assert_eq!(
+            context
+                .request_id
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("018f47f2-e880-7000-8000-000000000010")
+        );
+        assert_eq!(
+            context
+                .scenario_id
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("018f47f2-e880-7000-8000-000000000001")
+        );
+        assert_eq!(context.revision, Some(super::Revision::new(42)));
+        assert_eq!(context.solve_run_id, None);
+        assert_eq!(job_id.to_string(), "018f47f2-e880-7000-8000-000000000020");
+        assert_eq!(*phase, CounterfactualProgressPhase::Finalizing);
+        assert_eq!(serde_json::to_value(&event)?, input);
+
+        let mut unknown_outer = input.clone();
+        unknown_outer["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<EventPayload>(unknown_outer).is_err());
+
+        let mut unknown_payload = input.clone();
+        unknown_payload["payload"]["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<EventPayload>(unknown_payload).is_err());
+
+        let mut unknown_context = input;
+        unknown_context["payload"]["context"]["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<EventPayload>(unknown_context).is_err());
         Ok(())
     }
 }

@@ -17,6 +17,154 @@ const MAX_DIAGNOSTIC_CODE_BYTES: usize = 96;
 const MAX_DIAGNOSTIC_LINE_BYTES: usize = 512;
 const MAX_EVIDENCE_ID_BYTES: usize = 160;
 
+const MAX_RUNTIME_VERSION_BYTES: usize = 64;
+
+/// Immutable executable identity captured before a backend is dispatched.
+///
+/// This operational identity is intentionally separate from [`crate::SolverDescriptor`].
+/// `solver_version` is the exact value persisted as `RunInputV1.solver_version`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackendRuntimeIdentity {
+    backend_id: BackendId,
+    backend_version: String,
+    adapter_version: String,
+    worker_version: String,
+    solver_version: String,
+    protocol_major: u32,
+    protocol_minor: u32,
+}
+
+impl BackendRuntimeIdentity {
+    /// Constructs a bounded executable identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a version does not satisfy the solver descriptor version grammar or
+    /// when the protocol major version is zero.
+    pub fn new(
+        backend_id: BackendId,
+        backend_version: String,
+        adapter_version: String,
+        worker_version: String,
+        solver_version: String,
+        protocol_major: u32,
+        protocol_minor: u32,
+    ) -> Result<Self, BackendRuntimeIdentityError> {
+        let identity = Self {
+            backend_id,
+            backend_version,
+            adapter_version,
+            worker_version,
+            solver_version,
+            protocol_major,
+            protocol_minor,
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    /// Validates bounded versions and the usable protocol-major invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns the field-specific identity error for the first invalid field.
+    pub fn validate(&self) -> Result<(), BackendRuntimeIdentityError> {
+        for (value, error) in [
+            (
+                self.backend_version.as_str(),
+                BackendRuntimeIdentityError::InvalidBackendVersion,
+            ),
+            (
+                self.adapter_version.as_str(),
+                BackendRuntimeIdentityError::InvalidAdapterVersion,
+            ),
+            (
+                self.worker_version.as_str(),
+                BackendRuntimeIdentityError::InvalidWorkerVersion,
+            ),
+            (
+                self.solver_version.as_str(),
+                BackendRuntimeIdentityError::InvalidSolverVersion,
+            ),
+        ] {
+            if !valid_runtime_version(value) {
+                return Err(error);
+            }
+        }
+        if self.protocol_major == 0 {
+            return Err(BackendRuntimeIdentityError::ZeroProtocolMajor);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn backend_id(&self) -> &BackendId {
+        &self.backend_id
+    }
+
+    #[must_use]
+    pub fn backend_version(&self) -> &str {
+        &self.backend_version
+    }
+
+    #[must_use]
+    pub fn adapter_version(&self) -> &str {
+        &self.adapter_version
+    }
+
+    #[must_use]
+    pub fn worker_version(&self) -> &str {
+        &self.worker_version
+    }
+
+    /// Exact solver/engine version persisted as `RunInputV1.solver_version`.
+    #[must_use]
+    pub fn solver_version(&self) -> &str {
+        &self.solver_version
+    }
+
+    #[must_use]
+    pub const fn protocol_major(&self) -> u32 {
+        self.protocol_major
+    }
+
+    #[must_use]
+    pub const fn protocol_minor(&self) -> u32 {
+        self.protocol_minor
+    }
+}
+
+fn valid_runtime_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_RUNTIME_VERSION_BYTES
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+}
+
+/// Invalid executable identity rejected before backend registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendRuntimeIdentityError {
+    InvalidBackendVersion,
+    InvalidAdapterVersion,
+    InvalidWorkerVersion,
+    InvalidSolverVersion,
+    ZeroProtocolMajor,
+}
+
+impl fmt::Display for BackendRuntimeIdentityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid backend runtime identity: {self:?}")
+    }
+}
+
+impl std::error::Error for BackendRuntimeIdentityError {}
+
 /// Hard adapter-output ceilings. Zero is rejected because it cannot represent a usable contract.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -963,6 +1111,8 @@ pub type BackendSolveFuture<'a> =
 /// Stable object-safe backend interface. Selection, fallback, and verification live elsewhere.
 pub trait SolverBackend: Send + Sync {
     fn descriptor(&self) -> &crate::SolverDescriptor;
+
+    fn runtime_identity(&self) -> &BackendRuntimeIdentity;
 
     fn compatibility(
         &self,

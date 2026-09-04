@@ -92,6 +92,8 @@
         "crates/eutheto-domain-ir",
         "crates/eutheto-planning-ir",
         "crates/eutheto-domain-api",
+        "crates/eutheto-verify",
+        "crates/eutheto-explain",
         "crates/eutheto-solver-api",
         "crates/eutheto-solver-router",
         "crates/eutheto-protocol",
@@ -281,7 +283,7 @@
       --no-deps \
       > "$TMPDIR/cargo-metadata.json"
     ${pkgs.jq}/bin/jq -e '
-      (.workspace_members | length) == 17 and
+      (.workspace_members | length) == 19 and
       ([.packages[].name] | sort) == ([
         "eutheto-cli",
         "eutheto-command",
@@ -289,6 +291,7 @@
         "eutheto-desktop",
         "eutheto-domain-api",
         "eutheto-domain-ir",
+        "eutheto-explain",
         "eutheto-export",
         "eutheto-import",
         "eutheto-phase03-benchmark",
@@ -299,6 +302,7 @@
         "eutheto-solver-router",
         "eutheto-store",
         "eutheto-types",
+        "eutheto-verify",
         "xtask"
       ] | sort)
     ' "$TMPDIR/cargo-metadata.json" > /dev/null

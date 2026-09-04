@@ -1,4 +1,4 @@
-//! Immutable, solver-neutral planning IR schema v1.
+//! Immutable, solver-neutral planning IR schema v2.
 //!
 //! This crate owns only Boolean/integer/half-open-interval mathematics, provenance,
 //! projection, objectives, canonical hashing, bounded validation, and conservative component

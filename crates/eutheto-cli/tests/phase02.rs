@@ -29,7 +29,11 @@ fn run_json(data_dir: &Path, args: &[&str]) -> Result<(Output, Value), Box<dyn E
         .arg(data_dir)
         .args(args)
         .output()?;
-    let value = serde_json::from_slice(&output.stdout)?;
+    let value = serde_json::from_slice(if output.status.success() {
+        &output.stdout
+    } else {
+        &output.stderr
+    })?;
     Ok((output, value))
 }
 
@@ -162,7 +166,7 @@ fn solver_catalog_is_empty_while_ortools_matrix_and_pumpkin_gate_are_visible()
             &["solvers", subcommand, "solver.ortools-cp-sat"],
         )?;
         assert_eq!(missing_output.status.code(), Some(3));
-        assert!(missing_output.stderr.is_empty());
+        assert!(missing_output.stdout.is_empty());
         assert_eq!(missing["ok"], false);
         assert_eq!(missing["error"]["code"], "resource.not_found");
         assert!(missing["result"].is_null());
@@ -178,7 +182,7 @@ fn solver_list_presentation_preserves_complete_unsupported_metadata() -> Result<
     let backend_id = BackendId::new("solver.fixture")?;
     let matrix = CapabilityMatrix::new(
         1,
-        1,
+        2,
         vec![
             SupportFeature {
                 id: degraded_id.clone(),
@@ -256,7 +260,7 @@ fn solver_list_presentation_preserves_complete_unsupported_metadata() -> Result<
     assert_eq!(
         presentation.human,
         vec![
-            "Support matrix: schema 1, planning IR schema 1, 2 features, 1 production backends.",
+            "Support matrix: schema 1, planning IR schema 2, 2 features, 1 production backends.",
             "Warning: backend solver.fixture feature primitive.fixture-unsupported is unsupported: Fixture unsupported reason Remediation: Choose the fixture alternative Fixture: fixture.unsupported-exact.",
             "Warning: backend solver.fixture feature solve.fixture-degraded is degraded (restriction.fixture-cap): Fixture degradation reason Remediation: Use the unrestricted fixture mode Fixture: fixture.degraded-exact.",
         ]

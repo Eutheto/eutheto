@@ -2,51 +2,24 @@ name: Portable
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/portable.yml"
-      - ".envrc"
-      - ".cargo/**"
-      - "apps/desktop/**"
-      - "crates/**"
-      - "xtask/**"
-      - "Cargo.toml"
-      - "flake.nix"
-      - "flake.lock"
-      - "nix/**"
-      - "Justfile"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/portable.yml"
-      - ".cargo/**"
-      - ".envrc"
-      - "apps/desktop/**"
-      - "crates/**"
-      - "xtask/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "flake.nix"
-      - "flake.lock"
-      - "nix/**"
-      - "Justfile"
-      - "rust-toolchain.toml"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
+    tags:
+      - "v*"
+  merge_group:
+    types:
+      - checks_requested
+  schedule:
+    - cron: "13 04 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: portable-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: portable-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 env:
   CI: "true"
@@ -57,52 +30,169 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
+  select-targets:
+    name: Select portable target matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.policy.outputs.matrix }}
+      run_matrix: ${{ steps.policy.outputs.run_matrix }}
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select path-relevant targets
+        id: policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          event_name = os.environ["EVENT_NAME"]
+          changed = []
+          if event_name == "pull_request":
+              base_sha = os.environ["BASE_SHA"]
+              changed = subprocess.run(
+                  ["git", "diff", "--name-only", f"{base_sha}...HEAD"],
+                  check=True,
+                  stdout=subprocess.PIPE,
+                  text=True,
+              ).stdout.splitlines()
+
+          portable_prefixes = (
+              ".cargo/",
+              "apps/desktop/",
+              "crates/",
+              "nix/",
+              "xtask/",
+          )
+          portable_exact = {
+              ".envrc",
+              ".github/workflows/portable.yml",
+              "Cargo.lock",
+              "Cargo.toml",
+              "Justfile",
+              "flake.lock",
+              "flake.nix",
+              "package.json",
+              "pnpm-lock.yaml",
+              "pnpm-workspace.yaml",
+              "rust-toolchain.toml",
+          }
+          intel_prefixes = (
+              ".cargo/",
+              "apps/desktop/src-tauri/",
+              "nix/",
+              "workers/ortools/",
+              "xtask/",
+          )
+          intel_exact = {
+              ".envrc",
+              ".github/workflows/ortools-worker.yml",
+              ".github/workflows/portable.yml",
+              "Cargo.lock",
+              "Cargo.toml",
+              "Justfile",
+              "flake.lock",
+              "flake.nix",
+              "rust-toolchain.toml",
+          }
+
+          def matches(path, prefixes, exact):
+              return (
+                  path in exact
+                  or path.endswith("/Cargo.toml")
+                  or path.startswith(prefixes)
+              )
+
+          run_matrix = event_name != "pull_request" or any(
+              matches(path, portable_prefixes, portable_exact) for path in changed
+          )
+          include_intel = event_name != "pull_request" or any(
+              matches(path, intel_prefixes, intel_exact) for path in changed
+          )
+          run_matrix = run_matrix or include_intel
+          targets = [
+              {
+                  "name": "Ubuntu x86_64",
+                  "os": "ubuntu-24.04",
+                  "nix-native": True,
+                  "nix-system": "x86_64-linux",
+                  "native-arch": "x86_64",
+                  "phase-check": "full",
+                  "nix-installer-tag": "v3.22.2",
+              },
+              {
+                  "name": "Ubuntu arm64",
+                  "os": "ubuntu-24.04-arm",
+                  "nix-native": True,
+                  "nix-system": "aarch64-linux",
+                  "native-arch": "aarch64",
+                  "phase-check": "full",
+                  "nix-installer-tag": "v3.22.2",
+              },
+              {
+                  "name": "macOS arm64",
+                  "os": "macos-15",
+                  "nix-native": True,
+                  "nix-system": "aarch64-darwin",
+                  "native-arch": "arm64",
+                  "phase-check": "narrow",
+                  "nix-installer-tag": "v3.22.2",
+              },
+              {
+                  "name": "Windows x86_64",
+                  "os": "windows-2025",
+                  "nix-native": False,
+                  "nix-system": "",
+                  "native-arch": "",
+                  "phase-check": "windows",
+              },
+              {
+                  "name": "Windows arm64",
+                  "os": "windows-11-arm",
+                  "nix-native": False,
+                  "nix-system": "",
+                  "native-arch": "",
+                  "phase-check": "windows",
+              },
+          ]
+          if include_intel:
+              targets.insert(
+                  2,
+                  {
+                      "name": "macOS x86_64",
+                      "os": "macos-15-intel",
+                      "nix-native": True,
+                      "nix-system": "x86_64-darwin",
+                      "native-arch": "x86_64",
+                      "phase-check": "narrow",
+                      "nix-installer-tag": "v3.12.2",
+                  },
+              )
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"run_matrix={str(run_matrix).lower()}\n")
+              output.write(f"matrix={json.dumps({'include': targets}, separators=(',', ':'))}\n")
+          PY
+
   native-build-test:
     name: ${{ matrix.name }} / native source build and test
+    needs: select-targets
+    if: needs.select-targets.outputs.run_matrix == 'true'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Ubuntu x86_64
-            os: ubuntu-24.04
-            nix-native: true
-            nix-system: x86_64-linux
-            native-arch: x86_64
-            phase-check: full
-            nix-installer-tag: v3.22.2
-          - name: Ubuntu arm64
-            os: ubuntu-24.04-arm
-            nix-native: true
-            nix-system: aarch64-linux
-            native-arch: aarch64
-            phase-check: full
-            nix-installer-tag: v3.22.2
-          - name: macOS x86_64
-            os: macos-15-intel
-            nix-native: true
-            nix-system: x86_64-darwin
-            native-arch: x86_64
-            phase-check: narrow
-            nix-installer-tag: v3.12.2
-          - name: macOS arm64
-            os: macos-15
-            nix-native: true
-            nix-system: aarch64-darwin
-            native-arch: arm64
-            phase-check: narrow
-            nix-installer-tag: v3.22.2
-          - name: Windows x86_64
-            os: windows-2025
-            nix-native: false
-            nix-system: ""
-            native-arch: ""
-            phase-check: windows
-          - name: Windows arm64
-            os: windows-11-arm
-            nix-native: false
-            nix-system: ""
-            native-arch: ""
-            phase-check: windows
+      matrix: ${{ fromJSON(needs.select-targets.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     steps:
@@ -279,6 +369,29 @@ jobs:
               echo "Windows execution here does not prove WebView2 or installer deployment."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  portable-gate:
+    name: Portable integration gate
+    if: always()
+    needs:
+      - select-targets
+      - native-build-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected native target
+        env:
+          MATRIX_RESULT: ${{ needs.native-build-test.result }}
+          PLAN_RESULT: ${{ needs.select-targets.result }}
+          RUN_MATRIX: ${{ needs.select-targets.outputs.run_matrix }}
+        run: |
+          test "$PLAN_RESULT" = "success"
+          if [ "$RUN_MATRIX" = "true" ]; then
+            test "$MATRIX_RESULT" = "success"
+          else
+            test "$MATRIX_RESULT" = "skipped"
+          fi
+
 
   ortools-candidate-source-build-probe:
     name: ${{ matrix.name }} / OR-Tools candidate source build

@@ -101,6 +101,15 @@ Recommended workforce lexicographic order is: preserve hard locks/required rules
 
 Backend adapters may use safely bounded scalarization or multiple passes, but Phase 04 compares verified score vectors. Scalarization requires finite bound proof and rejection of overflow-prone formulations; exact multi-pass solving is preferred when weights cannot prove priority preservation. The UI displays verified category breakdowns, never an unexplained scalar backend objective.
 
+For the current contract, a category breakdown is optional explanatory data: a pack may omit
+categories whose totals it does not expose. Every category it does expose must belong to the
+corresponding Planning IR objective level. Category totals are signed `i64` values and do not
+implicitly sum to the level value; a pack that needs that relationship owns and verifies it from
+domain meaning. Score vectors are bounded to 16 ordered levels and 1,024 exposed categories per
+level. Accepted results persist only the verifier-recomputed vector. Raw backend objective and bound
+evidence remains a non-gating reconciliation diagnostic and cannot establish acceptance,
+optimality, or user-visible score authority.
+
 ### Provenance chain
 
 Every user-relevant generated artifact follows this chain:
@@ -126,6 +135,27 @@ pub struct ProvenanceRecord {
 ```
 
 The provenance index must cover every user-relevant variable, constraint, objective contribution, assumption, and projection. Display strings are not identity. Message keys and typed parameters make evidence stable, reviewable, and localization-ready. Missing provenance is a compiler defect and prevents explanation-dependent output.
+
+The schema-v2 planning provenance index is closed: every planning variable, constraint, objective
+level and term, assumption, and projection references a declared record, and every declared record
+must be reachable from one of those artifacts either directly or through its bounded parent chain.
+An unused record is a compiler defect, not harmless metadata. Generic projection carries the
+projection record's canonical ID into `DomainAssignment.evidence`; packs may append further
+non-authoritative evidence without changing projected value identity. Backend adapters retain the
+validated IR-to-native maps outside native payloads under the planning model hash and exact adapter
+version. Native payloads contain neither planning IDs nor domain/display text.
+
+Planning IR schema v2 completes the pre-public assumption contract. Each assumption ID identifies
+one explainable group controlled by one Boolean literal and bound to a non-empty canonical set of
+stable required `RuleId`s. A rule and controlling Boolean variable each belong to at most one group,
+and every group directly references `RequiredRule` provenance. Foundational, fact, preference, and
+derived provenance therefore cannot be exposed as user-relaxable assumptions. This required-field
+change makes schema v1 incompatible; current writers emit only v2 and older input fails safely.
+
+Missing source/IR/projection provenance is acceptance-critical because it invalidates the planning
+problem before solving or projection. Missing optional rendering evidence discovered only after an
+accepted result remains an evidence-availability defect: it disables the affected explanation but
+does not revoke or delay the already verified result.
 
 Canonical evidence ties together scenario revision, scenario/document hash, planning model hash, solution hash, pack/compiler/backend/adapter/protocol versions, and verification checksum. Cached candidates are accepted only after current verification against the current scenario revision.
 
@@ -199,7 +229,13 @@ Persist compact evidence required to regenerate deterministic explanations:
 - verifier rule evaluations and domain metrics;
 - scenario revision, model/solution hashes, verifier checksum, and component/backend provenance.
 
-Each accepted or terminal solve also owns a versioned **run manifest** distinct from the scenario revision, immutable normalized input/enrichment snapshot, and accepted Result Model. It records run ID; scenario revision and snapshot IDs/hashes/timestamps; pack/schema/domain/Planning-IR/compiler/adapter/worker/solver/application versions; model hash; explicit optimization profile/objective policy; seed, worker/determinism settings and total budget; active locks/preferences/temporary relaxations; scenario time-zone/DST context; provider/model freshness and redistribution-safe source identifiers; warnings; terminal/proof status; verified score/result identity; and bounded phase timing. Fields not applicable to a pack are absent rather than guessed. Product and diagnostics distinguish reproduction of the same input/model, an equivalent verified optimum, and the exact assignment; no manifest promises exact repeatability that backend or tie semantics cannot provide.
+Each accepted or terminal solve owns a versioned **run manifest** distinct from the scenario revision, immutable normalized input/enrichment snapshot, and accepted Result Model. The immutable run input binds the request ID and canonical semantic request hash to the exact scenario revision, complete portable scenario snapshot, pack/schema/domain/Planning-IR/compiler/adapter/worker/solver/application versions, selected backend and options, model and objective-policy hashes, scenario time zone, and any temporary-condition hash. The request row and snapshot commit before backend launch. Reusing a request ID is valid only for the same canonical request; the backend always loads the persisted snapshot rather than current mutable state.
+
+One compare-and-set transaction writes each terminal manifest exactly once. Accepted finalization writes the verifier-produced normalized solution, score, report, compact evidence, and terminal run together; any persistence failure rolls back the solution. A verification alarm writes only bounded redacted quarantine diagnostics. Every normal terminal outcome carries measured elapsed and phase timings. Crash recovery uses `Interrupted` with absent, rather than fabricated, elapsed data only after the immutable total parent deadline and a bounded terminal-persistence grace interval have expired; accepted-result persistence rejects the same cutoff, so another store instance cannot interrupt an accept-finalizable solve. A running input temporarily retains its complete portable scenario revision across edits without exporting that active-only history; accepted results keep and export the required revision, while resultless terminal runs release it.
+
+Database schema upgrades are append-only and checksum-verified. Before upgrading an existing V1 database, the store holds the migration write lock while it creates or validates an owner-private, logically identical V1 backup and commits V2. V1 solutions become `legacy_unverified`; V1 running solves become `legacy_interrupted`; legacy payloads are preserved rather than rewritten into fabricated V2 manifests.
+
+The fixed owner-private application database is the local authority store, not an import format. Foreign database files are never opened as application state. Portable accepted-result wrappers contain bounded checksums and exact cross-bindings for corruption detection, but those public hashes do not authenticate an issuer and never grant local acceptance authority. Every imported, restored, copied, or remapped result remains inert portable data until a fresh local independent verification against the exact local snapshot mints a new authoritative accepted result.
 
 Do not persist full solver logs by default. Opt-in diagnostics are bounded, redacted, and separate from normal evidence. Native-worker evidence must not contain names, notes, credentials, AI content, or paths. Retention/export rules distinguish normal explanation evidence from quarantined correctness alarms.
 

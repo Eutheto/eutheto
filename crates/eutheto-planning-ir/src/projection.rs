@@ -1,10 +1,10 @@
 //! Strict candidate-value projection into normalized domain solutions.
 
-use crate::ids::{BoolVariableId, IntVariableId, IntervalVariableId};
+use crate::ids::{BoolVariableId, IntVariableId, IntervalVariableId, ProvenanceId};
 use crate::model::{IntervalVariable, PlanningProblem, ProjectionExpression, Variable};
 use crate::validation::{PlanningIrLimitsV1, ValidationError, validate};
 use eutheto_domain_ir::{
-    AssignedInterval, AssignmentValue, DomainAssignment, DomainContractError,
+    AssignedInterval, AssignmentValue, DomainAssignment, DomainContractError, DomainEvidenceId,
     NORMALIZED_SOLUTION_SCHEMA_VERSION, NormalizedSolution,
 };
 use eutheto_types::SolutionId;
@@ -32,6 +32,7 @@ pub enum ProjectionError {
     MissingRequiredValue(String),
     InvalidInterval(IntervalVariableId),
     ArithmeticOverflow,
+    InvalidEvidence(ProvenanceId),
     DomainContract(DomainContractError),
 }
 
@@ -49,10 +50,12 @@ impl std::error::Error for ProjectionError {}
 /// required projection is rejected; a missing input to an optional projection becomes
 /// [`AssignmentValue::Absent`]. A false optional-interval presence literal also becomes absent
 /// and leaves its integer components unconstrained. A present interval requires all components,
-/// non-negative duration, and checked `start + duration == end`.
+/// non-negative duration, and checked `start + duration == end`. Every emitted assignment carries
+/// the projection provenance ID as a non-authoritative evidence reference.
 ///
 /// # Errors
-/// Returns a strict validation, unknown/missing/type/domain, arithmetic, or interval error.
+/// Returns a strict validation, unknown/missing/type/domain, evidence, arithmetic, or interval
+/// error.
 pub fn project_candidate(
     problem: &PlanningProblem,
     candidate: &CandidateValues,
@@ -106,11 +109,13 @@ pub fn project_candidate(
             candidate,
             &interval_values,
         )?;
+        let evidence = DomainEvidenceId::new(projection.provenance.as_str())
+            .map_err(|_| ProjectionError::InvalidEvidence(projection.provenance.clone()))?;
         assignments.push(DomainAssignment {
             id: projection.assignment_id.clone(),
             entity: projection.entity.clone(),
             value,
-            evidence: Vec::new(),
+            evidence: vec![evidence],
         });
     }
     assignments.sort_by(|left, right| left.id.cmp(&right.id));

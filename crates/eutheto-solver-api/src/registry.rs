@@ -1,4 +1,4 @@
-use crate::{CapabilityMatrix, SolverBackend};
+use crate::{BackendRuntimeIdentityError, CapabilityMatrix, SolverBackend};
 use eutheto_types::BackendId;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -15,9 +15,10 @@ impl SolverRegistry {
     ///
     /// # Errors
     ///
-    /// Returns an error if a backend descriptor is invalid, a backend ID is duplicated, or a
-    /// supplied descriptor disagrees with the support matrix. Production matrix columns may be
-    /// unavailable in a particular runtime until their packaged artifacts pass startup checks.
+    /// Returns an error if a backend descriptor or runtime identity is invalid, descriptor and
+    /// runtime identity disagree, a backend ID is duplicated, or a supplied descriptor disagrees
+    /// with the support matrix. Production matrix columns may be unavailable in a particular
+    /// runtime until their packaged artifacts pass startup checks.
     pub fn new(
         matrix: CapabilityMatrix,
         backends: impl IntoIterator<Item = Arc<dyn SolverBackend>>,
@@ -28,6 +29,31 @@ impl SolverRegistry {
                 .descriptor()
                 .validate()
                 .map_err(|error| RegistryError::InvalidDescriptor(error.to_string()))?;
+            backend.runtime_identity().validate().map_err(|error| {
+                RegistryError::InvalidRuntimeIdentity {
+                    backend_id: backend.descriptor().id.clone(),
+                    error,
+                }
+            })?;
+            if backend.runtime_identity().backend_id() != &backend.descriptor().id {
+                return Err(RegistryError::RuntimeIdentityBackendIdMismatch {
+                    descriptor_backend_id: backend.descriptor().id.clone(),
+                    identity_backend_id: backend.runtime_identity().backend_id().clone(),
+                });
+            }
+            if backend.runtime_identity().backend_version() != backend.descriptor().version.as_str()
+            {
+                return Err(RegistryError::RuntimeIdentityBackendVersionMismatch(
+                    backend.descriptor().id.clone(),
+                ));
+            }
+            if backend.runtime_identity().adapter_version()
+                != backend.descriptor().adapter_version.as_str()
+            {
+                return Err(RegistryError::RuntimeIdentityAdapterVersionMismatch(
+                    backend.descriptor().id.clone(),
+                ));
+            }
             let id = backend.descriptor().id.clone();
             if registered.contains_key(&id) {
                 return Err(RegistryError::DuplicateBackend(id));
@@ -90,6 +116,16 @@ impl SolverRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RegistryError {
     InvalidDescriptor(String),
+    InvalidRuntimeIdentity {
+        backend_id: BackendId,
+        error: BackendRuntimeIdentityError,
+    },
+    RuntimeIdentityBackendIdMismatch {
+        descriptor_backend_id: BackendId,
+        identity_backend_id: BackendId,
+    },
+    RuntimeIdentityBackendVersionMismatch(BackendId),
+    RuntimeIdentityAdapterVersionMismatch(BackendId),
     DuplicateBackend(BackendId),
     MatrixMismatch(String),
     RegistryMatrixSetMismatch,

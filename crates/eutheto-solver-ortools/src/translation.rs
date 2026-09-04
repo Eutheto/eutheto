@@ -928,16 +928,16 @@ fn flatten_domain(domain: &IntDomain) -> Vec<i64> {
 mod tests {
     use super::*;
     use eutheto_domain_ir::{
-        AssignmentValue, DomainAssignmentId, DomainEntityId, DomainEntityKindId, DomainEntityRef,
-        ScoreCategoryId,
+        AssignmentValue, AssumptionGroupId, DomainAssignmentId, DomainEntityId, DomainEntityKindId,
+        DomainEntityRef, ScoreCategoryId,
     };
     use eutheto_planning_ir::{
-        AssumptionId, BoolVariable, Capability, CompilerId, ConstraintRecord, InclusiveRange,
-        IntVariable, IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm,
-        ObjectiveLevel, ObjectiveLevelId, ObjectivePlan, ObjectiveTerm, ObjectiveTermId,
-        ObjectiveTermKind, PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION,
-        PlanningConstraintId, PlanningMetadata, ProjectionExpression, ProvenanceId,
-        ProvenanceRecord, ProvenanceSourceKind,
+        BoolVariable, Capability, CompilerId, ConstraintRecord, InclusiveRange, IntVariable,
+        IntervalVariable, IntervalVariableId, LinearExpression, LinearTerm, ObjectiveLevel,
+        ObjectiveLevelId, ObjectivePlan, ObjectiveTerm, ObjectiveTermId, ObjectiveTermKind,
+        PLANNING_IR_SCHEMA_VERSION, PROJECTION_SCHEMA_VERSION, PlanningConstraintId,
+        PlanningMetadata, ProjectionExpression, ProvenanceId, ProvenanceRecord,
+        ProvenanceSourceKind,
     };
     use eutheto_types::{PackId, ScenarioId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -1988,9 +1988,11 @@ mod tests {
     #[test]
     fn assumptions_are_reported_as_unsupported_during_preflight() -> Result<(), Box<dyn Error>> {
         let mut problem = scalar_problem()?;
+        problem.provenance[0].source_kind = ProvenanceSourceKind::RequiredRule;
         problem.assumptions.push(Assumption {
-            id: AssumptionId::new("translation.assumption")?,
+            id: AssumptionGroupId::new("translation.assumption")?,
             literal: Literal::positive(BoolVariableId::new("translation.a_bool")?),
+            required_rules: vec!["01890a5d-ac96-7b64-9f74-bbfcf30f9f01".parse()?],
             provenance: ProvenanceId::new("translation.variable")?,
         });
         problem

@@ -2,7 +2,7 @@
   "format": "eutheto/planning-ir-benchmark-corpus",
   "schemaVersion": 1,
   "corpusVersion": 1,
-  "planningIrSchemaVersion": 1,
+  "planningIrSchemaVersion": 2,
   "provenance": {
     "source": "benchmarks/corpus/solver/phase03-primitives.json",
     "method": "checked-in-hand-authored-planning-ir"
@@ -14,7 +14,7 @@
     {
       "id": "phase03.boolean-cardinality-sat",
       "problem": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "variables": [
           {
             "type": "boolean",
@@ -153,7 +153,7 @@
     {
       "id": "phase03.integer-linear-optimal",
       "problem": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "variables": [
           {
             "type": "integer",
@@ -325,7 +325,7 @@
     {
       "id": "phase03.primitive-infeasible",
       "problem": {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "variables": [
           {
             "type": "boolean",

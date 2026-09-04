@@ -230,7 +230,7 @@ JavaScript packages with new or changed install scripts are blocked unless the e
 CI:
 
 - `pr.yml`: pinned checkout/Nix, public cache, flake check, Nix-shell install/check, later worker smoke, sanitized reports;
-- `portable.yml`: Ubuntu, supported macOS x86_64/arm64, Windows; shared pins, native core and shell builds, and current unbundled shell-launch smoke;
+- `portable.yml`: path-relevant Tier-1 Ubuntu, macOS arm64, and Windows checks on pull requests; macOS x86_64 additionally on sensitive pull requests, merge-group candidates, `main`, version tags, manual dispatches, and weekly validation; shared pins, native core and shell builds, and current unbundled shell-launch smoke;
 - `security.yml`: deny/audit, pnpm lock/license/audit, secret scans, optional REUSE, SBOM smoke, capability diff;
 - benchmark/fuzz are scheduled/path-gated and never run arbitrary PR scripts; release has protected separate build/sign jobs.
 

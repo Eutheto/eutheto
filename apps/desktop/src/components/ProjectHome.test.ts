@@ -679,7 +679,7 @@ describe("ProjectHome", () => {
           revision: project.revision,
           solveRunId: null,
         },
-        changeSet: {},
+        changeSet: { changes: [] },
       },
     });
     await Promise.resolve();

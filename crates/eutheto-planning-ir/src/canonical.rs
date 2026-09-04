@@ -39,6 +39,9 @@ impl PlanningProblem {
             }
             level.terms.sort_by(|left, right| left.id.cmp(&right.id));
         }
+        for assumption in &mut self.assumptions {
+            assumption.required_rules.sort();
+        }
         self.assumptions
             .sort_by(|left, right| left.id.cmp(&right.id));
         self.projections
@@ -167,7 +170,7 @@ pub fn canonical_json(
 
 /// Computes the pre-routing BLAKE3 model hash.
 ///
-/// The hash covers schema v1, canonical variables/constraints/objectives/assumptions,
+/// The hash covers schema v2, canonical variables/constraints/objectives/assumptions,
 /// projections/provenance, compiler ID/version, and explicit compile metadata. It excludes
 /// display text, split authorization, backend, adapter, and solve options. Post-route identity
 /// belongs to [`SolveFingerprintInput`].

@@ -36,6 +36,7 @@ enum Behavior {
 
 struct TestBackend {
     descriptor: SolverDescriptor,
+    runtime_identity: BackendRuntimeIdentity,
     matrix: CapabilityMatrix,
     behavior: Behavior,
     clock: FixedMonotonicClock,
@@ -44,6 +45,10 @@ struct TestBackend {
 impl SolverBackend for TestBackend {
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
+    }
+
+    fn runtime_identity(&self) -> &BackendRuntimeIdentity {
+        &self.runtime_identity
     }
 
     fn compatibility(
@@ -311,15 +316,27 @@ fn registry(
     let backends = specs
         .into_iter()
         .zip(descriptors)
-        .map(|((_, behavior, _), descriptor)| {
-            Arc::new(TestBackend {
-                descriptor,
-                matrix: matrix.clone(),
-                behavior,
-                clock: clock.clone(),
-            }) as Arc<dyn SolverBackend>
-        })
-        .collect::<Vec<_>>();
+        .map(
+            |((_, behavior, _), descriptor)| -> Result<Arc<dyn SolverBackend>, Box<dyn Error>> {
+                let runtime_identity = BackendRuntimeIdentity::new(
+                    descriptor.id.clone(),
+                    descriptor.version.clone(),
+                    descriptor.adapter_version.clone(),
+                    "1.0.0".to_owned(),
+                    "1.0.0".to_owned(),
+                    1,
+                    0,
+                )?;
+                Ok(Arc::new(TestBackend {
+                    descriptor,
+                    runtime_identity,
+                    matrix: matrix.clone(),
+                    behavior,
+                    clock: clock.clone(),
+                }) as Arc<dyn SolverBackend>)
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(SolverRegistry::new(matrix, backends)?)
 }
 

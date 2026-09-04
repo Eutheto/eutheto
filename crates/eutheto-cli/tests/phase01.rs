@@ -68,7 +68,11 @@ fn run_json(data_dir: &Path, args: &[&str]) -> Result<(Output, Value), Box<dyn E
         .arg(data_dir)
         .args(args)
         .output()?;
-    let value = serde_json::from_slice(&output.stdout)?;
+    let value = serde_json::from_slice(if output.status.success() {
+        &output.stdout
+    } else {
+        &output.stderr
+    })?;
     Ok((output, value))
 }
 
@@ -213,11 +217,11 @@ fn legacy_status_json_preflight_envelopes_parse_errors() -> Result<(), Box<dyn E
         .args(["status", "--json", "--not-a-real-flag"])
         .output()?;
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stderr.is_empty());
-    let text = std::str::from_utf8(&output.stdout)?;
+    assert!(output.stdout.is_empty());
+    let text = std::str::from_utf8(&output.stderr)?;
     let envelope = text
         .strip_suffix('\n')
-        .ok_or("legacy JSON usage output must end in one newline")?;
+        .ok_or("legacy JSON usage error must end in one newline")?;
     assert!(!envelope.contains('\n'));
     let value: Value = serde_json::from_str(envelope)?;
     assert_eq!(value["apiVersion"], "eutheto/cli-result/v1");
@@ -1037,7 +1041,7 @@ fn usage_validation_storage_conflict_and_unavailable_have_stable_exit_codes()
     let (storage_output, storage) =
         run_json(directory.path(), &["projects", "import", secret_path_text])?;
     assert_eq!(storage_output.status.code(), Some(8));
-    let storage_text = String::from_utf8(storage_output.stdout.clone())?;
+    let storage_text = String::from_utf8(storage_output.stderr.clone())?;
     assert_eq!(storage["error"]["code"], "storage.read_failed");
     assert!(!storage_text.contains(secret_path_text));
     assert!(!storage_text.contains("token-super-secret"));
@@ -1080,8 +1084,17 @@ fn usage_validation_storage_conflict_and_unavailable_have_stable_exit_codes()
     assert_eq!(conflict_output.status.code(), Some(10));
     assert_eq!(conflict["error"]["code"], "state.revision_conflict");
 
-    let (unavailable_output, unavailable) =
-        run_json(directory.path(), &["solutions", "list", &id])?;
+    let (unavailable_output, unavailable) = run_json(
+        directory.path(),
+        &[
+            "solutions",
+            "export",
+            "scenario",
+            "solution",
+            "--format",
+            "csv",
+        ],
+    )?;
     assert_eq!(unavailable_output.status.code(), Some(6));
     assert_eq!(
         unavailable["error"]["code"],

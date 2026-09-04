@@ -193,13 +193,7 @@ pub fn preflight(
     if &actual != request.summary() {
         return Err(PreflightError::SummaryMismatch);
     }
-    if request.options().memory_limit_bytes == Some(0)
-        || matches!(
-            request.options().worker_threads,
-            WorkerThreadPolicy::Exact(0)
-        )
-        || request.options().solution_limit == Some(0)
-    {
+    if request.options().validate().is_err() {
         return Err(PreflightError::InvalidSolveOptions);
     }
     let report = compatibility_for(

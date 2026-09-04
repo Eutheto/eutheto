@@ -3,22 +3,9 @@ name: Dependency policy
 
 on:
   pull_request:
-    paths:
-      - ".github/dependabot.yml"
-      - ".github/workflows/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "**/package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - "rust-toolchain.toml"
-      - "flake.nix"
-      - "flake.lock"
-      - "nix/**"
-      - "deny.toml"
-      - "about.toml"
-      - "protocol/**"
-      - "workers/ortools/**"
+  merge_group:
+    types:
+      - checks_requested
   workflow_dispatch:
 
 permissions:
@@ -59,7 +46,7 @@ jobs:
       - name: Enforce immutable actions and migration isolation
         id: policy
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           python3 <<'PY'
           import json

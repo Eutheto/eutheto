@@ -120,6 +120,20 @@ fn matrix_and_descriptor(
     Ok((matrix, descriptor))
 }
 
+fn runtime_identity(
+    descriptor: &SolverDescriptor,
+) -> Result<BackendRuntimeIdentity, BackendRuntimeIdentityError> {
+    BackendRuntimeIdentity::new(
+        descriptor.id.clone(),
+        descriptor.version.clone(),
+        descriptor.adapter_version.clone(),
+        "1.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        1,
+        0,
+    )
+}
+
 fn problem() -> Result<PlanningProblem, Box<dyn Error>> {
     let provenance = ProvenanceId::new("tests.provenance")?;
     let mut value = PlanningProblem {
@@ -245,6 +259,7 @@ impl ProgressSink for VecProgress {
 
 struct SequenceBackend {
     descriptor: SolverDescriptor,
+    runtime_identity: BackendRuntimeIdentity,
     matrix: CapabilityMatrix,
     candidates: Vec<CandidateSubmission>,
 }
@@ -252,6 +267,10 @@ struct SequenceBackend {
 impl SolverBackend for SequenceBackend {
     fn descriptor(&self) -> &SolverDescriptor {
         &self.descriptor
+    }
+
+    fn runtime_identity(&self) -> &BackendRuntimeIdentity {
+        &self.runtime_identity
     }
 
     fn compatibility(
@@ -315,18 +334,182 @@ impl SolverBackend for SequenceBackend {
 #[test]
 fn duplicate_registry_rejection_is_deterministic() -> TestResult {
     let (matrix, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let runtime_identity = runtime_identity(&descriptor)?;
     let first: Arc<dyn SolverBackend> = Arc::new(SequenceBackend {
         descriptor: descriptor.clone(),
+        runtime_identity: runtime_identity.clone(),
         matrix: matrix.clone(),
         candidates: Vec::new(),
     });
     let second: Arc<dyn SolverBackend> = Arc::new(SequenceBackend {
         descriptor,
+        runtime_identity,
         matrix: matrix.clone(),
         candidates: Vec::new(),
     });
     let result = SolverRegistry::new(matrix, vec![first, second]);
     assert!(matches!(result, Err(RegistryError::DuplicateBackend(_))));
+    Ok(())
+}
+
+#[test]
+fn registry_exposes_valid_runtime_identity_without_downcasting() -> TestResult {
+    let (matrix, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let backend_id = descriptor.id.clone();
+    let runtime_identity = runtime_identity(&descriptor)?;
+    let backend: Arc<dyn SolverBackend> = Arc::new(SequenceBackend {
+        descriptor,
+        runtime_identity: runtime_identity.clone(),
+        matrix: matrix.clone(),
+        candidates: Vec::new(),
+    });
+
+    let registry = SolverRegistry::new(matrix, [backend])?;
+    let registered = registry
+        .get(&backend_id)
+        .ok_or("backend was not registered")?;
+    assert_eq!(registered.runtime_identity(), &runtime_identity);
+    assert_eq!(registered.runtime_identity().backend_id(), &backend_id);
+    assert_eq!(registered.runtime_identity().backend_version(), "1.0.0");
+    assert_eq!(registered.runtime_identity().adapter_version(), "1.0.0");
+    assert_eq!(registered.runtime_identity().worker_version(), "1.0.0");
+    assert_eq!(registered.runtime_identity().solver_version(), "1.0.0");
+    assert_eq!(registered.runtime_identity().protocol_major(), 1);
+    assert_eq!(registered.runtime_identity().protocol_minor(), 0);
+    Ok(())
+}
+
+#[test]
+fn runtime_identity_rejects_each_invalid_version_and_zero_protocol_major() -> TestResult {
+    let (_, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let identity = |backend_version: &str,
+                    adapter_version: &str,
+                    worker_version: &str,
+                    solver_version: &str,
+                    protocol_major| {
+        BackendRuntimeIdentity::new(
+            descriptor.id.clone(),
+            backend_version.to_owned(),
+            adapter_version.to_owned(),
+            worker_version.to_owned(),
+            solver_version.to_owned(),
+            protocol_major,
+            0,
+        )
+    };
+    let oversized_version = "x".repeat(65);
+
+    assert_eq!(
+        identity("invalid version", "1.0.0", "1.0.0", "1.0.0", 1),
+        Err(BackendRuntimeIdentityError::InvalidBackendVersion)
+    );
+    assert_eq!(
+        identity("1.0.0", "invalid version", "1.0.0", "1.0.0", 1),
+        Err(BackendRuntimeIdentityError::InvalidAdapterVersion)
+    );
+    assert_eq!(
+        identity("1.0.0", "1.0.0", &oversized_version, "1.0.0", 1),
+        Err(BackendRuntimeIdentityError::InvalidWorkerVersion)
+    );
+    assert_eq!(
+        identity("1.0.0", "1.0.0", "1.0.0", "invalid version", 1),
+        Err(BackendRuntimeIdentityError::InvalidSolverVersion)
+    );
+    assert_eq!(
+        identity("1.0.0", "1.0.0", "1.0.0", "1.0.0", 0),
+        Err(BackendRuntimeIdentityError::ZeroProtocolMajor)
+    );
+    Ok(())
+}
+
+#[test]
+fn registry_revalidates_deserialized_runtime_identity() -> TestResult {
+    let (matrix, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let invalid_identity = serde_json::from_value(serde_json::json!({
+        "backendId": descriptor.id.as_str(),
+        "backendVersion": descriptor.version.clone(),
+        "adapterVersion": descriptor.adapter_version.clone(),
+        "workerVersion": "invalid version",
+        "solverVersion": "1.0.0",
+        "protocolMajor": 1,
+        "protocolMinor": 0
+    }))?;
+    let backend: Arc<dyn SolverBackend> = Arc::new(SequenceBackend {
+        descriptor,
+        runtime_identity: invalid_identity,
+        matrix: matrix.clone(),
+        candidates: Vec::new(),
+    });
+
+    assert!(matches!(
+        SolverRegistry::new(matrix, [backend]),
+        Err(RegistryError::InvalidRuntimeIdentity {
+            error: BackendRuntimeIdentityError::InvalidWorkerVersion,
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn registry_rejects_each_runtime_identity_descriptor_mismatch() -> TestResult {
+    let (matrix, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let backend = |runtime_identity| -> Arc<dyn SolverBackend> {
+        Arc::new(SequenceBackend {
+            descriptor: descriptor.clone(),
+            runtime_identity,
+            matrix: matrix.clone(),
+            candidates: Vec::new(),
+        })
+    };
+
+    let other_backend_id = BackendId::new("tests.other-exact")?;
+    let identity = BackendRuntimeIdentity::new(
+        other_backend_id.clone(),
+        descriptor.version.clone(),
+        descriptor.adapter_version.clone(),
+        "1.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        1,
+        0,
+    )?;
+    assert!(matches!(
+        SolverRegistry::new(matrix.clone(), [backend(identity)]),
+        Err(RegistryError::RuntimeIdentityBackendIdMismatch {
+            descriptor_backend_id,
+            identity_backend_id,
+        }) if descriptor_backend_id == descriptor.id && identity_backend_id == other_backend_id
+    ));
+
+    let identity = BackendRuntimeIdentity::new(
+        descriptor.id.clone(),
+        "2.0.0".to_owned(),
+        descriptor.adapter_version.clone(),
+        "1.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        1,
+        0,
+    )?;
+    assert!(matches!(
+        SolverRegistry::new(matrix.clone(), [backend(identity)]),
+        Err(RegistryError::RuntimeIdentityBackendVersionMismatch(backend_id))
+            if backend_id == descriptor.id
+    ));
+
+    let identity = BackendRuntimeIdentity::new(
+        descriptor.id.clone(),
+        descriptor.version.clone(),
+        "2.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        1,
+        0,
+    )?;
+    assert!(matches!(
+        SolverRegistry::new(matrix.clone(), [backend(identity)]),
+        Err(RegistryError::RuntimeIdentityAdapterVersionMismatch(backend_id))
+            if backend_id == descriptor.id
+    ));
     Ok(())
 }
 
@@ -442,6 +625,49 @@ fn preflight_rejects_request_option_backend_version_and_adapter_mismatch() -> Te
         preflight(&matrix, &descriptor, &wrong_adapter),
         Err(PreflightError::AdapterVersionMismatch)
     ));
+    Ok(())
+}
+
+#[test]
+fn preflight_maps_shared_invalid_solve_options() -> TestResult {
+    let (matrix, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let problem = Arc::new(problem()?);
+    let summary = summarize(&problem, PlanningIrLimitsV1::DEFAULT)?;
+    let base = solve_options(descriptor.id.clone())?;
+    let invalid_options = [
+        {
+            let mut value = base.clone();
+            value.memory_limit_bytes = Some(0);
+            value
+        },
+        {
+            let mut value = base.clone();
+            value.worker_threads = WorkerThreadPolicy::Exact(0);
+            value
+        },
+        {
+            let mut value = base;
+            value.solution_limit = Some(0);
+            value
+        },
+    ];
+    for options in invalid_options {
+        let (parent, _, _) = parent_budget(1_000)?;
+        let request = SolveRequest::new(
+            descriptor.id.clone(),
+            &descriptor.version,
+            &descriptor.adapter_version,
+            Arc::clone(&problem),
+            summary.clone(),
+            options,
+            &parent,
+            None,
+        )?;
+        assert!(matches!(
+            preflight(&matrix, &descriptor, &request),
+            Err(PreflightError::InvalidSolveOptions)
+        ));
+    }
     Ok(())
 }
 
@@ -751,8 +977,10 @@ fn malformed_unknown_and_out_of_domain_candidates_are_rejected() -> TestResult {
 #[tokio::test]
 async fn deterministic_fake_backend_sequence_stays_confined_to_test_contracts() -> TestResult {
     let (matrix, descriptor) = matrix_and_descriptor(&BTreeMap::new())?;
+    let runtime_identity = runtime_identity(&descriptor)?;
     let backend = SequenceBackend {
         descriptor: descriptor.clone(),
+        runtime_identity,
         matrix,
         candidates: vec![
             CandidateSubmission {

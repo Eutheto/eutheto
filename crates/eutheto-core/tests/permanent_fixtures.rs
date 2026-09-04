@@ -4,12 +4,16 @@ use eutheto_core::{
     ProjectScope,
 };
 use eutheto_domain_api::{
-    CompileContext, DomainBatchCommand, DomainCatalog, DomainExplanation, DomainMutation,
-    DomainPack, DomainPackDescriptor, DomainPackError, DomainPackRegistry, DomainShareResult,
-    DomainValidationReport, HistoricalPortableDomainDocument, PortableDomainDocument,
-    PortableImportContext, ShareResultOptions,
+    CompileContext, CounterfactualCompileContext, DomainBatchCommand, DomainCatalog,
+    DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainPackRegistry,
+    DomainShareResult, DomainValidationReport, HistoricalPortableDomainDocument,
+    PortableDomainDocument, PortableImportContext, ShareResultOptions,
 };
-use eutheto_domain_ir::{AcceptedResult, NormalizedSolution, ScoreVector, VerificationReport};
+use eutheto_domain_ir::{
+    AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
+    ExplanationCapability, NormalizedSolution, ScoreVector, VerificationContextV1,
+    VerificationReport, VerificationScope,
+};
 use eutheto_export::{
     ApplicationMetadata, BackupSections, PortableScenario, ScenarioExportSnapshot,
     assemble_scenario_export,
@@ -88,6 +92,7 @@ impl DomainPack for HistoricalFixturePack {
         let mut descriptor = OfficialTestPack.descriptor()?;
         descriptor.scenario_versions.latest = 3;
         descriptor.scenario_versions.migratable_from = [1, 2].into_iter().collect();
+        descriptor.explanation_capabilities.clear();
         Ok(descriptor)
     }
 
@@ -190,10 +195,20 @@ impl DomainPack for HistoricalFixturePack {
         Self::unsupported()
     }
 
+    fn verification_scope(
+        &self,
+        _document: &ScenarioDocument,
+        _scenario_revision: u64,
+    ) -> Result<VerificationScope, DomainPackError> {
+        Self::unsupported()
+    }
+
     fn verify(
         &self,
         _document: &ScenarioDocument,
         _solution: &NormalizedSolution,
+        _context: &VerificationContextV1,
+        _authoritative_score: &ScoreVector,
     ) -> Result<VerificationReport, DomainPackError> {
         Self::unsupported()
     }
@@ -246,15 +261,43 @@ impl DomainPack for HistoricalFixturePack {
         Self::unsupported()
     }
 
-    fn explain(
+    fn render_evidence(
         &self,
         _document: &ScenarioDocument,
-        _solution: Option<&NormalizedSolution>,
-        _request_id: &str,
-    ) -> Result<DomainExplanation, DomainPackError> {
-        Self::unsupported()
+        request: &EvidenceRenderRequestV1,
+    ) -> Result<EvidenceRenderResultV1, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            explanation_capability(request.kind),
+        ))
+    }
+
+    fn compile_counterfactual(
+        &self,
+        _document: &ScenarioDocument,
+        _condition: &CounterfactualConditionV1,
+        _context: &CounterfactualCompileContext<'_>,
+    ) -> Result<PlanningProblem, DomainPackError> {
+        Err(DomainPackError::UnsupportedExplanationCapability(
+            ExplanationCapability::Counterfactual,
+        ))
     }
 }
+fn explanation_capability(kind: eutheto_domain_ir::ExplanationKind) -> ExplanationCapability {
+    match kind {
+        eutheto_domain_ir::ExplanationKind::Validation => ExplanationCapability::Validation,
+        eutheto_domain_ir::ExplanationKind::Infeasibility => ExplanationCapability::Infeasibility,
+        eutheto_domain_ir::ExplanationKind::Assignment => ExplanationCapability::Assignment,
+        eutheto_domain_ir::ExplanationKind::Counterfactual => ExplanationCapability::Counterfactual,
+        eutheto_domain_ir::ExplanationKind::SolutionDifference => {
+            ExplanationCapability::SolutionDifference
+        }
+        eutheto_domain_ir::ExplanationKind::Repair => ExplanationCapability::Repair,
+        eutheto_domain_ir::ExplanationKind::OptimalityStatus => {
+            ExplanationCapability::OptimalityStatus
+        }
+    }
+}
+
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 fn app_result<T>(result: Result<T, AppError>) -> TestResult<T> {
@@ -302,6 +345,7 @@ fn dependencies(directory: &TempDir) -> TestResult<AppDependencies> {
         clock: Arc::new(FixedClock::new(
             "2026-08-29T00:00:00Z".parse::<Rfc3339Timestamp>()?,
         )),
+        monotonic_clock: Arc::new(eutheto_types::FixedMonotonicClock::default()),
         ids: Arc::new(SystemIdGenerator),
         cancellation: eutheto_types::CancellationToken::default(),
     })

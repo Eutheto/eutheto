@@ -1,0 +1,20 @@
+[package]
+name = "eutheto-verify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3 = "=1.8.7"
+eutheto-domain-api = { path = "../eutheto-domain-api" }
+eutheto-domain-ir = { path = "../eutheto-domain-ir" }
+eutheto-planning-ir = { path = "../eutheto-planning-ir" }
+eutheto-solver-api = { path = "../eutheto-solver-api" }
+eutheto-types = { path = "../eutheto-types" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
