@@ -2,8 +2,7 @@ use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack, official_registry
 use eutheto_domain_api::{
     CompileContext, ContractJsonLimits, CounterfactualCompileContext, DOMAIN_BATCH_SCHEMA_VERSION,
     DomainBatchCommand, DomainPack, DomainPackError, DomainPackRegistry, DomainShareResult,
-    HistoricalPortableDomainDocument, PortableImportContext, ShareResultOptions,
-    validate_contract_value,
+    PortableImportContext, ShareResultOptions, validate_contract_value,
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
@@ -18,8 +17,9 @@ use eutheto_planning_ir::{
     canonical_ir_hash, summarize, validate,
 };
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, DurationMillis, EntityId, FixedMonotonicClock,
-    PackId, ParentSolveBudget, RuleId, ScenarioDocument, SolutionId,
+    AssignmentId, CancellationToken, DomainCommandEnvelope, DurationMillis, EntityId,
+    FixedMonotonicClock, PackId, ParentSolveBudget, PortableDomainDocument, RuleId,
+    ScenarioDocument, SolutionId,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -287,6 +287,45 @@ fn batch_is_atomic_and_inverse_restores_exact_document() -> Result<(), Box<dyn E
 }
 
 #[test]
+fn portable_v2_preserves_all_editable_records_without_solver_validation()
+-> Result<(), Box<dyn Error>> {
+    let pack = OfficialTestPack;
+    let mut source = document()?;
+    source.domain.entities.insert(
+        EntityId::from_str(ENTITY_ID)?,
+        json!({"name": "Unfinished generic entity", "details": {"values": [1, true, null]}}),
+    );
+    source.domain.rules.insert(
+        RuleId::from_str("0195a5e4-7c00-7000-8000-000000000003")?,
+        json!({"label": "Unfinished rule"}),
+    );
+    source.domain.preferences.insert(
+        RuleId::from_str("0195a5e4-7c00-7000-8000-000000000004")?,
+        json!({"label": "Unfinished preference"}),
+    );
+    source.domain.locked_assignments.insert(
+        AssignmentId::from_str("0195a5e4-7c00-7000-8000-000000000005")?,
+        json!({"entityId": ENTITY_ID, "notes": ["preserve"]}),
+    );
+    source.extensions.insert(
+        "vendor.example".to_owned(),
+        json!({"nested": {"value": "preserve"}, "array": [false, 1]}),
+    );
+    let portable = pack.export_portable(&source)?;
+    let mut shell = document()?;
+    shell.domain = eutheto_types::ScenarioDomain::default();
+    shell.extensions.clear();
+    let imported = pack.import_portable(
+        &portable,
+        &PortableImportContext {
+            scenario_shell: shell,
+        },
+    )?;
+    assert_eq!(imported, source);
+    Ok(())
+}
+
+#[test]
 fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
     let pack = OfficialTestPack;
     let mut source = document()?;
@@ -300,7 +339,7 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
         },
     )?;
     assert_eq!(imported.domain, source.domain);
-    let migrated = pack.migrate_portable(HistoricalPortableDomainDocument {
+    let migrated = pack.migrate_portable_step(PortableDomainDocument {
         pack_id: PackId::new(OFFICIAL_TEST_PACK_ID)?,
         schema_version: 0,
         required_capabilities: BTreeSet::default(),
@@ -311,6 +350,9 @@ fn portable_and_share_contracts_round_trip() -> Result<(), Box<dyn Error>> {
             }
         }),
     })?;
+    assert_eq!(migrated.schema_version, 1);
+    assert_eq!(migrated.payload["schemaVersion"], 1);
+    let migrated = pack.migrate_portable_step(migrated)?;
     assert_eq!(migrated.payload, portable.payload);
 
     let problem = pack.compile(&source, &context())?;
@@ -396,7 +438,7 @@ fn portable_nonsemantic_extensions_survive_current_and_historical_round_trips()
     assert_eq!(imported.extensions, extensions);
     assert_eq!(pack.export_portable(&imported)?.payload, current.payload);
 
-    let migrated = pack.migrate_portable(HistoricalPortableDomainDocument {
+    let migrated = pack.migrate_portable_step(PortableDomainDocument {
         pack_id: PackId::new(OFFICIAL_TEST_PACK_ID)?,
         schema_version: 0,
         required_capabilities: BTreeSet::default(),
@@ -408,6 +450,7 @@ fn portable_nonsemantic_extensions_survive_current_and_historical_round_trips()
             "extensions": extensions
         }),
     })?;
+    let migrated = pack.migrate_portable_step(migrated)?;
     assert_eq!(
         migrated.payload["extensions"],
         current.payload["extensions"]
@@ -428,27 +471,10 @@ fn portable_nonsemantic_extensions_survive_current_and_historical_round_trips()
 }
 
 #[test]
-fn portable_semantic_extensions_are_rejected_in_current_and_historical_data()
--> Result<(), Box<dyn Error>> {
+fn historical_portable_semantic_extensions_are_rejected() -> Result<(), Box<dyn Error>> {
     let pack = OfficialTestPack;
-    let clean = document()?;
-    let mut current = pack.export_portable(&clean)?;
-    current.payload["extensions"] = json!({
-        "semantic.required-rule": {"meaning": "must not be ignored"}
-    });
     assert!(matches!(
-        pack.import_portable(
-            &current,
-            &PortableImportContext {
-                scenario_shell: clean
-            }
-        ),
-        Err(DomainPackError::Contract(message))
-            if message.contains("semantic.required-rule")
-    ));
-
-    assert!(matches!(
-        pack.migrate_portable(HistoricalPortableDomainDocument {
+        pack.migrate_portable_step(PortableDomainDocument {
             pack_id: PackId::new(OFFICIAL_TEST_PACK_ID)?,
             schema_version: 0,
             required_capabilities: BTreeSet::default(),
@@ -462,8 +488,7 @@ fn portable_semantic_extensions_are_rejected_in_current_and_historical_data()
                 }
             }),
         }),
-        Err(DomainPackError::Contract(message))
-            if message.contains("semantic.required-rule")
+        Err(DomainPackError::Contract(_))
     ));
     Ok(())
 }

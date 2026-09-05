@@ -10,10 +10,7 @@ use eutheto_domain_ir::{
     RunTerminalOutcomeV1, ScoreVector, VerificationContextV1, VerificationReport,
     VerificationScope, blake3_hex, compare_accepted_results,
 };
-use eutheto_export::{
-    ApplicationMetadata, PortableProjectMetadata, PortableScenario, SemanticCapability,
-    validate_current_portable_scenario,
-};
+use eutheto_export::{ApplicationMetadata, validate_scenario_snapshot};
 use eutheto_import::{
     ImportProvenance, PreviewBinding, RestoreAuthorization, RestoreMode, SafetyBackupEvidence,
     StagedBackupRestore, StagedDisposition, StagedImport, StagedScenario,
@@ -33,9 +30,10 @@ use eutheto_types::{
     ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, CounterfactualJobId,
     DomainPackRef, DurationMillis, EntityId, ExplanationMode, GapPolicy, Horizon, IanaTimeZone,
     LocaleTag, MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId, PortableAsset,
-    PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
-    RuleId, ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings,
-    SolutionId, SolveMode, SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity,
+    PortableProjectMetadata, PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits,
+    Revision, Rfc3339Timestamp, RuleId, ScenarioDocument, ScenarioDomain, ScenarioId,
+    ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, SemanticCapability, SolutionId,
+    SolveMode, SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity,
     SupplementalSectionKind, UnitSystem, WorkerThreadPolicy,
 };
 use rusqlite::{Connection, params};
@@ -637,7 +635,7 @@ fn staged_import(
                 original_id: document.scenario_id,
                 source_revision: revision,
                 disposition,
-                scenario: PortableScenario::current(revision, document, BTreeSet::new()),
+                scenario: ScenarioSnapshotV1::current(revision, document, BTreeSet::new()),
                 id_remap: BTreeMap::new(),
             })
             .collect(),
@@ -2136,7 +2134,7 @@ fn aba_replace_restore(
         timestamp(CREATED)?,
     );
     restore.mode = RestoreMode::ReplaceLibrary;
-    restore.scenario_revisions.push(PortableScenario::current(
+    restore.scenario_revisions.push(ScenarioSnapshotV1::current(
         Revision::new(6),
         source_document,
         BTreeSet::new(),
@@ -2247,7 +2245,7 @@ async fn scenario_revision_high_water_prevents_aba_and_survives_restore_restart(
     target_six.scenarios[0].source_revision = Revision::new(2);
     target_six
         .scenario_revisions
-        .push(PortableScenario::current(
+        .push(ScenarioSnapshotV1::current(
             Revision::new(2),
             document(id)?,
             BTreeSet::new(),
@@ -2774,14 +2772,14 @@ async fn duplicate_remaps_owned_graph_and_preserves_portable_metadata_after_rest
     assert_eq!(persisted.summary.revision, copy.summary.revision);
     assert_eq!(persisted.document, copy.document);
     assert_eq!(persisted.portable, copy.portable);
-    let mut exportable = PortableScenario::current(
+    let mut exportable = ScenarioSnapshotV1::current(
         persisted.summary.revision,
         persisted.document,
         persisted.portable.required_capabilities,
     );
     exportable.semantic_extensions = persisted.portable.semantic_extensions;
     exportable.extensions = persisted.portable.extensions;
-    validate_current_portable_scenario(&exportable)?;
+    validate_scenario_snapshot(&exportable)?;
     assert_eq!(
         serde_json::to_value(&exportable)?["extensions"]["vendor.display"],
         copy.portable.extensions["vendor.display"]
@@ -3504,7 +3502,7 @@ fn exact_revision_restore(
         timestamp(CREATED)?,
     );
     restore.mode = RestoreMode::ReplaceLibrary;
-    restore.scenario_revisions.push(PortableScenario::current(
+    restore.scenario_revisions.push(ScenarioSnapshotV1::current(
         Revision::new(7),
         revision_seven.clone(),
         BTreeSet::new(),

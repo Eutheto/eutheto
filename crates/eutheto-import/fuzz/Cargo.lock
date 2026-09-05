@@ -246,6 +246,7 @@ dependencies = [
 name = "eutheto-domain-ir"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "eutheto-types",
  "serde",
  "serde_json",
@@ -287,6 +288,8 @@ dependencies = [
 name = "eutheto-import-fuzz"
 version = "0.0.0"
 dependencies = [
+ "eutheto-command",
+ "eutheto-domain-api",
  "eutheto-domain-ir",
  "eutheto-export",
  "eutheto-import",

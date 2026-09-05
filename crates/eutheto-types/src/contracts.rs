@@ -87,12 +87,16 @@ pub struct ScenarioSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScenarioDomain {
     /// Entity records keyed by stable identity.
+    #[serde(deserialize_with = "crate::deserialize_unique_id_map")]
     pub entities: BTreeMap<EntityId, Value>,
     /// Rule records keyed by stable identity.
+    #[serde(deserialize_with = "crate::deserialize_unique_id_map")]
     pub rules: BTreeMap<RuleId, Value>,
     /// Preference records keyed by stable identity.
+    #[serde(deserialize_with = "crate::deserialize_unique_id_map")]
     pub preferences: BTreeMap<RuleId, Value>,
     /// Locked assignment records keyed by stable identity.
+    #[serde(deserialize_with = "crate::deserialize_unique_id_map")]
     pub locked_assignments: BTreeMap<AssignmentId, Value>,
 }
 
@@ -1223,6 +1227,23 @@ mod tests {
         assert_eq!(document.format_version, SCENARIO_FORMAT_VERSION);
         assert_eq!(serde_json::to_value(document)?, input);
         Ok(())
+    }
+
+    #[test]
+    fn scenario_envelope_rejects_aliased_duplicate_record_ids() {
+        let lower = "018f47f2-e880-7000-8000-0000000000ab";
+        let upper = lower.to_uppercase();
+        for section in ["entities", "rules", "preferences", "lockedAssignments"] {
+            let mut input = scenario_json();
+            input["domain"][section] = json!({
+                lower: {"name": "first record"},
+                upper.as_str(): {"name": "replacement record"}
+            });
+            assert!(
+                serde_json::from_value::<ScenarioDocument>(input).is_err(),
+                "aliased identities in {section} must not overwrite records"
+            );
+        }
     }
 
     #[test]

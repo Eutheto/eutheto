@@ -4,12 +4,20 @@
 //! or application services. Callers provide one already-consistent portable
 //! snapshot and receive deterministic bytes or an atomically published file.
 
+#[cfg(test)]
+extern crate self as eutheto_export;
+#[cfg(test)]
+#[path = "../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+
 use eutheto_types::{
     BundleId, CancellationToken, MAX_SCENARIO_DOCUMENT_BYTES, PORTABLE_LARGE_ASSET_BYTES_V1,
-    PortableAsset, PortableJsonLimits, Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION,
-    ScenarioDocument, ScenarioFormat, ScenarioId, extract_asset_references,
-    extract_result_dependency, extract_result_id, extract_scenario_references,
-    validate_nonsecret_portable_json, validate_nonsecret_portable_json_bytes,
+    PortableAsset, PortableDomainDocument, PortableJsonLimits, PortableProjectMetadata, Revision,
+    Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioDocument,
+    ScenarioFormat, ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1,
+    SemanticCapability, extract_asset_references, extract_result_dependency, extract_result_id,
+    extract_scenario_references, validate_nonsecret_portable_json,
+    validate_nonsecret_portable_json_bytes,
 };
 use image::{ImageFormat, ImageReader, Limits as ImageLimits};
 use serde::de::{IgnoredAny, MapAccess, Visitor};
@@ -31,7 +39,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 pub const BUNDLE_FORMAT: &str = "eutheto-bundle";
 pub const PORTABLE_SCENARIO_FORMAT: &str = "eutheto/scenario";
 pub const CURRENT_BUNDLE_FORMAT_VERSION: u32 = 1;
-pub const CURRENT_PORTABLE_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_PORTABLE_SCHEMA_VERSION: u32 = 2;
 pub const CHECKSUM_ALGORITHM: &str = "sha256";
 pub const MANIFEST_PATH: &str = "manifest.json";
 pub const OMITTED_ASSET_MEDIA_TYPE: &str = "eutheto/omitted-asset.v1";
@@ -39,6 +47,71 @@ pub const OMITTED_ASSET_FORMAT: &str = "eutheto/omitted-asset";
 pub const BACKUP_SELECTION_EXTENSION: &str = "eutheto.backup-selection.v1";
 pub const BACKUP_SELECTION_VERSION: u32 = 1;
 pub const CHECKSUMS_PATH: &str = "checksums.json";
+
+/// Global portable-v2 wire envelope. Domain records have exactly one pack-owned representation.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortableScenario {
+    pub format: ScenarioFormat,
+    pub schema_version: u32,
+    pub revision: Revision,
+    pub scenario_id: ScenarioId,
+    pub metadata: ScenarioMetadata,
+    pub settings: ScenarioSettings,
+    pub domain: PortableDomainDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<PortableProjectMetadata>,
+    pub required_capabilities: BTreeSet<SemanticCapability>,
+    #[serde(default)]
+    pub semantic_extensions: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub extensions: BTreeMap<String, Value>,
+}
+
+impl PortableScenario {
+    /// Copies the host-owned shell without giving a pack authority over its identity or metadata.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched pack identity, envelope/payload versions, or malformed requirements.
+    /// Callers separately validate the internal snapshot and the registered pack's support.
+    pub fn from_snapshot(
+        snapshot: &ScenarioSnapshotV1,
+        domain: PortableDomainDocument,
+    ) -> Result<Self, ExportError> {
+        if domain.pack_id != snapshot.document.domain_pack.id
+            || domain.schema_version == 0
+            || domain.payload.get("schemaVersion").and_then(Value::as_u64)
+                != Some(u64::from(domain.schema_version))
+        {
+            return Err(ExportError::InvalidModel(
+                "encoded domain identity or schema version does not match its envelope".to_owned(),
+            ));
+        }
+        for capability in &domain.required_capabilities {
+            validate_namespace(&capability.id)?;
+            if capability.version == 0 {
+                return Err(ExportError::InvalidModel(
+                    "domain capability version must be positive".to_owned(),
+                ));
+            }
+        }
+        validate_safe_value(&domain.payload, 0)?;
+        Ok(Self {
+            format: snapshot.format,
+            schema_version: CURRENT_PORTABLE_SCHEMA_VERSION,
+            revision: snapshot.revision,
+            scenario_id: snapshot.document.scenario_id,
+            metadata: snapshot.document.metadata.clone(),
+            settings: snapshot.document.settings.clone(),
+            domain,
+            project: snapshot.project.clone(),
+            required_capabilities: snapshot.required_capabilities.clone(),
+            semantic_extensions: snapshot.semantic_extensions.clone(),
+            extensions: snapshot.extensions.clone(),
+        })
+    }
+}
 
 /// One centralized set of limits shared by export and untrusted import.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,13 +146,6 @@ pub const PORTABLE_LIMITS: PortableLimits = PortableLimits {
 pub enum BundleKind {
     ScenarioExport,
     FullBackup,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SemanticCapability {
-    pub id: String,
-    pub version: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -218,62 +284,13 @@ pub struct Checksums {
     pub files: BTreeMap<String, String>,
 }
 
-/// Optional project-wrapper metadata present only in full-library backups.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PortableProjectMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub archived_at: Option<Rfc3339Timestamp>,
-}
-
-/// Strict current portable scenario envelope.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PortableScenario {
-    pub format: ScenarioFormat,
-    pub schema_version: u32,
-    pub revision: Revision,
-    pub document: ScenarioDocument,
-    /// Wrapper metadata supplied for library backup and restore.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<PortableProjectMetadata>,
-    /// Semantic capabilities required to interpret this scenario.
-    #[serde(default)]
-    pub required_capabilities: BTreeSet<SemanticCapability>,
-    /// Known semantic payloads. Each key must have a required capability.
-    #[serde(default)]
-    pub semantic_extensions: BTreeMap<String, Value>,
-    /// Namespaced nonsemantic values preserved without interpretation.
-    #[serde(default)]
-    pub extensions: BTreeMap<String, Value>,
-}
-
-impl PortableScenario {
-    #[must_use]
-    pub fn current(
-        revision: Revision,
-        document: ScenarioDocument,
-        required_capabilities: BTreeSet<SemanticCapability>,
-    ) -> Self {
-        Self {
-            format: ScenarioFormat::EuthetoScenario,
-            schema_version: CURRENT_PORTABLE_SCHEMA_VERSION,
-            revision,
-            document,
-            required_capabilities,
-            project: None,
-            semantic_extensions: BTreeMap::new(),
-            extensions: BTreeMap::new(),
-        }
-    }
-}
 /// Collects every identity owned by a scenario revision.
 ///
 /// Includes the scenario ID, all four typed domain-map keys, and recursively
 /// self-declared UUID-keyed objects whose `id` equals their containing key in
 /// domain records, semantic extensions, and both nonsemantic extension layers.
 #[must_use]
-pub fn collect_scenario_owned_uuids(scenario: &PortableScenario) -> BTreeSet<Uuid> {
+pub fn collect_scenario_owned_uuids(scenario: &ScenarioSnapshotV1) -> BTreeSet<Uuid> {
     let mut identities = BTreeSet::from([scenario.document.scenario_id.as_uuid()]);
     identities.extend(
         scenario
@@ -356,7 +373,7 @@ fn collect_self_declared_uuids_into(value: &Value, identities: &mut BTreeSet<Uui
 /// across the scenario root, typed domain-map keys, or recursively
 /// self-declared UUID-keyed objects.
 pub fn validate_scenario_owned_uuid_uniqueness(
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
 ) -> Result<(), ExportError> {
     fn insert(seen: &mut BTreeSet<Uuid>, identity: Uuid) -> Result<(), ExportError> {
         if !seen.insert(identity) {
@@ -434,7 +451,7 @@ pub fn validate_scenario_owned_uuid_uniqueness(
     Ok(())
 }
 fn validate_owned_identity_families<'a>(
-    scenarios: impl IntoIterator<Item = &'a PortableScenario>,
+    scenarios: impl IntoIterator<Item = &'a ScenarioSnapshotV1>,
 ) -> Result<(), ExportError> {
     let mut owners = BTreeMap::new();
     for scenario in scenarios {
@@ -454,8 +471,8 @@ fn validate_owned_identity_families<'a>(
 }
 
 fn validate_historical_revision_order(
-    scenarios: &[PortableScenario],
-    historical_revisions: &[PortableScenario],
+    scenarios: &[ScenarioSnapshotV1],
+    historical_revisions: &[ScenarioSnapshotV1],
 ) -> Result<(), ExportError> {
     let mut current = BTreeMap::new();
     for scenario in scenarios {
@@ -495,9 +512,9 @@ pub struct ScenarioExportSnapshot {
     pub created_at: String,
     pub application: ApplicationMetadata,
     pub title: String,
-    pub scenario: PortableScenario,
+    pub scenario: ScenarioSnapshotV1,
     /// Exact historical revisions required by the selected retained results.
-    pub scenario_revisions: Vec<PortableScenario>,
+    pub scenario_revisions: Vec<ScenarioSnapshotV1>,
     pub sections: BackupSections,
     pub nonsemantic_extensions: BTreeSet<String>,
     pub manifest_extensions: BTreeMap<String, Value>,
@@ -519,9 +536,9 @@ pub struct FullBackupSnapshot {
     pub created_at: String,
     pub application: ApplicationMetadata,
     pub title: String,
-    pub scenarios: Vec<PortableScenario>,
+    pub scenarios: Vec<ScenarioSnapshotV1>,
     /// Exact non-current revisions required by retained results.
-    pub scenario_revisions: Vec<PortableScenario>,
+    pub scenario_revisions: Vec<ScenarioSnapshotV1>,
     pub sections: BackupSections,
     pub nonsemantic_extensions: BTreeSet<String>,
     pub manifest_extensions: BTreeMap<String, Value>,
@@ -810,28 +827,30 @@ pub fn backup_selection_from_manifest(
 ///
 /// Returns an error when the snapshot violates the portable-data policy, a
 /// selected result lacks its exact scenario revision, or archive assembly fails.
-pub fn assemble_scenario_export(snapshot: &ScenarioExportSnapshot) -> Result<Vec<u8>, ExportError> {
-    let mut exported_scenario = snapshot.scenario.clone();
-    exported_scenario.project = None;
-    validate_portable_scenario_inner(&exported_scenario)?;
+pub fn assemble_scenario_export(
+    snapshot: &ScenarioExportSnapshot,
+    encode_domain: &impl Fn(&ScenarioDocument) -> Result<PortableDomainDocument, ExportError>,
+) -> Result<Vec<u8>, ExportError> {
+    let exported_scenario = &snapshot.scenario;
+    validate_portable_scenario_inner(exported_scenario)?;
     validate_owned_identity_families(
-        std::iter::once(&exported_scenario).chain(&snapshot.scenario_revisions),
+        std::iter::once(exported_scenario).chain(&snapshot.scenario_revisions),
     )?;
     validate_historical_revision_order(
-        std::slice::from_ref(&exported_scenario),
+        std::slice::from_ref(exported_scenario),
         &snapshot.scenario_revisions,
     )?;
     validate_scenario_reference_closure(
-        std::slice::from_ref(&exported_scenario),
+        std::slice::from_ref(exported_scenario),
         &snapshot.sections,
     )?;
     validate_asset_reference_closure(
-        std::iter::once(&exported_scenario).chain(&snapshot.scenario_revisions),
+        std::iter::once(exported_scenario).chain(&snapshot.scenario_revisions),
         &snapshot.sections,
     )?;
     validate_global_identity_namespace(
         &snapshot.sections,
-        std::iter::once(&exported_scenario).chain(&snapshot.scenario_revisions),
+        std::iter::once(exported_scenario).chain(&snapshot.scenario_revisions),
     )?;
     validate_result_dependencies(
         &snapshot.sections.results,
@@ -849,12 +868,18 @@ pub fn assemble_scenario_export(snapshot: &ScenarioExportSnapshot) -> Result<Vec
     let scenario_id = exported_scenario.document.scenario_id.to_string();
     validate_segment(&scenario_id)?;
     let mut payloads = BTreeMap::new();
+    let mut portable = PortableScenario::from_snapshot(
+        exported_scenario,
+        encode_domain(&exported_scenario.document)?,
+    )?;
+    portable.project = None;
     payloads.insert(
         format!("scenarios/{scenario_id}.json"),
-        Cow::Owned(canonical_json(&exported_scenario)?),
+        Cow::Owned(canonical_json(&portable)?),
     );
     let asset_metadata = append_sections(&mut payloads, &snapshot.sections)?;
     let mut capabilities = exported_scenario.required_capabilities.clone();
+    capabilities.extend(portable.domain.required_capabilities);
     let mut extensions: BTreeSet<String> = exported_scenario.extensions.keys().cloned().collect();
     extensions.extend(exported_scenario.document.extensions.keys().cloned());
     extensions.extend(snapshot.nonsemantic_extensions.iter().cloned());
@@ -863,6 +888,7 @@ pub fn assemble_scenario_export(snapshot: &ScenarioExportSnapshot) -> Result<Vec
         &snapshot.scenario_revisions,
         &mut capabilities,
         &mut extensions,
+        encode_domain,
     )?;
     let manifest = manifest(ManifestInput {
         bundle_id: snapshot.bundle_id,
@@ -882,7 +908,10 @@ pub fn assemble_scenario_export(snapshot: &ScenarioExportSnapshot) -> Result<Vec
 /// Assemble a deterministic full-library backup from a consistent snapshot.
 ///
 /// # Errors
-pub fn assemble_full_backup(snapshot: &FullBackupSnapshot) -> Result<Vec<u8>, ExportError> {
+pub fn assemble_full_backup(
+    snapshot: &FullBackupSnapshot,
+    encode_domain: &impl Fn(&ScenarioDocument) -> Result<PortableDomainDocument, ExportError>,
+) -> Result<Vec<u8>, ExportError> {
     validate_owned_identity_families(
         snapshot
             .scenarios
@@ -917,25 +946,27 @@ pub fn assemble_full_backup(snapshot: &FullBackupSnapshot) -> Result<Vec<u8>, Ex
     let mut capabilities = BTreeSet::new();
     let mut nonsemantic_extensions = BTreeSet::new();
     for scenario in &snapshot.scenarios {
-        let mut backed_up_scenario = scenario.clone();
-        backed_up_scenario
+        validate_portable_scenario_inner(scenario)?;
+        let mut portable =
+            PortableScenario::from_snapshot(scenario, encode_domain(&scenario.document)?)?;
+        portable
             .project
             .get_or_insert_with(PortableProjectMetadata::default);
-        validate_portable_scenario_inner(&backed_up_scenario)?;
-        let id = backed_up_scenario.document.scenario_id.to_string();
+        let id = scenario.document.scenario_id.to_string();
         validate_segment(&id)?;
         let path = format!("scenarios/{id}.json");
         if payloads
-            .insert(path, Cow::Owned(canonical_json(&backed_up_scenario)?))
+            .insert(path, Cow::Owned(canonical_json(&portable)?))
             .is_some()
         {
             return Err(ExportError::InvalidModel(format!(
                 "duplicate scenario identity {id}"
             )));
         }
-        capabilities.extend(backed_up_scenario.required_capabilities.iter().cloned());
-        nonsemantic_extensions.extend(backed_up_scenario.extensions.keys().cloned());
-        nonsemantic_extensions.extend(backed_up_scenario.document.extensions.keys().cloned());
+        capabilities.extend(portable.required_capabilities);
+        capabilities.extend(portable.domain.required_capabilities);
+        nonsemantic_extensions.extend(scenario.extensions.keys().cloned());
+        nonsemantic_extensions.extend(scenario.document.extensions.keys().cloned());
     }
     nonsemantic_extensions.extend(snapshot.nonsemantic_extensions.iter().cloned());
     append_scenario_revisions(
@@ -943,6 +974,7 @@ pub fn assemble_full_backup(snapshot: &FullBackupSnapshot) -> Result<Vec<u8>, Ex
         &snapshot.scenario_revisions,
         &mut capabilities,
         &mut nonsemantic_extensions,
+        encode_domain,
     )?;
     let asset_metadata = append_sections(&mut payloads, &snapshot.sections)?;
     let manifest = manifest(ManifestInput {
@@ -1000,7 +1032,7 @@ fn manifest(input: ManifestInput<'_>) -> BundleManifest {
 }
 
 fn validate_scenario_reference_closure(
-    scenarios: &[PortableScenario],
+    scenarios: &[ScenarioSnapshotV1],
     sections: &BackupSections,
 ) -> Result<(), ExportError> {
     let represented = scenarios
@@ -1030,7 +1062,7 @@ fn validate_scenario_reference_closure(
 }
 
 fn validate_asset_reference_closure<'a>(
-    scenarios: impl IntoIterator<Item = &'a PortableScenario>,
+    scenarios: impl IntoIterator<Item = &'a ScenarioSnapshotV1>,
     sections: &BackupSections,
 ) -> Result<(), ExportError> {
     let available = sections.assets.keys().cloned().collect::<BTreeSet<_>>();
@@ -1093,9 +1125,10 @@ fn section_counts(
 
 fn append_scenario_revisions(
     payloads: &mut BTreeMap<String, Cow<'_, [u8]>>,
-    scenario_revisions: &[PortableScenario],
+    scenario_revisions: &[ScenarioSnapshotV1],
     capabilities: &mut BTreeSet<SemanticCapability>,
     nonsemantic_extensions: &mut BTreeSet<String>,
+    encode_domain: &impl Fn(&ScenarioDocument) -> Result<PortableDomainDocument, ExportError>,
 ) -> Result<(), ExportError> {
     let mut represented = BTreeSet::new();
     for scenario in scenario_revisions {
@@ -1115,10 +1148,12 @@ fn append_scenario_revisions(
         }
         let name = format!("{}-{}.json", identity.0, identity.1.value());
         validate_segment(&name)?;
+        let portable =
+            PortableScenario::from_snapshot(scenario, encode_domain(&scenario.document)?)?;
         if payloads
             .insert(
                 format!("scenario-revisions/{name}"),
-                Cow::Owned(canonical_json(scenario)?),
+                Cow::Owned(canonical_json(&portable)?),
             )
             .is_some()
         {
@@ -1127,6 +1162,7 @@ fn append_scenario_revisions(
             ));
         }
         capabilities.extend(scenario.required_capabilities.iter().cloned());
+        capabilities.extend(portable.domain.required_capabilities);
         nonsemantic_extensions.extend(scenario.extensions.keys().cloned());
         nonsemantic_extensions.extend(scenario.document.extensions.keys().cloned());
     }
@@ -1160,7 +1196,7 @@ fn validate_global_identity_namespace<'a, I>(
     scenarios: I,
 ) -> Result<(), ExportError>
 where
-    I: IntoIterator<Item = &'a PortableScenario>,
+    I: IntoIterator<Item = &'a ScenarioSnapshotV1>,
 {
     let mut owners = BTreeMap::new();
     for scenario in scenarios {
@@ -1266,13 +1302,13 @@ fn append_sections<'a>(
     Ok(metadata)
 }
 
-/// Validates the complete current portable scenario model.
+/// Validates the frozen internal scenario snapshot independently of the portable wire version.
 ///
 /// # Errors
 ///
 /// Returns [`ExportError::InvalidModel`] for non-current envelopes, non-v7
 /// identities, invalid namespaces, undeclared semantics, or unsafe JSON data.
-pub fn validate_current_portable_scenario(scenario: &PortableScenario) -> Result<(), ExportError> {
+pub fn validate_scenario_snapshot(scenario: &ScenarioSnapshotV1) -> Result<(), ExportError> {
     validate_portable_scenario_inner(scenario)?;
     if u64::try_from(canonical_json(scenario)?.len())
         .map_or(true, |size| size > MAX_SCENARIO_DOCUMENT_BYTES)
@@ -1284,15 +1320,15 @@ pub fn validate_current_portable_scenario(scenario: &PortableScenario) -> Result
     Ok(())
 }
 
-fn validate_portable_scenario_inner(scenario: &PortableScenario) -> Result<(), ExportError> {
+fn validate_portable_scenario_inner(scenario: &ScenarioSnapshotV1) -> Result<(), ExportError> {
     if scenario.format != ScenarioFormat::EuthetoScenario {
         return Err(ExportError::InvalidModel(format!(
             "scenario format must be {PORTABLE_SCENARIO_FORMAT}"
         )));
     }
-    if scenario.schema_version != CURRENT_PORTABLE_SCHEMA_VERSION {
+    if scenario.schema_version != SCENARIO_SNAPSHOT_SCHEMA_VERSION {
         return Err(ExportError::InvalidModel(format!(
-            "export only supports current schema version {CURRENT_PORTABLE_SCHEMA_VERSION}"
+            "internal snapshot must use schema version {SCENARIO_SNAPSHOT_SCHEMA_VERSION}"
         )));
     }
     if scenario.document.format_version != SCENARIO_FORMAT_VERSION {
@@ -1398,14 +1434,7 @@ pub fn validate_portable_json_value(
 }
 
 fn validate_namespace(namespace: &str) -> Result<(), ExportError> {
-    if !namespace.contains('.')
-        || namespace.split('.').any(|segment| {
-            segment.is_empty()
-                || !segment
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
-    {
+    if !eutheto_types::is_portable_namespace(namespace) {
         return Err(ExportError::InvalidModel(format!(
             "invalid namespaced portable identifier {namespace:?}"
         )));
@@ -2486,12 +2515,12 @@ fn write_bundle_atomic_with_failpoint(
 mod tests {
     use super::*;
 
-    fn scenario_from_json(extension: Value) -> Result<PortableScenario, serde_json::Error> {
+    fn scenario_from_json(extension: Value) -> Result<ScenarioSnapshotV1, serde_json::Error> {
         let document: ScenarioDocument = serde_json::from_value(serde_json::json!({
             "format": "eutheto/scenario",
             "formatVersion": 1,
             "scenarioId": "018f1e2d-3c4b-7a69-8def-0123456789ab",
-            "domainPack": {"id": "official.generic", "schemaVersion": 1},
+            "domainPack": {"id": "official.test", "schemaVersion": 1},
             "metadata": {
                 "title": "Portable",
                 "description": "",
@@ -2509,7 +2538,7 @@ mod tests {
             "domain": {"entities": {}, "rules": {}, "preferences": {}, "lockedAssignments": {}},
             "extensions": {}
         }))?;
-        let mut scenario = PortableScenario::current(Revision::new(7), document, BTreeSet::new());
+        let mut scenario = ScenarioSnapshotV1::current(Revision::new(7), document, BTreeSet::new());
         scenario
             .extensions
             .insert("example.visual".to_owned(), extension);
@@ -2588,7 +2617,7 @@ mod tests {
         assert!(validate_scenario_owned_uuid_uniqueness(&scenario).is_err());
         Ok(())
     }
-    fn snapshot(scenario: PortableScenario) -> ScenarioExportSnapshot {
+    fn snapshot(scenario: ScenarioSnapshotV1) -> ScenarioExportSnapshot {
         ScenarioExportSnapshot {
             bundle_id: BundleId::from_uuid(Uuid::from_u128(
                 0x018f_1e2d_3c4b_7a69_8def_1123_4567_89ab,
@@ -2607,7 +2636,7 @@ mod tests {
         }
     }
 
-    fn full_backup(scenario: PortableScenario) -> FullBackupSnapshot {
+    fn full_backup(scenario: ScenarioSnapshotV1) -> FullBackupSnapshot {
         FullBackupSnapshot {
             bundle_id: BundleId::from_uuid(Uuid::from_u128(
                 0x018f_1e2d_3c4b_7a69_8def_1123_4567_89ab,
@@ -2664,14 +2693,20 @@ mod tests {
 
     #[test]
     fn export_is_deterministic_and_canonically_ordered() -> Result<(), Box<dyn std::error::Error>> {
-        let first = assemble_scenario_export(&snapshot(scenario_from_json(serde_json::json!({
-            "zoom": 3,
-            "palette": "high-contrast"
-        }))?))?;
-        let second = assemble_scenario_export(&snapshot(scenario_from_json(serde_json::json!({
-            "palette": "high-contrast",
-            "zoom": 3
-        }))?))?;
+        let first = assemble_scenario_export(
+            &snapshot(scenario_from_json(serde_json::json!({
+                "zoom": 3,
+                "palette": "high-contrast"
+            }))?),
+            &portable_encode::encode_fixture_domain,
+        )?;
+        let second = assemble_scenario_export(
+            &snapshot(scenario_from_json(serde_json::json!({
+                "palette": "high-contrast",
+                "zoom": 3
+            }))?),
+            &portable_encode::encode_fixture_domain,
+        )?;
         assert_eq!(first, second);
         verify_assembled_bundle(&first)?;
 
@@ -2708,7 +2743,7 @@ mod tests {
                 redistribution_permitted: true,
             },
         );
-        let ordered = assemble_full_backup(&backup)?;
+        let ordered = assemble_full_backup(&backup, &portable_encode::encode_fixture_domain)?;
         let mut archive = ZipArchive::new(Cursor::new(ordered))?;
         let names = (0..archive.len())
             .map(|index| archive.by_index(index).map(|entry| entry.name().to_owned()))
@@ -2732,7 +2767,8 @@ mod tests {
     fn export_is_current_only() -> Result<(), Box<dyn std::error::Error>> {
         let mut scenario = scenario_from_json(Value::Null)?;
         scenario.schema_version = CURRENT_PORTABLE_SCHEMA_VERSION + 1;
-        let error = assemble_scenario_export(&snapshot(scenario));
+        let error =
+            assemble_scenario_export(&snapshot(scenario), &portable_encode::encode_fixture_domain);
         assert!(matches!(error, Err(ExportError::InvalidModel(_))));
         Ok(())
     }
@@ -2797,7 +2833,10 @@ mod tests {
         ];
         for (value, expected) in prohibited_fields {
             assert_invalid_model(
-                assemble_scenario_export(&snapshot(scenario_from_json(value)?)),
+                assemble_scenario_export(
+                    &snapshot(scenario_from_json(value)?),
+                    &portable_encode::encode_fixture_domain,
+                ),
                 expected,
             )?;
         }
@@ -2809,7 +2848,10 @@ mod tests {
             "tokenizer": "word-boundary",
             "monkey": "semantic label"
         });
-        let _ = assemble_scenario_export(&snapshot(scenario_from_json(harmless)?))?;
+        let _ = assemble_scenario_export(
+            &snapshot(scenario_from_json(harmless)?),
+            &portable_encode::encode_fixture_domain,
+        )?;
 
         for path in [
             "/dev/disk0",
@@ -2819,9 +2861,10 @@ mod tests {
             r"\\server\share\private",
         ] {
             assert_invalid_model(
-                assemble_scenario_export(&snapshot(scenario_from_json(Value::String(
-                    path.to_owned(),
-                ))?)),
+                assemble_scenario_export(
+                    &snapshot(scenario_from_json(Value::String(path.to_owned()))?),
+                    &portable_encode::encode_fixture_domain,
+                ),
                 "filesystem path",
             )?;
         }
@@ -2852,7 +2895,7 @@ mod tests {
                 redistribution_permitted: true,
             },
         );
-        let bytes = assemble_scenario_export(&selected)?;
+        let bytes = assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)?;
         let mut archive = ZipArchive::new(Cursor::new(bytes))?;
         assert!(
             archive
@@ -2868,21 +2911,25 @@ mod tests {
             .get_mut("018f1e2d-3c4b-7a69-8def-012345678920")
             .ok_or_else(|| std::io::Error::other("missing selected result fixture"))?;
         selected_result["scenarioRevision"] = Value::from(6);
-        assert_invalid_model(assemble_scenario_export(&selected), "exact revision 6")?;
+        assert_invalid_model(
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
+            "exact revision 6",
+        )?;
         let mut historical = selected.scenario.clone();
         historical.revision = Revision::new(6);
         historical.project = None;
         selected.scenario_revisions.push(historical);
-        let historical_bytes = assemble_scenario_export(&selected)?;
+        let historical_bytes =
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)?;
         verify_assembled_bundle(&historical_bytes)?;
         selected.scenario_revisions[0].revision = Revision::new(7);
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "must be less than current revision 7",
         )?;
         selected.scenario_revisions[0].revision = Revision::new(8);
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "must be less than current revision 7",
         )?;
         Ok(())
@@ -2901,7 +2948,10 @@ mod tests {
                 "scenarioRevision": 7
             }),
         );
-        assert_invalid_model(assemble_scenario_export(&selected), "missing resultId")?;
+        assert_invalid_model(
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
+            "missing resultId",
+        )?;
         selected
             .sections
             .results
@@ -2909,7 +2959,7 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("missing retained result identity fixture"))?["resultId"] =
             Value::String("018f1e2d-3c4b-7a69-8def-012345678941".to_owned());
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "does not match resultId",
         )?;
         selected.sections.results.clear();
@@ -2922,7 +2972,7 @@ mod tests {
             }),
         );
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "assigned to more than one portable record",
         )?;
         Ok(())
@@ -2938,7 +2988,7 @@ mod tests {
             .shared_records
             .insert(scenario_id, serde_json::json!({"safe": true}));
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "assigned to more than one portable record",
         )?;
 
@@ -2957,7 +3007,7 @@ mod tests {
             },
         );
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "assigned to more than one portable record",
         )
     }
@@ -2978,7 +3028,7 @@ mod tests {
         let mut backup = full_backup(first);
         backup.scenarios.push(second);
         assert_invalid_model(
-            assemble_full_backup(&backup),
+            assemble_full_backup(&backup, &portable_encode::encode_fixture_domain),
             "declared by scenario families",
         )?;
         Ok(())
@@ -2993,7 +3043,7 @@ mod tests {
             "scenarioId": dependency
         }))?);
         assert!(matches!(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             Err(ExportError::MissingScenarioDependency(found)) if found == dependency
         ));
         Ok(())
@@ -3035,7 +3085,7 @@ mod tests {
             BACKUP_SELECTION_EXTENSION.to_owned(),
             backup_selection_extension_value(&selection)?,
         );
-        let bytes = assemble_scenario_export(&selected)?;
+        let bytes = assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)?;
         verify_assembled_bundle(&bytes)?;
         let mut archive = ZipArchive::new(Cursor::new(bytes))?;
         let manifest: BundleManifest = serde_json::from_reader(archive.by_name(MANIFEST_PATH)?)?;
@@ -3068,7 +3118,8 @@ mod tests {
             BACKUP_SELECTION_EXTENSION.to_owned(),
             backup_selection_extension_value(&inherited_selection)?,
         );
-        let inherited = assemble_scenario_export(&selected)?;
+        let inherited =
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain)?;
         verify_assembled_bundle(&inherited)?;
         Ok(())
     }
@@ -3091,7 +3142,7 @@ mod tests {
             BACKUP_SELECTION_EXTENSION.to_owned(),
             backup_selection_extension_value(&selection)?,
         );
-        let bytes = assemble_full_backup(&backup)?;
+        let bytes = assemble_full_backup(&backup, &portable_encode::encode_fixture_domain)?;
         let mut archive = ZipArchive::new(Cursor::new(bytes))?;
         let mut manifest: BundleManifest =
             serde_json::from_reader(archive.by_name(MANIFEST_PATH)?)?;
@@ -3143,7 +3194,10 @@ mod tests {
                 "scope": "scenario"
             }),
         );
-        assert_invalid_model(assemble_scenario_export(&selected), "excluded asset count")?;
+        assert_invalid_model(
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
+            "excluded asset count",
+        )?;
 
         let current_placeholder = selected
             .sections
@@ -3175,7 +3229,7 @@ mod tests {
             })?,
         );
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "does not exceed the version-1 threshold",
         )?;
         selected.sections.assets.insert(
@@ -3190,7 +3244,10 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("missing placeholder fixture"))?
             .bytes
             .push(b'\n');
-        assert_invalid_model(assemble_scenario_export(&selected), "exact canonical JSON")
+        assert_invalid_model(
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
+            "exact canonical JSON",
+        )
     }
 
     #[test]
@@ -3200,7 +3257,7 @@ mod tests {
             "asset": "missing.txt"
         }))?);
         assert_invalid_model(
-            assemble_scenario_export(&selected),
+            assemble_scenario_export(&selected, &portable_encode::encode_fixture_domain),
             "portable selection omits referenced asset missing.txt",
         )
     }
@@ -3274,7 +3331,10 @@ mod tests {
                     redistribution_permitted,
                 },
             );
-            assert_invalid_model(assemble_full_backup(&backup), expected)?;
+            assert_invalid_model(
+                assemble_full_backup(&backup, &portable_encode::encode_fixture_domain),
+                expected,
+            )?;
         }
         Ok(())
     }
@@ -3285,14 +3345,20 @@ mod tests {
         scenario.project = Some(PortableProjectMetadata {
             archived_at: Some(Rfc3339Timestamp::parse("2026-08-28T00:00:00Z")?),
         });
-        let scenario_bundle = assemble_scenario_export(&snapshot(scenario.clone()))?;
+        let scenario_bundle = assemble_scenario_export(
+            &snapshot(scenario.clone()),
+            &portable_encode::encode_fixture_domain,
+        )?;
         let mut archive = ZipArchive::new(Cursor::new(scenario_bundle))?;
         let path = format!("scenarios/{}.json", scenario.document.scenario_id);
         let scenario_value: Value = serde_json::from_reader(archive.by_name(&path)?)?;
         assert!(scenario_value.get("project").is_none());
 
         scenario.project = None;
-        let backup_bundle = assemble_full_backup(&full_backup(scenario.clone()))?;
+        let backup_bundle = assemble_full_backup(
+            &full_backup(scenario.clone()),
+            &portable_encode::encode_fixture_domain,
+        )?;
         let mut archive = ZipArchive::new(Cursor::new(backup_bundle))?;
         let backup_value: Value = serde_json::from_reader(archive.by_name(&path)?)?;
         assert_eq!(backup_value["project"], serde_json::json!({}));
@@ -3335,7 +3401,7 @@ mod tests {
                 "payload": {}
             }),
         );
-        let bytes = assemble_full_backup(&backup)?;
+        let bytes = assemble_full_backup(&backup, &portable_encode::encode_fixture_domain)?;
         verify_assembled_bundle(&bytes)?;
         let mut archive = ZipArchive::new(Cursor::new(bytes))?;
         assert!(
@@ -3400,7 +3466,10 @@ mod tests {
     #[test]
     fn atomic_publication_never_clobbers_and_cleans_temporary_files()
     -> Result<(), Box<dyn std::error::Error>> {
-        let bundle = assemble_scenario_export(&snapshot(scenario_from_json(Value::Null)?))?;
+        let bundle = assemble_scenario_export(
+            &snapshot(scenario_from_json(Value::Null)?),
+            &portable_encode::encode_fixture_domain,
+        )?;
         let directory = tempfile::tempdir()?;
         let destination = directory.path().join("portable.eutheto");
         std::fs::write(&destination, b"sentinel")?;
@@ -3429,7 +3498,10 @@ mod tests {
     #[test]
     fn publication_failpoints_have_unambiguous_outcomes() -> Result<(), Box<dyn std::error::Error>>
     {
-        let bundle = assemble_scenario_export(&snapshot(scenario_from_json(Value::Null)?))?;
+        let bundle = assemble_scenario_export(
+            &snapshot(scenario_from_json(Value::Null)?),
+            &portable_encode::encode_fixture_domain,
+        )?;
         let directory = tempfile::tempdir()?;
         let before = directory.path().join("before.eutheto");
         assert!(
@@ -3470,7 +3542,7 @@ mod tests {
                 redistribution_permitted: true,
             },
         );
-        let bundle = assemble_full_backup(&backup)?;
+        let bundle = assemble_full_backup(&backup, &portable_encode::encode_fixture_domain)?;
         assert!(bundle.len() > 64 * 1024);
         let directory = tempfile::tempdir()?;
 

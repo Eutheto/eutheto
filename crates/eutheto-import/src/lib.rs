@@ -4,21 +4,34 @@
 //! No function in this crate opens a database or commits application state.
 //! The final [`StagedImport`] is an inert input for one later store transaction.
 
+#[cfg(test)]
+extern crate self as eutheto_import;
+#[cfg(test)]
+#[path = "../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+#[cfg(test)]
+#[path = "../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+#[cfg(test)]
+#[path = "../../../tests/support/portable_migrate.rs"]
+mod portable_migrate;
+
 use eutheto_command::validate_document_shape;
 use eutheto_export::{
     ApplicationMetadata, BUNDLE_FORMAT, BackupSelection, BundleKind, BundleManifest,
     CHECKSUM_ALGORITHM, CHECKSUMS_PATH, CURRENT_BUNDLE_FORMAT_VERSION,
     CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, MANIFEST_PATH, OmittedAssetPlaceholder,
     OmittedAssetReason, PORTABLE_LIMITS, PortableBackupAssetSelection, PortableLimits,
-    PortableScenario, SemanticCapability, backup_selection_from_manifest, canonical_json,
-    collect_scenario_owned_uuids, collect_self_declared_uuids, omitted_asset_placeholder,
-    parse_omitted_asset_placeholder, reject_prohibited_portable_content, sha256_hex,
-    validate_current_portable_scenario, validate_portable_json_value, validate_portable_path,
-    validate_portable_payloads, validate_scenario_owned_uuid_uniqueness,
+    PortableScenario, backup_selection_from_manifest, canonical_json, collect_scenario_owned_uuids,
+    collect_self_declared_uuids, omitted_asset_placeholder, parse_omitted_asset_placeholder,
+    reject_prohibited_portable_content, sha256_hex, validate_portable_json_value,
+    validate_portable_path, validate_portable_payloads, validate_scenario_owned_uuid_uniqueness,
+    validate_scenario_snapshot,
 };
 use eutheto_types::{
-    BundleId, PackId, PortableAsset, Revision, Rfc3339Timestamp, ScenarioFormat, ScenarioId,
-    SupplementalIdentity, SupplementalSectionKind, extract_asset_references,
+    BundleId, PackId, PortableAsset, Revision, Rfc3339Timestamp, SCENARIO_SNAPSHOT_SCHEMA_VERSION,
+    ScenarioDocument, ScenarioFormat, ScenarioId, ScenarioSnapshotV1, SemanticCapability,
+    SupplementalIdentity, SupplementalSectionKind, ValidationReport, extract_asset_references,
     extract_result_dependency, extract_result_id, extract_scenario_references,
 };
 use serde::de::{
@@ -32,6 +45,7 @@ use std::fmt;
 use std::io::{Cursor, Read, Write};
 use std::mem::size_of;
 use std::path::Path;
+use std::sync::Arc;
 use tempfile::{Builder as TempFileBuilder, NamedTempFile};
 use thiserror::Error;
 use uuid::Uuid;
@@ -98,18 +112,50 @@ pub struct OuterMigrationStep {
     pub migrate: fn(LogicalBundle) -> Result<LogicalBundle, MigrationFailure>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PortableMigrationStep {
     pub from_version: u32,
     pub to_version: u32,
     pub name: &'static str,
-    pub migrate: fn(Value) -> Result<Value, MigrationFailure>,
+    pub migrate:
+        Arc<dyn Fn(Value) -> Result<PortableMigrationOutcome, MigrationFailure> + Send + Sync>,
+}
+
+/// A trusted global migration declares exactly the requirements it introduces.
+pub struct PortableMigrationOutcome {
+    pub value: Value,
+    pub introduced_requirements: BTreeSet<SemanticCapability>,
+    pub applied_migrations: Vec<AppliedMigration>,
+}
+
+/// Pack-owned decoding cannot replace the host's snapshot or wrapper fields.
+pub struct DecodedPortableDomain {
+    pub document: ScenarioDocument,
+    pub required_capabilities: BTreeSet<SemanticCapability>,
+    pub applied_migrations: Vec<AppliedMigration>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackMigrationVersionSpace {
+    Internal,
+    Portable,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationSubject {
+    pub pack_id: PackId,
+    pub scenario_id: ScenarioId,
+    pub revision: Revision,
 }
 
 #[derive(Clone, Debug, Error)]
-#[error("{message}")]
-pub struct MigrationFailure {
-    pub message: String,
+pub enum MigrationFailure {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("domain validation failed")]
+    Validation(ValidationReport),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -119,6 +165,10 @@ pub struct AppliedMigration {
     pub name: String,
     pub from_version: u32,
     pub to_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_space: Option<PackMigrationVersionSpace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<MigrationSubject>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -179,14 +229,14 @@ impl MigrationRegistries {
                     "outer migrations must be sequential".to_owned(),
                 ));
             }
-            bundle = (step.migrate)(bundle).map_err(|failure| {
-                ImportError::Migration(format!("{}: {}", step.name, failure.message))
-            })?;
+            bundle = (step.migrate)(bundle).map_err(ImportError::Migration)?;
             applied.push(AppliedMigration {
                 registry: MigrationRegistryKind::Outer,
                 name: step.name.to_owned(),
                 from_version: step.from_version,
                 to_version: step.to_version,
+                version_space: None,
+                subject: None,
             });
             version = step.to_version;
         }
@@ -197,6 +247,8 @@ impl MigrationRegistries {
         &self,
         mut version: u32,
         mut value: Value,
+        path: &str,
+        limits: &PortableLimits,
         applied: &mut Vec<AppliedMigration>,
     ) -> Result<Value, ImportError> {
         while version < CURRENT_PORTABLE_SCHEMA_VERSION {
@@ -209,23 +261,65 @@ impl MigrationRegistries {
                     found: version,
                     current: CURRENT_PORTABLE_SCHEMA_VERSION,
                 })?;
-            if step.to_version != version.saturating_add(1) {
-                return Err(ImportError::MigrationRegistry(
-                    "portable migrations must be sequential".to_owned(),
-                ));
+            let before = scenario_requirements(&value, version, path)?;
+            let outcome = (step.migrate)(value).map_err(ImportError::Migration)?;
+            value = outcome.value;
+            if required_u32(&value, "schemaVersion", path)? != step.to_version {
+                return Err(ImportError::Migration(MigrationFailure::Invalid(
+                    "portable migration did not produce its declared next version".to_owned(),
+                )));
             }
-            value = (step.migrate)(value).map_err(|failure| {
-                ImportError::Migration(format!("{}: {}", step.name, failure.message))
-            })?;
+            validate_json_limits(path, &value, limits, 0)?;
+            if u64::try_from(
+                canonical_json(&value)
+                    .map_err(|error| {
+                        ImportError::Migration(MigrationFailure::Invalid(error.to_string()))
+                    })?
+                    .len(),
+            )
+            .map_or(true, |size| size > limits.max_json_bytes)
+            {
+                return Err(ImportError::JsonLimit {
+                    path: path.to_owned(),
+                    limit: "document bytes",
+                });
+            }
+            let after = scenario_requirements(&value, step.to_version, path)?;
+            let introduced = after.difference(&before).cloned().collect::<BTreeSet<_>>();
+            if introduced != outcome.introduced_requirements {
+                return Err(ImportError::Migration(MigrationFailure::Invalid(
+                    "portable migration requirement changes are not exactly declared".to_owned(),
+                )));
+            }
+            applied.extend(outcome.applied_migrations);
+            version = step.to_version;
+        }
+        Ok(value)
+    }
+
+    fn record_global_portable_migrations(
+        &self,
+        mut version: u32,
+        applied: &mut Vec<AppliedMigration>,
+    ) {
+        while let Some(step) = self
+            .portable
+            .iter()
+            .find(|step| step.from_version == version)
+        {
+            if version >= CURRENT_PORTABLE_SCHEMA_VERSION {
+                break;
+            }
             applied.push(AppliedMigration {
                 registry: MigrationRegistryKind::Portable,
                 name: step.name.to_owned(),
                 from_version: step.from_version,
                 to_version: step.to_version,
+                version_space: None,
+                subject: None,
             });
             version = step.to_version;
         }
-        Ok(value)
     }
 
     fn supports_outer_version(&self, mut version: u32) -> bool {
@@ -371,7 +465,7 @@ pub enum ImportError {
     #[error("portable migration registry is invalid: {0}")]
     MigrationRegistry(String),
     #[error("portable migration failed: {0}")]
-    Migration(String),
+    Migration(MigrationFailure),
     #[error("ZIP parsing failed: {0}")]
     Zip(#[from] zip::result::ZipError),
     #[error("archive I/O failed: {0}")]
@@ -404,8 +498,8 @@ pub struct InspectedBundle {
     pub file_sha256: String,
     pub manifest: BundleManifest,
     pub checksums: Checksums,
-    pub scenarios: Vec<PortableScenario>,
-    pub scenario_revisions: Vec<PortableScenario>,
+    pub scenarios: Vec<ScenarioSnapshotV1>,
+    pub scenario_revisions: Vec<ScenarioSnapshotV1>,
     pub additional_entries: BTreeMap<String, Vec<u8>>,
     pub applied_migrations: Vec<AppliedMigration>,
     pub original_format_version: u32,
@@ -440,7 +534,8 @@ pub struct PreservedScenarioMetadata {
     pub path: String,
     pub scenario_id: Option<String>,
     pub pack_id: Option<String>,
-    pub pack_schema_version: Option<u32>,
+    pub internal_pack_schema_version: Option<u32>,
+    pub portable_pack_schema_version: Option<u32>,
 }
 
 /// Bounded original archive bytes retained only for exact re-export.
@@ -834,26 +929,81 @@ fn validate_archive_metadata(bytes: &[u8], policy: &InspectionPolicy) -> Result<
     Ok(())
 }
 
+// All archive passes share the same actual-output bound, including checksum-only inspection.
+fn consume_bounded_zip_entry(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    path: &str,
+    declared_size: u64,
+    max_entry_bytes: u64,
+    remaining_total: &mut u64,
+    mut consume: impl FnMut(&[u8]),
+) -> Result<(), ImportError> {
+    if declared_size > max_entry_bytes {
+        return Err(ImportError::EntryTooLarge {
+            path: path.to_owned(),
+        });
+    }
+    if declared_size > *remaining_total {
+        return Err(ImportError::TotalSizeExceeded);
+    }
+    let mut count = 0_u64;
+    loop {
+        let remaining = declared_size
+            .saturating_sub(count)
+            .min(max_entry_bytes.saturating_sub(count))
+            .min(*remaining_total);
+        let request = usize::try_from(remaining.saturating_add(1))
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
+        let read = reader.read(&mut buffer[..request])?;
+        if read == 0 {
+            break;
+        }
+        let amount = u64::try_from(read).map_err(|_| ImportError::TotalSizeExceeded)?;
+        if amount > remaining {
+            return Err(if amount > *remaining_total {
+                ImportError::TotalSizeExceeded
+            } else {
+                ImportError::EntryTooLarge {
+                    path: path.to_owned(),
+                }
+            });
+        }
+        count = count
+            .checked_add(amount)
+            .ok_or(ImportError::TotalSizeExceeded)?;
+        *remaining_total = remaining_total
+            .checked_sub(amount)
+            .ok_or(ImportError::TotalSizeExceeded)?;
+        consume(&buffer[..read]);
+    }
+    if count != declared_size {
+        return Err(ImportError::EntryTooLarge {
+            path: path.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn read_fixed_entry(bytes: &[u8], path: &str, max_bytes: u64) -> Result<Vec<u8>, ImportError> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
     let mut entry = archive
         .by_name(path)
         .map_err(|_| ImportError::MissingEntry(path.to_owned()))?;
-    if entry.size() > max_bytes {
-        return Err(ImportError::EntryTooLarge {
-            path: path.to_owned(),
-        });
-    }
+    let declared_size = entry.size();
     let mut content = Vec::new();
-    entry
-        .by_ref()
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut content)?;
-    if u64::try_from(content.len()).map_or(true, |size| size > max_bytes || size != entry.size()) {
-        return Err(ImportError::EntryTooLarge {
-            path: path.to_owned(),
-        });
-    }
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut remaining = max_bytes;
+    consume_bounded_zip_entry(
+        &mut entry,
+        &mut buffer,
+        path,
+        declared_size,
+        max_bytes,
+        &mut remaining,
+        |chunk| content.extend_from_slice(chunk),
+    )?;
     Ok(content)
 }
 
@@ -886,9 +1036,25 @@ struct CapabilityMetadataWire {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ScenarioEnvelopeMetadata {
     #[serde(default)]
+    schema_version: Option<u32>,
+    #[serde(default)]
+    scenario_id: Option<String>,
+    #[serde(default)]
+    domain: Option<PortableDomainMetadata>,
+    #[serde(default)]
     document: Option<ScenarioDocumentMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortableDomainMetadata {
+    #[serde(default)]
+    pack_id: Option<String>,
+    #[serde(default)]
+    schema_version: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -909,6 +1075,26 @@ struct ScenarioPackMetadata {
     id: Option<String>,
     #[serde(default)]
     schema_version: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScenarioRequirementMetadata {
+    schema_version: u32,
+    #[serde(default)]
+    required_capabilities: BTreeSet<SemanticCapability>,
+    // This is a JSON object projection, not a set encoded as a JSON array.
+    #[expect(clippy::zero_sized_map_values)]
+    #[serde(default)]
+    semantic_extensions: BTreeMap<String, IgnoredAny>,
+    #[serde(default)]
+    domain: Option<DomainRequirementMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DomainRequirementMetadata {
+    required_capabilities: BTreeSet<SemanticCapability>,
 }
 
 fn parse_metadata_json<T: DeserializeOwned>(
@@ -1009,6 +1195,7 @@ fn stream_validate_checksums(
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
     let mut seen = BTreeSet::new();
     let mut buffer = [0_u8; 16 * 1024];
+    let mut remaining_total = policy.limits.max_total_uncompressed_bytes;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
         let path = std::str::from_utf8(entry.name_raw())
@@ -1029,24 +1216,22 @@ fn stream_validate_checksums(
         };
         let mut hasher = Sha256::new();
         let mut prefix = Vec::with_capacity(262);
-        let mut count = 0_u64;
-        loop {
-            let read = entry.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            count = count
-                .checked_add(u64::try_from(read).map_err(|_| ImportError::TotalSizeExceeded)?)
-                .ok_or(ImportError::TotalSizeExceeded)?;
-            hasher.update(&buffer[..read]);
-            if prefix.len() < 262 {
-                let remaining = 262 - prefix.len();
-                prefix.extend_from_slice(&buffer[..read.min(remaining)]);
-            }
-        }
-        if count != entry.size() {
-            return Err(ImportError::EntryTooLarge { path });
-        }
+        let declared_size = entry.size();
+        consume_bounded_zip_entry(
+            &mut entry,
+            &mut buffer,
+            &path,
+            declared_size,
+            policy.limits.max_entry_bytes,
+            &mut remaining_total,
+            |chunk| {
+                hasher.update(chunk);
+                if prefix.len() < 262 {
+                    let remaining = 262 - prefix.len();
+                    prefix.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                }
+            },
+        )?;
         reject_prohibited_content(&path, &prefix)?;
         if let Some(expected) = expected {
             let actual = format!("{:x}", hasher.finalize());
@@ -1126,7 +1311,6 @@ fn preflight_manifest(
                 "a required capability declaration is invalid".to_owned(),
             ));
         }
-        require_capability(capability, policy)?;
     }
     Ok((
         value,
@@ -1146,6 +1330,8 @@ fn read_archive_entries(
     }
 
     let mut entries = BTreeMap::new();
+    let mut remaining_total = policy.limits.max_total_uncompressed_bytes;
+    let mut buffer = [0_u8; 16 * 1024];
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
         let raw_name = entry.name_raw();
@@ -1158,13 +1344,15 @@ fn read_archive_entries(
         let normalized = normalize_path(&name, policy.limits.max_path_bytes)?;
         let declared_size = entry.size();
         let mut content = Vec::new();
-        entry
-            .by_ref()
-            .take(policy.limits.max_entry_bytes.saturating_add(1))
-            .read_to_end(&mut content)?;
-        if u64::try_from(content.len()) != Ok(declared_size) {
-            return Err(ImportError::EntryTooLarge { path: normalized });
-        }
+        consume_bounded_zip_entry(
+            &mut entry,
+            &mut buffer,
+            &normalized,
+            declared_size,
+            policy.limits.max_entry_bytes,
+            &mut remaining_total,
+            |chunk| content.extend_from_slice(chunk),
+        )?;
         reject_prohibited_content(&normalized, &content)?;
         if entries.insert(normalized.clone(), content).is_some() {
             return Err(ImportError::DuplicatePath(normalized));
@@ -1174,8 +1362,8 @@ fn read_archive_entries(
 }
 
 struct InspectedLogicalEntries {
-    scenarios: Vec<PortableScenario>,
-    scenario_revisions: Vec<PortableScenario>,
+    scenarios: Vec<ScenarioSnapshotV1>,
+    scenario_revisions: Vec<ScenarioSnapshotV1>,
     additional_entries: BTreeMap<String, Vec<u8>>,
     retained_memory_bytes: usize,
 }
@@ -1219,7 +1407,11 @@ fn add_retained_memory(
     Ok(())
 }
 
-fn retained_value_memory_charge(value: &Value) -> Option<usize> {
+/// Conservative checked allocation charge for a retained JSON value.
+///
+/// Returns `None` on size overflow; callers must reject rather than undercharge.
+#[must_use]
+pub fn retained_value_memory_charge(value: &Value) -> Option<usize> {
     let mut charge = size_of::<Value>();
     match value {
         Value::String(string) => charge.checked_add(string.capacity()),
@@ -1248,18 +1440,201 @@ fn retained_value_memory_charge(value: &Value) -> Option<usize> {
     }
 }
 
+fn declared_capabilities(
+    value: Option<&Value>,
+    path: &str,
+) -> Result<BTreeSet<SemanticCapability>, ImportError> {
+    let capabilities: BTreeSet<SemanticCapability> = value
+        .map_or_else(
+            || Ok(BTreeSet::new()),
+            |value| serde_json::from_value(value.clone()),
+        )
+        .map_err(|error| ImportError::InvalidScenario {
+            path: path.to_owned(),
+            message: error.to_string(),
+        })?;
+    if capabilities
+        .iter()
+        .any(|capability| capability.version == 0 || !valid_namespace(&capability.id))
+    {
+        return Err(ImportError::InvalidScenario {
+            path: path.to_owned(),
+            message: "invalid semantic capability declaration".to_owned(),
+        });
+    }
+    Ok(capabilities)
+}
+
+fn scenario_requirements(
+    value: &Value,
+    version: u32,
+    path: &str,
+) -> Result<BTreeSet<SemanticCapability>, ImportError> {
+    let mut requirements = declared_capabilities(value.get("requiredCapabilities"), path)?;
+    if version >= 2 {
+        requirements.extend(declared_capabilities(
+            value
+                .get("domain")
+                .and_then(|domain| domain.get("requiredCapabilities")),
+            path,
+        )?);
+    }
+    Ok(requirements)
+}
+
+/// Check the source declarations before any trusted migration can introduce requirements.
+fn validate_source_requirements(
+    entries: &BTreeMap<String, Vec<u8>>,
+    manifest: &BundleManifest,
+    policy: &InspectionPolicy,
+) -> Result<(), ImportError> {
+    let mut requirements = BTreeSet::new();
+    for (path, content) in entries {
+        if !path.starts_with("scenarios/") && !path.starts_with("scenario-revisions/") {
+            continue;
+        }
+        let metadata: ScenarioRequirementMetadata =
+            parse_metadata_json(path, Cursor::new(content))?;
+        if metadata.schema_version != manifest.schema_version {
+            return Err(ImportError::InvalidScenario {
+                path: path.clone(),
+                message: "scenario schema version does not match the source manifest".to_owned(),
+            });
+        }
+        let host_requirements = metadata.required_capabilities;
+        for capability in &host_requirements {
+            require_capability(capability, policy)?;
+        }
+        for namespace in metadata.semantic_extensions.keys() {
+            if !host_requirements
+                .iter()
+                .any(|capability| capability.id == *namespace)
+            {
+                return Err(ImportError::UnsupportedCapability {
+                    id: namespace.clone(),
+                    version: 0,
+                });
+            }
+        }
+        requirements.extend(host_requirements);
+        if metadata.schema_version >= 2 {
+            let domain = metadata
+                .domain
+                .ok_or_else(|| ImportError::InvalidScenario {
+                    path: path.clone(),
+                    message: "portable domain requirements are missing".to_owned(),
+                })?;
+            requirements.extend(domain.required_capabilities);
+        }
+    }
+    if requirements != manifest.required_capabilities {
+        return Err(ImportError::InvalidManifest(
+            "required capabilities are not the exact union of source scenario declarations"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn decode_portable_snapshot(
+    wire: PortableScenario,
+    path: &str,
+    decode_domain: &impl Fn(&PortableScenario) -> Result<DecodedPortableDomain, MigrationFailure>,
+    applied: &mut Vec<AppliedMigration>,
+) -> Result<(ScenarioSnapshotV1, BTreeSet<SemanticCapability>), ImportError> {
+    if wire.format != ScenarioFormat::EuthetoScenario
+        || wire.schema_version != CURRENT_PORTABLE_SCHEMA_VERSION
+        || wire
+            .domain
+            .payload
+            .get("schemaVersion")
+            .and_then(Value::as_u64)
+            != Some(u64::from(wire.domain.schema_version))
+    {
+        return Err(ImportError::InvalidScenario {
+            path: path.to_owned(),
+            message: "invalid portable envelope or mismatched domain payload version".to_owned(),
+        });
+    }
+    let decoded = decode_domain(&wire).map_err(ImportError::Migration)?;
+    if decoded.document.scenario_id != wire.scenario_id
+        || decoded.document.format != wire.format
+        || decoded.document.metadata != wire.metadata
+        || decoded.document.settings != wire.settings
+        || decoded.document.domain_pack.id != wire.domain.pack_id
+    {
+        return Err(ImportError::Migration(MigrationFailure::Invalid(
+            "domain decoding changed host-owned scenario fields".to_owned(),
+        )));
+    }
+    if decoded.applied_migrations.is_empty()
+        && decoded.required_capabilities != wire.domain.required_capabilities
+    {
+        return Err(ImportError::Migration(MigrationFailure::Invalid(
+            "domain decoding changed requirements without a migration".to_owned(),
+        )));
+    }
+    applied.extend(decoded.applied_migrations);
+    let mut requirements = wire.required_capabilities.clone();
+    requirements.extend(decoded.required_capabilities);
+    Ok((
+        ScenarioSnapshotV1 {
+            format: wire.format,
+            schema_version: SCENARIO_SNAPSHOT_SCHEMA_VERSION,
+            revision: wire.revision,
+            document: decoded.document,
+            project: wire.project,
+            required_capabilities: wire.required_capabilities,
+            semantic_extensions: wire.semantic_extensions,
+            extensions: wire.extensions,
+        },
+        requirements,
+    ))
+}
+
+fn decoded_snapshot_memory_charge(
+    path: &str,
+    scenario: &ScenarioSnapshotV1,
+    limits: &PortableLimits,
+) -> Result<usize, ImportError> {
+    let value = serde_json::to_value(scenario).map_err(|error| ImportError::InvalidScenario {
+        path: path.to_owned(),
+        message: error.to_string(),
+    })?;
+    validate_json_limits(path, &value, limits, 0)?;
+    let encoded_bytes = canonical_json(&value)
+        .map_err(|error| ImportError::Migration(MigrationFailure::Invalid(error.to_string())))?
+        .len();
+    if u64::try_from(encoded_bytes).map_or(true, |size| size > limits.max_json_bytes) {
+        return Err(ImportError::JsonLimit {
+            path: path.to_owned(),
+            limit: "document bytes",
+        });
+    }
+    conservative_parsed_memory_charge(
+        path,
+        encoded_bytes,
+        retained_value_memory_charge(&value).ok_or_else(|| ImportError::JsonLimit {
+            path: path.to_owned(),
+            limit: "representation bytes",
+        })?,
+    )
+}
+
 fn inspect_logical_entries(
     entries: BTreeMap<String, Vec<u8>>,
-    manifest: &BundleManifest,
+    manifest: &mut BundleManifest,
     policy: &InspectionPolicy,
     registries: &MigrationRegistries,
     applied_migrations: &mut Vec<AppliedMigration>,
     initial_retained_memory_bytes: usize,
+    decode_domain: &impl Fn(&PortableScenario) -> Result<DecodedPortableDomain, MigrationFailure>,
 ) -> Result<InspectedLogicalEntries, ImportError> {
     let mut scenarios = Vec::new();
     let mut scenario_revisions = Vec::new();
     let mut additional_entries = BTreeMap::new();
     let mut retained_memory_bytes = initial_retained_memory_bytes;
+    let mut effective_requirements = BTreeSet::new();
     for (path, content) in entries {
         if path.starts_with("scenarios/") || path.starts_with("scenario-revisions/") {
             let historical = path.starts_with("scenario-revisions/");
@@ -1277,21 +1652,13 @@ fn inspect_logical_entries(
             )?;
             let value = parsed.value;
             let version = required_u32(&value, "schemaVersion", &path)?;
-            if version > CURRENT_PORTABLE_SCHEMA_VERSION {
-                return Err(ImportError::UnsupportedNewerVersion {
-                    space: VersionSpace::PortableSchema,
-                    found: version,
-                    current: CURRENT_PORTABLE_SCHEMA_VERSION,
-                });
-            }
-            if !registries.supports_portable_version(version) {
-                return Err(ImportError::UnsupportedOlderVersion {
-                    space: VersionSpace::PortableSchema,
-                    found: version,
-                    current: CURRENT_PORTABLE_SCHEMA_VERSION,
-                });
-            }
-            let current = registries.migrate_portable(version, value, applied_migrations)?;
+            let current = registries.migrate_portable(
+                version,
+                value,
+                &path,
+                &policy.limits,
+                applied_migrations,
+            )?;
             let migrated_memory_bytes = conservative_parsed_memory_charge(
                 &path,
                 content.len(),
@@ -1306,11 +1673,25 @@ fn inspect_logical_entries(
                 migrated_memory_bytes.saturating_sub(parsed_memory_bytes),
                 policy.limits.max_total_uncompressed_bytes,
             )?;
-            let scenario: PortableScenario =
+            let wire: PortableScenario =
                 serde_json::from_value(current).map_err(|error| ImportError::InvalidScenario {
                     path: path.clone(),
                     message: error.to_string(),
                 })?;
+            let (scenario, requirements) =
+                decode_portable_snapshot(wire, &path, decode_domain, applied_migrations)?;
+            let decoded_memory_bytes =
+                decoded_snapshot_memory_charge(&path, &scenario, &policy.limits)?;
+            add_retained_memory(
+                &path,
+                &mut retained_memory_bytes,
+                decoded_memory_bytes.saturating_sub(parsed_memory_bytes.max(migrated_memory_bytes)),
+                policy.limits.max_total_uncompressed_bytes,
+            )?;
+            manifest
+                .required_capabilities
+                .extend(requirements.iter().cloned());
+            effective_requirements.extend(requirements);
             if historical {
                 validate_historical_scenario(&path, &scenario, manifest, policy)?;
                 scenario_revisions.push(scenario);
@@ -1339,6 +1720,7 @@ fn inspect_logical_entries(
             additional_entries.insert(path, content);
         }
     }
+    manifest.required_capabilities = effective_requirements;
     scenarios.sort_by_key(|scenario| scenario.document.scenario_id);
     scenario_revisions.sort_by_key(|scenario| (scenario.document.scenario_id, scenario.revision));
     Ok(InspectedLogicalEntries {
@@ -1368,6 +1750,59 @@ fn parse_and_validate_checksums(
     Ok((checksums, checksums_memory_bytes))
 }
 
+struct ValidatedOuterBundle {
+    manifest: BundleManifest,
+    entries: BTreeMap<String, Vec<u8>>,
+    manifest_memory_bytes: usize,
+}
+
+fn migrate_and_validate_outer_bundle(
+    logical: LogicalBundle,
+    original_format_version: u32,
+    original_schema_version: u32,
+    policy: &InspectionPolicy,
+    registries: &MigrationRegistries,
+    applied_migrations: &mut Vec<AppliedMigration>,
+) -> Result<ValidatedOuterBundle, ImportError> {
+    let LogicalBundle {
+        manifest: manifest_value,
+        mut entries,
+    } = registries.migrate_outer(original_format_version, logical, applied_migrations)?;
+    let manifest_memory_bytes = conservative_parsed_memory_charge(
+        MANIFEST_PATH,
+        0,
+        retained_value_memory_charge(&manifest_value).ok_or_else(|| ImportError::JsonLimit {
+            path: MANIFEST_PATH.to_owned(),
+            limit: "representation bytes",
+        })?,
+    )?;
+    let manifest: BundleManifest = serde_json::from_value(manifest_value)
+        .map_err(|error| ImportError::InvalidManifest(error.to_string()))?;
+    validate_manifest(&manifest, policy, registries)?;
+    if manifest.schema_version != original_schema_version {
+        return Err(ImportError::Migration(MigrationFailure::Invalid(
+            "outer migration changed the global portable version".to_owned(),
+        )));
+    }
+    validate_counts(&manifest, &entries)?;
+    entries.remove(MANIFEST_PATH);
+    entries.remove(CHECKSUMS_PATH);
+    validate_portable_payloads(
+        &manifest,
+        &policy.limits,
+        entries
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_slice())),
+    )
+    .map_err(|error| ImportError::InvalidManifest(error.0))?;
+    validate_source_requirements(&entries, &manifest, policy)?;
+    Ok(ValidatedOuterBundle {
+        manifest,
+        entries,
+        manifest_memory_bytes,
+    })
+}
+
 /// Inspect bytes completely under limits. Nothing is extracted or made live.
 ///
 /// # Errors
@@ -1379,6 +1814,7 @@ pub fn inspect_bundle(
     bytes: &[u8],
     policy: &InspectionPolicy,
     registries: &MigrationRegistries,
+    decode_domain: &impl Fn(&PortableScenario) -> Result<DecodedPortableDomain, MigrationFailure>,
 ) -> Result<InspectedBundle, ImportError> {
     let effective_policy = policy.hardened();
     let policy = &effective_policy;
@@ -1400,40 +1836,21 @@ pub fn inspect_bundle(
         parse_and_validate_checksums(&entries, &policy.limits)?;
 
     let mut applied_migrations = Vec::new();
-    let logical = registries.migrate_outer(
-        original_format_version,
+    let ValidatedOuterBundle {
+        mut manifest,
+        entries,
+        manifest_memory_bytes: migrated_manifest_memory_bytes,
+    } = migrate_and_validate_outer_bundle(
         LogicalBundle {
             manifest: manifest_value,
             entries,
         },
+        original_format_version,
+        original_schema_version,
+        policy,
+        registries,
         &mut applied_migrations,
     )?;
-    let LogicalBundle {
-        manifest: manifest_value,
-        mut entries,
-    } = logical;
-    let migrated_manifest_memory_bytes = conservative_parsed_memory_charge(
-        MANIFEST_PATH,
-        0,
-        retained_value_memory_charge(&manifest_value).ok_or_else(|| ImportError::JsonLimit {
-            path: MANIFEST_PATH.to_owned(),
-            limit: "representation bytes",
-        })?,
-    )?;
-    let mut manifest: BundleManifest = serde_json::from_value(manifest_value)
-        .map_err(|error| ImportError::InvalidManifest(error.to_string()))?;
-    validate_manifest(&manifest, policy, registries)?;
-    validate_counts(&manifest, &entries)?;
-    entries.remove(MANIFEST_PATH);
-    entries.remove(CHECKSUMS_PATH);
-    validate_portable_payloads(
-        &manifest,
-        &policy.limits,
-        entries
-            .iter()
-            .map(|(path, content)| (path.as_str(), content.as_slice())),
-    )
-    .map_err(|error| ImportError::InvalidManifest(error.0))?;
     let mut initial_retained_memory_bytes = 0_usize;
     add_retained_memory(
         MANIFEST_PATH,
@@ -1447,22 +1864,44 @@ pub fn inspect_bundle(
         checksums_memory_bytes,
         policy.limits.max_total_uncompressed_bytes,
     )?;
+    registries.record_global_portable_migrations(original_schema_version, &mut applied_migrations);
     let InspectedLogicalEntries {
         scenarios,
         scenario_revisions,
         additional_entries,
-        retained_memory_bytes: logical_memory_bytes,
+        retained_memory_bytes: mut logical_memory_bytes,
     } = inspect_logical_entries(
         entries,
-        &manifest,
+        &mut manifest,
         policy,
         registries,
         &mut applied_migrations,
         initial_retained_memory_bytes,
+        decode_domain,
     )?;
     validate_bundle_references(&scenarios, &scenario_revisions, &additional_entries)?;
     manifest.format_version = CURRENT_BUNDLE_FORMAT_VERSION;
     manifest.schema_version = CURRENT_PORTABLE_SCHEMA_VERSION;
+    let effective_metadata = serde_json::to_value((&manifest, &applied_migrations))
+        .map_err(|error| ImportError::Migration(MigrationFailure::Invalid(error.to_string())))?;
+    validate_json_limits(MANIFEST_PATH, &effective_metadata[1], &policy.limits, 0)?;
+    let metadata_charge = conservative_parsed_memory_charge(
+        MANIFEST_PATH,
+        0,
+        retained_value_memory_charge(&effective_metadata).ok_or_else(|| {
+            ImportError::JsonLimit {
+                path: MANIFEST_PATH.to_owned(),
+                limit: "representation bytes",
+            }
+        })?,
+    )?;
+    add_retained_memory(
+        MANIFEST_PATH,
+        &mut logical_memory_bytes,
+        metadata_charge.saturating_sub(manifest_memory_bytes.max(migrated_manifest_memory_bytes)),
+        policy.limits.max_total_uncompressed_bytes,
+    )?;
+    drop(effective_metadata);
 
     Ok(InspectedBundle {
         file_sha256: sha256_hex(bytes),
@@ -1607,16 +2046,31 @@ pub fn preflight_bundle_metadata(
             });
         }
         let envelope: ScenarioEnvelopeMetadata = parse_metadata_json(&path, entry.by_ref())?;
-        let document = envelope.document;
-        let scenario_id = document
-            .as_ref()
-            .and_then(|document| document.scenario_id.as_ref())
-            .filter(|value| value.len() <= policy.limits.max_string_bytes)
-            .cloned();
-        let pack = document.and_then(|document| document.domain_pack);
-        let pack_id = pack
-            .as_ref()
-            .and_then(|pack| pack.id.as_ref())
+        let (scenario_id, pack_id, internal_version, portable_version) =
+            match envelope.schema_version {
+                Some(0 | 1) => {
+                    let document = envelope.document;
+                    let scenario_id = document.as_ref().and_then(|doc| doc.scenario_id.clone());
+                    let pack = document.and_then(|doc| doc.domain_pack);
+                    let version = pack.as_ref().and_then(|pack| pack.schema_version);
+                    (scenario_id, pack.and_then(|pack| pack.id), version, None)
+                }
+                Some(_) => {
+                    let version = envelope
+                        .domain
+                        .as_ref()
+                        .and_then(|domain| domain.schema_version);
+                    (
+                        envelope.scenario_id,
+                        envelope.domain.and_then(|domain| domain.pack_id),
+                        None,
+                        version,
+                    )
+                }
+                None => (None, None, None, None),
+            };
+        let scenario_id = scenario_id.filter(|value| value.len() <= policy.limits.max_string_bytes);
+        let pack_id = pack_id
             .filter(|value| value.len() <= policy.limits.max_string_bytes)
             .and_then(|id| id.parse::<PackId>().ok())
             .map(|id| id.to_string());
@@ -1624,7 +2078,8 @@ pub fn preflight_bundle_metadata(
             path,
             scenario_id,
             pack_id,
-            pack_schema_version: pack.as_ref().and_then(|pack| pack.schema_version),
+            internal_pack_schema_version: internal_version,
+            portable_pack_schema_version: portable_version,
         });
     }
     scenarios.sort_by(|left, right| left.path.cmp(&right.path));
@@ -1702,8 +2157,8 @@ fn register_bundle_owned_uuid(
 }
 
 fn validate_bundle_references(
-    scenarios: &[PortableScenario],
-    scenario_revisions: &[PortableScenario],
+    scenarios: &[ScenarioSnapshotV1],
+    scenario_revisions: &[ScenarioSnapshotV1],
     entries: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(), ImportError> {
     for scenario in scenarios.iter().chain(scenario_revisions) {
@@ -1892,7 +2347,7 @@ fn validate_result_bundle_reference(
     Ok(())
 }
 fn validate_owned_identity_families<'a>(
-    scenarios: impl IntoIterator<Item = &'a PortableScenario>,
+    scenarios: impl IntoIterator<Item = &'a ScenarioSnapshotV1>,
 ) -> Result<(), ImportError> {
     let mut owners = BTreeMap::new();
     for scenario in scenarios {
@@ -2038,7 +2493,6 @@ fn validate_manifest(
                 "a required capability declaration is invalid".to_owned(),
             ));
         }
-        require_capability(capability, policy)?;
     }
     for namespace in &manifest.nonsemantic_extensions {
         if !valid_namespace(namespace) {
@@ -2084,12 +2538,12 @@ fn require_capability(
 
 fn validate_scenario(
     path: &str,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     manifest: &BundleManifest,
     policy: &InspectionPolicy,
 ) -> Result<(), ImportError> {
     if scenario.format != ScenarioFormat::EuthetoScenario
-        || scenario.schema_version != CURRENT_PORTABLE_SCHEMA_VERSION
+        || scenario.schema_version != SCENARIO_SNAPSHOT_SCHEMA_VERSION
     {
         return Err(ImportError::InvalidScenario {
             path: path.to_owned(),
@@ -2116,7 +2570,7 @@ fn validate_scenario(
 
 fn validate_historical_scenario(
     path: &str,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     manifest: &BundleManifest,
     policy: &InspectionPolicy,
 ) -> Result<(), ImportError> {
@@ -2143,12 +2597,12 @@ fn validate_historical_scenario(
 
 fn validate_scenario_contents(
     path: &str,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     manifest: &BundleManifest,
     policy: &InspectionPolicy,
 ) -> Result<(), ImportError> {
     if scenario.format != ScenarioFormat::EuthetoScenario
-        || scenario.schema_version != CURRENT_PORTABLE_SCHEMA_VERSION
+        || scenario.schema_version != SCENARIO_SNAPSHOT_SCHEMA_VERSION
     {
         return Err(ImportError::InvalidScenario {
             path: path.to_owned(),
@@ -2167,7 +2621,7 @@ fn validate_scenario_contents(
             });
         }
     }
-    validate_current_portable_scenario(scenario).map_err(|error| ImportError::InvalidScenario {
+    validate_scenario_snapshot(scenario).map_err(|error| ImportError::InvalidScenario {
         path: path.to_owned(),
         message: error.to_string(),
     })?;
@@ -2413,6 +2867,28 @@ impl JsonBudget {
         }
         self.add_representation::<E>(bytes)
     }
+
+    fn visit_value(&mut self, value: &Value, depth: usize) -> Result<(), serde_json::Error> {
+        self.enter_node::<serde_json::Error>(depth)?;
+        match value {
+            Value::String(value) => self.add_string::<serde_json::Error>(value.len(), false)?,
+            Value::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    self.add_item::<serde_json::Error>(index)?;
+                    self.visit_value(value, depth.saturating_add(1))?;
+                }
+            }
+            Value::Object(values) => {
+                for (index, (key, value)) in values.iter().enumerate() {
+                    self.add_string::<serde_json::Error>(key.len(), true)?;
+                    self.add_item::<serde_json::Error>(index)?;
+                    self.visit_value(value, depth.saturating_add(1))?;
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+        Ok(())
+    }
 }
 
 fn json_limit_from_error(path: &str, message: &str) -> Option<ImportError> {
@@ -2495,52 +2971,17 @@ fn validate_json_limits(
     limits: &PortableLimits,
     depth: usize,
 ) -> Result<(), ImportError> {
-    if depth > limits.max_json_depth {
-        return Err(ImportError::JsonLimit {
+    let mut budget = JsonBudget::new(limits).map_err(|limit| ImportError::JsonLimit {
+        path: path.to_owned(),
+        limit,
+    })?;
+    budget.visit_value(value, depth).map_err(|error| {
+        let message = error.to_string();
+        json_limit_from_error(path, &message).unwrap_or_else(|| ImportError::InvalidJson {
             path: path.to_owned(),
-            limit: "nesting depth",
-        });
-    }
-    match value {
-        Value::String(value) => {
-            if value.len() > limits.max_string_bytes {
-                return Err(ImportError::JsonLimit {
-                    path: path.to_owned(),
-                    limit: "string bytes",
-                });
-            }
-        }
-        Value::Array(values) => {
-            if values.len() > limits.max_collection_items {
-                return Err(ImportError::JsonLimit {
-                    path: path.to_owned(),
-                    limit: "array items",
-                });
-            }
-            for value in values {
-                validate_json_limits(path, value, limits, depth.saturating_add(1))?;
-            }
-        }
-        Value::Object(values) => {
-            if values.len() > limits.max_collection_items {
-                return Err(ImportError::JsonLimit {
-                    path: path.to_owned(),
-                    limit: "object fields",
-                });
-            }
-            for (key, value) in values {
-                if key.len() > limits.max_string_bytes {
-                    return Err(ImportError::JsonLimit {
-                        path: path.to_owned(),
-                        limit: "object key bytes",
-                    });
-                }
-                validate_json_limits(path, value, limits, depth.saturating_add(1))?;
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-    Ok(())
+            message,
+        })
+    })
 }
 
 struct StrictValueSeed<'a> {
@@ -2755,7 +3196,7 @@ pub struct ImportPreview {
 }
 
 fn same_identity_revision(
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     local: &LocalLibrarySnapshot,
 ) -> Result<(Revision, Option<String>), ImportError> {
     let scenario_id = scenario.document.scenario_id;
@@ -3135,7 +3576,7 @@ pub struct StagedScenario {
     /// high-water advancement.
     pub source_revision: Revision,
     pub disposition: StagedDisposition,
-    pub scenario: PortableScenario,
+    pub scenario: ScenarioSnapshotV1,
     /// Complete old-to-new UUID mapping applied to scenario-owned domain data.
     pub id_remap: BTreeMap<Uuid, Uuid>,
 }
@@ -3157,7 +3598,7 @@ pub struct StagedImport {
     pub binding: PreviewBinding,
     pub mode: RestoreMode,
     pub scenarios: Vec<StagedScenario>,
-    pub scenario_revisions: Vec<PortableScenario>,
+    pub scenario_revisions: Vec<ScenarioSnapshotV1>,
     pub results: BTreeMap<String, Vec<u8>>,
     pub shared_records: BTreeMap<String, Vec<u8>>,
     pub preferences: BTreeMap<String, Vec<u8>>,
@@ -3627,7 +4068,7 @@ fn stage_supplemental_sections(
     plan: &CollisionPlan,
     local: &LocalLibrarySnapshot,
     scenario_staging: &ScenarioStaging,
-    scenario_revisions: &[PortableScenario],
+    scenario_revisions: &[ScenarioSnapshotV1],
     mut split: SplitSections,
 ) -> Result<(SplitSections, BTreeSet<SupplementalIdentity>), ImportError> {
     split.shared_records = stage_json_section(
@@ -3697,7 +4138,7 @@ struct StagedReferences {
 
 fn staged_references(
     staged_scenarios: &[StagedScenario],
-    staged_scenario_revisions: &[PortableScenario],
+    staged_scenario_revisions: &[ScenarioSnapshotV1],
     split: &SplitSections,
 ) -> Result<StagedReferences, ImportError> {
     let represented = staged_scenarios
@@ -4166,10 +4607,10 @@ fn split_sections(
 }
 
 fn rewrite_scenario_for_plan(
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     copied: bool,
     mapping: &BTreeMap<Uuid, Uuid>,
-) -> Result<PortableScenario, ImportError> {
+) -> Result<ScenarioSnapshotV1, ImportError> {
     let mut domain = serde_json::to_value(&scenario.document.domain)
         .map_err(|error| ImportError::Remap(error.to_string()))?;
     let mut semantic_extensions = serde_json::to_value(&scenario.semantic_extensions)
@@ -4215,7 +4656,7 @@ fn rewrite_scenario_for_plan(
         .map_err(|error| ImportError::Remap(error.to_string()))?;
     rewritten.extensions = serde_json::from_value(wrapper_extensions)
         .map_err(|error| ImportError::Remap(error.to_string()))?;
-    validate_current_portable_scenario(&rewritten)
+    validate_scenario_snapshot(&rewritten)
         .map_err(|error| ImportError::Remap(error.to_string()))?;
     validate_document_shape(&rewritten.document)
         .map_err(|error| ImportError::Remap(error.to_string()))?;
@@ -4223,8 +4664,8 @@ fn rewrite_scenario_for_plan(
 }
 
 fn insert_scenario_revision(
-    revisions: &mut BTreeMap<(ScenarioId, Revision), PortableScenario>,
-    candidate: PortableScenario,
+    revisions: &mut BTreeMap<(ScenarioId, Revision), ScenarioSnapshotV1>,
+    candidate: ScenarioSnapshotV1,
 ) -> Result<(), ImportError> {
     let key = (candidate.document.scenario_id, candidate.revision);
     if let Some(existing) = revisions.get(&key) {
@@ -4245,7 +4686,7 @@ fn stage_scenario_revisions(
     retained_result_dependencies: &BTreeSet<(ScenarioId, Revision)>,
     mapping: &BTreeMap<Uuid, Uuid>,
     staged_scenarios: &[StagedScenario],
-) -> Result<Vec<PortableScenario>, ImportError> {
+) -> Result<Vec<ScenarioSnapshotV1>, ImportError> {
     let mut revisions = BTreeMap::new();
     for scenario in &inspected.scenario_revisions {
         let rewritten = rewrite_scenario_for_plan(
@@ -4281,7 +4722,7 @@ fn stage_scenario_revisions(
 
 fn collect_scenario_family_uuids(
     inspected: &InspectedBundle,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     ids: &mut BTreeSet<Uuid>,
 ) {
     ids.extend(collect_scenario_owned_uuids(scenario));
@@ -4337,7 +4778,7 @@ fn validate_replace_library_identity_ownership(
 
 fn scenario_has_local_collision(
     inspected: &InspectedBundle,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     local: &LocalLibrarySnapshot,
 ) -> bool {
     if local.scenario_ids.contains(&scenario.document.scenario_id) {
@@ -4374,7 +4815,7 @@ fn scenario_has_local_collision(
 }
 fn scenario_replace_is_safe(
     inspected: &InspectedBundle,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     local: &LocalLibrarySnapshot,
 ) -> bool {
     let scenario_id = scenario.document.scenario_id;
@@ -4746,12 +5187,12 @@ mod tests {
         Ok(())
     }
 
-    fn portable_scenario() -> Result<PortableScenario, Box<dyn std::error::Error>> {
+    fn portable_scenario() -> Result<ScenarioSnapshotV1, Box<dyn std::error::Error>> {
         let document: ScenarioDocument = serde_json::from_value(serde_json::json!({
             "format": "eutheto/scenario",
             "formatVersion": 1,
             "scenarioId": "018f1e2d-3c4b-7a69-8def-0123456789ab",
-            "domainPack": {"id": "official.generic", "schemaVersion": 1},
+            "domainPack": {"id": "official.test", "schemaVersion": 1},
             "metadata": {"title": "Portable", "description": "", "createdAt": "2026-08-29T00:00:00Z", "updatedAt": "2026-08-29T00:00:00Z"},
             "settings": {
                 "timeZone": "Etc/UTC", "locale": "en-US", "units": "metric",
@@ -4782,7 +5223,7 @@ mod tests {
             },
             "extensions": {}
         }))?;
-        let mut scenario = PortableScenario::current(Revision::new(7), document, BTreeSet::new());
+        let mut scenario = ScenarioSnapshotV1::current(Revision::new(7), document, BTreeSet::new());
         scenario
             .extensions
             .insert("example.visual".to_owned(), serde_json::json!({"zoom": 2}));
@@ -4931,22 +5372,25 @@ mod tests {
     }
 
     fn valid_bundle() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        Ok(assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0001,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        Ok(assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0001,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Portable".to_owned(),
+                scenario: portable_scenario()?,
+                scenario_revisions: Vec::new(),
+                sections: BackupSections::default(),
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::new(),
             },
-            title: "Portable".to_owned(),
-            scenario: portable_scenario()?,
-            scenario_revisions: Vec::new(),
-            sections: BackupSections::default(),
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::new(),
-        })?)
+            &portable_encode::encode_fixture_domain,
+        )?)
     }
 
     fn inspect(bytes: &[u8]) -> Result<InspectedBundle, ImportError> {
@@ -4954,7 +5398,187 @@ mod tests {
             bytes,
             &InspectionPolicy::default(),
             &MigrationRegistries::current_only(),
+            &portable_decode::decode_fixture_domain,
         )
+    }
+
+    #[test]
+    fn decoded_snapshots_cannot_exceed_the_source_aggregate_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bytes = valid_bundle()?;
+        let mut policy = InspectionPolicy::default();
+        policy.limits.max_collection_items = 256;
+        assert_eq!(
+            inspect_bundle(
+                &bytes,
+                &policy,
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain
+            )?
+            .scenarios,
+            vec![portable_scenario()?],
+        );
+        let expanded = inspect_bundle(
+            &bytes,
+            &policy,
+            &MigrationRegistries::current_only(),
+            &|wire| {
+                let mut decoded = portable_decode::decode_fixture_domain(wire)?;
+                let entity = decoded
+                    .document
+                    .domain
+                    .entities
+                    .values_mut()
+                    .next()
+                    .ok_or_else(|| {
+                        MigrationFailure::Invalid("fixture entity is missing".to_owned())
+                    })?;
+                entity["expanded"] = serde_json::json!([vec![0; 160], vec![0; 160]]);
+                Ok(decoded)
+            },
+        );
+        assert!(matches!(
+            expanded,
+            Err(ImportError::JsonLimit {
+                limit: "aggregate nodes",
+                ..
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn migration_outputs_cannot_exceed_the_source_aggregate_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = portable_scenario()?;
+        let mut manifest = inspect(&valid_bundle()?)?.manifest;
+        manifest.schema_version = 1;
+        manifest.required_capabilities = source.required_capabilities.clone();
+        let path = format!("scenarios/{}.json", source.document.scenario_id);
+        let bytes = rebuilt_bundle(&manifest, &path, &canonical_json(&source)?)?;
+        let migrations = MigrationRegistries::new(
+            Vec::new(),
+            vec![PortableMigrationStep {
+                from_version: 1,
+                to_version: 2,
+                name: "expanding-fixture",
+                migrate: Arc::new(|value| {
+                    let mut outcome = portable_migrate::migrate_fixture_v1(value)?;
+                    let entity = outcome.value["domain"]["payload"]["entities"]
+                        .as_object_mut()
+                        .and_then(|entities| entities.values_mut().next())
+                        .ok_or_else(|| {
+                            MigrationFailure::Invalid("fixture entity is missing".to_owned())
+                        })?;
+                    entity["expanded"] = serde_json::json!([vec![0; 160], vec![0; 160]]);
+                    Ok(outcome)
+                }),
+            }],
+        )?;
+        let mut policy = InspectionPolicy::default();
+        policy.limits.max_collection_items = 256;
+        assert!(matches!(
+            inspect_bundle(
+                &bytes,
+                &policy,
+                &migrations,
+                &portable_decode::decode_fixture_domain
+            ),
+            Err(ImportError::JsonLimit {
+                limit: "aggregate nodes",
+                ..
+            }),
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn an_entry_version_cannot_be_laundered_through_the_global_migration()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = portable_scenario()?;
+        let mut manifest = inspect(&valid_bundle()?)?.manifest;
+        // Requirements match the actual v1 source; only the manifest's v2 version lies.
+        manifest.required_capabilities = source.required_capabilities.clone();
+        let path = format!("scenarios/{}.json", source.document.scenario_id);
+        let bytes = rebuilt_bundle(&manifest, &path, &canonical_json(&source)?)?;
+        let migrations = MigrationRegistries::new(
+            Vec::new(),
+            vec![PortableMigrationStep {
+                from_version: 1,
+                to_version: 2,
+                name: "fixture-v1-to-v2",
+                migrate: Arc::new(portable_migrate::migrate_fixture_v1),
+            }],
+        )?;
+        assert!(matches!(
+            inspect_bundle(
+                &bytes,
+                &InspectionPolicy::default(),
+                &migrations,
+                &portable_decode::decode_fixture_domain
+            ),
+            Err(ImportError::InvalidScenario { .. }),
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn source_capabilities_are_exact_and_pack_support_cannot_authorize_the_host()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = portable_scenario()?;
+        let manifest = inspect(&valid_bundle()?)?.manifest;
+        let path = format!("scenarios/{}.json", source.document.scenario_id);
+        let wire = PortableScenario::from_snapshot(
+            &source,
+            portable_encode::encode_fixture_domain(&source.document)?,
+        )?;
+        let mut extra = manifest.clone();
+        extra.required_capabilities.insert(SemanticCapability {
+            id: "example.extra".to_owned(),
+            version: 1,
+        });
+        assert!(matches!(
+            inspect(&rebuilt_bundle(&extra, &path, &canonical_json(&wire)?)?),
+            Err(ImportError::InvalidManifest(_)),
+        ));
+        let mut undeclared = wire.clone();
+        undeclared.domain.required_capabilities.clear();
+        assert!(matches!(
+            inspect(&rebuilt_bundle(
+                &manifest,
+                &path,
+                &canonical_json(&undeclared)?
+            )?),
+            Err(ImportError::InvalidManifest(_)),
+        ));
+        let mut wrong_scope = wire;
+        wrong_scope.required_capabilities = wrong_scope.domain.required_capabilities.clone();
+        assert!(matches!(
+            inspect(&rebuilt_bundle(
+                &manifest,
+                &path,
+                &canonical_json(&wrong_scope)?
+            )?),
+            Err(ImportError::UnsupportedCapability { .. }),
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn domain_decoder_cannot_replace_host_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let replacement = "018f1e2d-3c4b-7a69-8def-0123456789ac".parse()?;
+        let result = inspect_bundle(
+            &valid_bundle()?,
+            &InspectionPolicy::default(),
+            &MigrationRegistries::current_only(),
+            &|wire| {
+                let mut decoded = portable_decode::decode_fixture_domain(wire)?;
+                decoded.document.scenario_id = replacement;
+                Ok(decoded)
+            },
+        );
+        assert!(matches!(result, Err(ImportError::Migration(_))));
+        Ok(())
     }
 
     #[test]
@@ -4969,7 +5593,7 @@ mod tests {
         assert_eq!(unopened.metadata().scenarios.len(), 1);
         assert_eq!(
             unopened.metadata().scenarios[0].pack_id.as_deref(),
-            Some("official.generic")
+            Some("official.test")
         );
         assert_eq!(unopened.into_exact_bytes().as_ref(), bytes);
         Ok(())
@@ -5073,22 +5697,25 @@ mod tests {
                 redistribution_permitted: true,
             },
         );
-        Ok(assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0002,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        Ok(assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0002,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Supplemental".to_owned(),
+                scenario,
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::new(),
             },
-            title: "Supplemental".to_owned(),
-            scenario,
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::new(),
-        })?)
+            &portable_encode::encode_fixture_domain,
+        )?)
     }
 
     fn asset_bundle() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -5106,22 +5733,25 @@ mod tests {
                 redistribution_permitted: true,
             },
         );
-        Ok(assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0011,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        Ok(assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0011,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Asset-bearing".to_owned(),
+                scenario,
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::new(),
             },
-            title: "Asset-bearing".to_owned(),
-            scenario,
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::new(),
-        })?)
+            &portable_encode::encode_fixture_domain,
+        )?)
     }
 
     fn revisioned_result_backup(
@@ -5147,22 +5777,25 @@ mod tests {
         } else {
             Vec::new()
         };
-        Ok(assemble_full_backup(&FullBackupSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0013,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        Ok(assemble_full_backup(
+            &FullBackupSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0013,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Revisioned result".to_owned(),
+                scenarios: vec![scenario],
+                scenario_revisions,
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: library_selection_extensions(true)?,
             },
-            title: "Revisioned result".to_owned(),
-            scenarios: vec![scenario],
-            scenario_revisions,
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: library_selection_extensions(true)?,
-        })?)
+            &portable_encode::encode_fixture_domain,
+        )?)
     }
 
     #[test]
@@ -5489,9 +6122,7 @@ mod tests {
         let manifest = bundle
             .manifest
             .as_object_mut()
-            .ok_or_else(|| MigrationFailure {
-                message: "manifest must be an object".to_owned(),
-            })?;
+            .ok_or_else(|| MigrationFailure::Invalid("manifest must be an object".to_owned()))?;
         manifest.insert(
             "formatVersion".to_owned(),
             Value::from(CURRENT_BUNDLE_FORMAT_VERSION),
@@ -5499,15 +6130,16 @@ mod tests {
         Ok(bundle)
     }
 
-    fn migrate_portable_v0(mut value: Value) -> Result<Value, MigrationFailure> {
-        let scenario = value.as_object_mut().ok_or_else(|| MigrationFailure {
-            message: "scenario must be an object".to_owned(),
-        })?;
-        scenario.insert(
-            "schemaVersion".to_owned(),
-            Value::from(CURRENT_PORTABLE_SCHEMA_VERSION),
-        );
-        Ok(value)
+    fn migrate_portable_v0(mut value: Value) -> Result<PortableMigrationOutcome, MigrationFailure> {
+        let scenario = value
+            .as_object_mut()
+            .ok_or_else(|| MigrationFailure::Invalid("scenario must be an object".to_owned()))?;
+        scenario.insert("schemaVersion".to_owned(), Value::from(1));
+        Ok(PortableMigrationOutcome {
+            value,
+            introduced_requirements: BTreeSet::new(),
+            applied_migrations: Vec::new(),
+        })
     }
 
     fn raw_zip(
@@ -5523,6 +6155,68 @@ mod tests {
             writer.write_all(bytes)?;
         }
         Ok(writer.finish()?.into_inner())
+    }
+
+    #[test]
+    fn forged_deflate_size_is_rejected_before_crc_or_payload_validation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let policy = InspectionPolicy::default();
+        let entries = read_archive_entries(&valid_bundle()?, &policy)?;
+        let path = entries
+            .keys()
+            .find(|path| path.starts_with("scenarios/"))
+            .ok_or("missing scenario fixture")?;
+        let inflated = vec![b' '; 64 * 1024];
+        let mut payloads = vec![(path.as_str(), inflated.as_slice())];
+        payloads.extend(
+            entries
+                .iter()
+                .filter(|(name, _)| *name != path)
+                .map(|(name, bytes)| (name.as_str(), bytes.as_slice())),
+        );
+        let mut bytes = raw_zip(&payloads, CompressionMethod::Deflated)?;
+        let central = zip32_central_directory(&bytes, policy.limits.max_entries)?.offset;
+        let bad_crc = (zip_u32(&bytes, 14)? ^ 1).to_le_bytes();
+        bytes[14..18].copy_from_slice(&bad_crc);
+        bytes[22..26].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[central + 16..central + 20].copy_from_slice(&bad_crc);
+        bytes[central + 24..central + 28].copy_from_slice(&1_u32.to_le_bytes());
+
+        let semantic = inspect_bundle(
+            &bytes,
+            &policy,
+            &MigrationRegistries::current_only(),
+            &portable_decode::decode_fixture_domain,
+        )
+        .map(|_| ());
+        let unopened = inspect_unopened_bundle_for_exact_reexport(&bytes, &policy).map(|_| ());
+        for result in [semantic, unopened] {
+            assert!(
+                matches!(&result, Err(ImportError::EntryTooLarge { path: rejected }) if rejected == path),
+                "{result:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_entry_read_stops_at_one_overflow_byte() {
+        let mut reader = Cursor::new(b"oversized decompressed content");
+        let mut buffer = [0_u8; 16 * 1024];
+        let mut remaining = 128;
+        let mut retained = Vec::new();
+        let result = consume_bounded_zip_entry(
+            &mut reader,
+            &mut buffer,
+            "scenario.json",
+            5,
+            128,
+            &mut remaining,
+            |chunk| retained.extend_from_slice(chunk),
+        );
+        assert!(matches!(result, Err(ImportError::EntryTooLarge { .. })));
+        assert_eq!(reader.position(), 6);
+        assert!(retained.len() <= 5);
     }
 
     fn raw_stored_zip_allowing_duplicate_paths(
@@ -5609,7 +6303,7 @@ mod tests {
         assert_eq!(inspected.scenarios[0].revision, Revision::new(7));
         assert_eq!(
             inspected.scenarios[0].document.domain_pack.id,
-            PackId::new("official.generic")?
+            PackId::new("official.test")?
         );
         assert_eq!(inspected.scenarios.len(), 1);
         assert_eq!(
@@ -5623,22 +6317,25 @@ mod tests {
     fn full_backup_export_is_accepted_with_project_wrapper()
     -> Result<(), Box<dyn std::error::Error>> {
         let scenario = portable_scenario()?;
-        let bundle = assemble_full_backup(&FullBackupSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0002,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bundle = assemble_full_backup(
+            &FullBackupSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0002,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Backup".to_owned(),
+                scenarios: vec![scenario],
+                scenario_revisions: Vec::new(),
+                sections: BackupSections::default(),
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: library_selection_extensions(true)?,
             },
-            title: "Backup".to_owned(),
-            scenarios: vec![scenario],
-            scenario_revisions: Vec::new(),
-            sections: BackupSections::default(),
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: library_selection_extensions(true)?,
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bundle)?;
         assert_eq!(inspected.manifest.bundle_kind, BundleKind::FullBackup);
         assert!(inspected.scenarios[0].project.is_some());
@@ -5675,7 +6372,8 @@ mod tests {
             inspect_bundle(
                 &duplicate,
                 &InspectionPolicy::default(),
-                &MigrationRegistries::current_only()
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain,
             ),
             Err(ImportError::DuplicatePath(path)) if path == MANIFEST_PATH
         ));
@@ -5712,7 +6410,12 @@ mod tests {
         let mut size_policy = InspectionPolicy::default();
         size_policy.limits.max_entry_bytes = 100;
         assert!(matches!(
-            inspect_bundle(&large, &size_policy, &MigrationRegistries::current_only()),
+            inspect_bundle(
+                &large,
+                &size_policy,
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain
+            ),
             Err(ImportError::EntryTooLarge { .. })
         ));
 
@@ -5727,7 +6430,8 @@ mod tests {
             inspect_bundle(
                 &compressed,
                 &ratio_policy,
-                &MigrationRegistries::current_only()
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain,
             ),
             Err(ImportError::CompressionRatio { .. })
         ));
@@ -5745,7 +6449,11 @@ mod tests {
             "scenarios/{}.json",
             inspected.scenarios[0].document.scenario_id
         );
-        let scenario_bytes = canonical_json(&inspected.scenarios[0])?;
+        let wire = PortableScenario::from_snapshot(
+            &inspected.scenarios[0],
+            portable_encode::encode_fixture_domain(&inspected.scenarios[0].document)?,
+        )?;
+        let scenario_bytes = canonical_json(&wire)?;
         let newer = rebuilt_bundle(&manifest, &scenario_path, &scenario_bytes)?;
         assert!(matches!(
             inspect(&newer),
@@ -5760,19 +6468,7 @@ mod tests {
         semantic_manifest
             .required_capabilities
             .insert(capability.clone());
-        let manifest_only = canonical_json(&semantic_manifest)?;
-        let unsupported_before_payload = raw_zip(
-            &[
-                (MANIFEST_PATH, manifest_only.as_slice()),
-                ("assets/unread.txt", b"payload that must not be read"),
-            ],
-            CompressionMethod::Stored,
-        )?;
-        assert!(matches!(
-            inspect(&unsupported_before_payload),
-            Err(ImportError::UnsupportedCapability { .. })
-        ));
-        let mut semantic_scenario = inspected.scenarios[0].clone();
+        let mut semantic_scenario = wire;
         semantic_scenario
             .required_capabilities
             .insert(capability.clone());
@@ -5788,7 +6484,12 @@ mod tests {
         policy
             .supported_capabilities
             .insert(capability.id.clone(), capability.version);
-        let supported = inspect_bundle(&semantic, &policy, &MigrationRegistries::current_only())?;
+        let supported = inspect_bundle(
+            &semantic,
+            &policy,
+            &MigrationRegistries::current_only(),
+            &portable_decode::decode_fixture_domain,
+        )?;
         assert_eq!(
             supported.scenarios[0].required_capabilities,
             BTreeSet::from([capability.clone()])
@@ -5798,8 +6499,13 @@ mod tests {
         let undeclared =
             rebuilt_bundle(&semantic_manifest, &scenario_path, &semantic_scenario_bytes)?;
         assert!(matches!(
-            inspect_bundle(&undeclared, &policy, &MigrationRegistries::current_only()),
-            Err(ImportError::InvalidScenario { .. })
+            inspect_bundle(
+                &undeclared,
+                &policy,
+                &MigrationRegistries::current_only(),
+                &portable_decode::decode_fixture_domain
+            ),
+            Err(ImportError::InvalidManifest(_))
         ));
         Ok(())
     }
@@ -5841,6 +6547,7 @@ mod tests {
         let mut old_manifest = current.manifest;
         old_manifest.format_version = 0;
         old_manifest.schema_version = 0;
+        old_manifest.required_capabilities = current.scenarios[0].required_capabilities.clone();
         let old_bundle = rebuilt_bundle(&old_manifest, &scenario_path, &old_scenario_bytes)?;
         let registries = MigrationRegistries::new(
             vec![OuterMigrationStep {
@@ -5849,22 +6556,46 @@ mod tests {
                 name: "outer-v0-to-v1",
                 migrate: migrate_outer_v0,
             }],
-            vec![PortableMigrationStep {
-                from_version: 0,
-                to_version: CURRENT_PORTABLE_SCHEMA_VERSION,
-
-                name: "portable-v0-to-v1",
-                migrate: migrate_portable_v0,
-            }],
+            vec![
+                PortableMigrationStep {
+                    from_version: 0,
+                    to_version: 1,
+                    name: "portable-v0-to-v1",
+                    migrate: Arc::new(migrate_portable_v0),
+                },
+                PortableMigrationStep {
+                    from_version: 1,
+                    to_version: 2,
+                    name: "portable-v1-to-v2",
+                    migrate: Arc::new(portable_migrate::migrate_fixture_v1),
+                },
+            ],
         )?;
-        let migrated = inspect_bundle(&old_bundle, &InspectionPolicy::default(), &registries)?;
+        let migrated = inspect_bundle(
+            &old_bundle,
+            &InspectionPolicy::default(),
+            &registries,
+            &portable_decode::decode_fixture_domain,
+        )?;
         assert_eq!(migrated.original_format_version, 0);
         assert_eq!(migrated.original_schema_version, 0);
         assert_eq!(
             migrated.manifest.schema_version,
             CURRENT_PORTABLE_SCHEMA_VERSION
         );
-        assert_eq!(migrated.applied_migrations.len(), 2);
+        assert_eq!(migrated.scenarios, current.scenarios);
+        assert_eq!(
+            migrated
+                .applied_migrations
+                .iter()
+                .map(|step| (step.registry, step.from_version, step.to_version))
+                .collect::<Vec<_>>(),
+            vec![
+                (MigrationRegistryKind::Outer, 0, 1),
+                (MigrationRegistryKind::Portable, 0, 1),
+                (MigrationRegistryKind::Portable, 1, 2),
+            ],
+        );
         Ok(())
     }
     #[test]
@@ -5875,6 +6606,10 @@ mod tests {
             "scenarios/{}.json",
             current.scenarios[0].document.scenario_id
         );
+        let wire = PortableScenario::from_snapshot(
+            &current.scenarios[0],
+            portable_encode::encode_fixture_domain(&current.scenarios[0].document)?,
+        )?;
         for value in [
             serde_json::json!({"oauthToken": "secret"}),
             serde_json::json!({"providerAuthentication": {"value": "secret"}}),
@@ -5883,7 +6618,7 @@ mod tests {
             serde_json::json!({"headers": ["Authorization: Bearer synthetic-sentinel"]}),
             serde_json::json!({"pem": "-----BEGIN OPENSSH PRIVATE KEY-----\nsynthetic\n-----END OPENSSH PRIVATE KEY-----"}),
         ] {
-            let mut prohibited = current.scenarios[0].clone();
+            let mut prohibited = wire.clone();
             prohibited
                 .extensions
                 .insert("example.visual".to_owned(), value);
@@ -5892,12 +6627,13 @@ mod tests {
                 &scenario_path,
                 &canonical_json(&prohibited)?,
             )?;
-            assert!(matches!(
-                inspect(&bytes),
-                Err(ImportError::InvalidManifest(_))
-            ));
+            let rejection = inspect(&bytes);
+            assert!(
+                matches!(&rejection, Err(ImportError::InvalidManifest(_))),
+                "{rejection:?}",
+            );
         }
-        let mut harmless = current.scenarios[0].clone();
+        let mut harmless = wire;
         harmless.extensions.insert(
             "example.visual".to_owned(),
             serde_json::json!({
@@ -5946,25 +6682,28 @@ mod tests {
             fixed_exclusions: BTreeSet::new(),
             scope: BackupSelectionScope::Scenario,
         };
-        let bytes = assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0010,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bytes = assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0010,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Omitted assets".to_owned(),
+                scenario,
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::from([(
+                    eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
+                    backup_selection_extension_value(&source_selection)?,
+                )]),
             },
-            title: "Omitted assets".to_owned(),
-            scenario,
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::from([(
-                eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
-                backup_selection_extension_value(&source_selection)?,
-            )]),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bytes)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),
@@ -6114,25 +6853,28 @@ mod tests {
             fixed_exclusions: BTreeSet::new(),
             scope: BackupSelectionScope::Scenario,
         };
-        let reexported = assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0012,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let reexported = assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0012,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Re-exported omission".to_owned(),
+                scenario: staged.scenarios[0].scenario.clone(),
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::from([(
+                    eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
+                    backup_selection_extension_value(&selection)?,
+                )]),
             },
-            title: "Re-exported omission".to_owned(),
-            scenario: staged.scenarios[0].scenario.clone(),
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::from([(
-                eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
-                backup_selection_extension_value(&selection)?,
-            )]),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         eutheto_export::verify_assembled_bundle(&reexported)?;
         Ok(())
     }
@@ -6237,25 +6979,28 @@ mod tests {
             fixed_exclusions: BTreeSet::new(),
             scope: BackupSelectionScope::Scenario,
         };
-        let bytes = assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0014,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bytes = assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0014,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Skipped assets".to_owned(),
+                scenario,
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::from([(
+                    eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
+                    backup_selection_extension_value(&selection)?,
+                )]),
             },
-            title: "Skipped assets".to_owned(),
-            scenario,
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::from([(
-                eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
-                backup_selection_extension_value(&selection)?,
-            )]),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bytes)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),
@@ -6328,22 +7073,25 @@ mod tests {
                 },
             );
         }
-        let bytes = assemble_full_backup(&FullBackupSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0015,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bytes = assemble_full_backup(
+            &FullBackupSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0015,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Partial assets".to_owned(),
+                scenarios: vec![first, second],
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: library_selection_extensions(true)?,
             },
-            title: "Partial assets".to_owned(),
-            scenarios: vec![first, second],
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: library_selection_extensions(true)?,
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bytes)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),
@@ -6413,25 +7161,28 @@ mod tests {
             fixed_exclusions: FixedExclusion::ALL.into_iter().collect(),
             scope: BackupSelectionScope::Library,
         };
-        let bytes = assemble_full_backup(&FullBackupSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0016,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bytes = assemble_full_backup(
+            &FullBackupSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0016,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Global assets".to_owned(),
+                scenarios: vec![portable_scenario()?],
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::from([(
+                    eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
+                    backup_selection_extension_value(&selection)?,
+                )]),
             },
-            title: "Global assets".to_owned(),
-            scenarios: vec![portable_scenario()?],
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::from([(
-                eutheto_export::BACKUP_SELECTION_EXTENSION.to_owned(),
-                backup_selection_extension_value(&selection)?,
-            )]),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bytes)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),
@@ -6764,22 +7515,25 @@ mod tests {
         scenario
             .extensions
             .insert("example.wrapper-refs".to_owned(), wrapper_references);
-        let bytes = assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0017,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bytes = assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0017,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Extension references".to_owned(),
+                scenario,
+                scenario_revisions: Vec::new(),
+                sections: BackupSections::default(),
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::new(),
             },
-            title: "Extension references".to_owned(),
-            scenario,
-            scenario_revisions: Vec::new(),
-            sections: BackupSections::default(),
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::new(),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bytes)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),
@@ -6873,22 +7627,25 @@ mod tests {
                 "scenarioRevision": 6
             }),
         );
-        let bundle = assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0004,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bundle = assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0004,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Historical copy".to_owned(),
+                scenario: current,
+                scenario_revisions: vec![historical],
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::new(),
             },
-            title: "Historical copy".to_owned(),
-            scenario: current,
-            scenario_revisions: vec![historical],
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::new(),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bundle)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),
@@ -7598,22 +8355,25 @@ mod tests {
                 redistribution_permitted: true,
             },
         );
-        let bundle = assemble_scenario_export(&ScenarioExportSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0005,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bundle = assemble_scenario_export(
+            &ScenarioExportSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0005,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Result copy".to_owned(),
+                scenario,
+                scenario_revisions: Vec::new(),
+                sections,
+                nonsemantic_extensions: BTreeSet::new(),
+                manifest_extensions: BTreeMap::new(),
             },
-            title: "Result copy".to_owned(),
-            scenario,
-            scenario_revisions: Vec::new(),
-            sections,
-            nonsemantic_extensions: BTreeSet::new(),
-            manifest_extensions: BTreeMap::new(),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bundle)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),
@@ -7862,7 +8622,7 @@ mod tests {
     #[test]
     fn copy_remap_preserves_project_wrapper_metadata() -> Result<(), Box<dyn std::error::Error>> {
         let mut scenario = portable_scenario()?;
-        scenario.project = Some(eutheto_export::PortableProjectMetadata {
+        scenario.project = Some(eutheto_types::PortableProjectMetadata {
             archived_at: Some(Rfc3339Timestamp::parse("2026-08-28T00:00:00Z")?),
         });
         let expected = scenario.project.clone();
@@ -7949,22 +8709,25 @@ mod tests {
             "example.bundle".to_owned(),
             serde_json::json!({"display": "compact"}),
         );
-        let bundle = assemble_full_backup(&FullBackupSnapshot {
-            bundle_id: BundleId::from_uuid(Uuid::from_u128(
-                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0003,
-            )),
-            created_at: "2026-08-29T00:00:00Z".to_owned(),
-            application: ApplicationMetadata {
-                name: "Eutheto".to_owned(),
-                version: "0.1.0".to_owned(),
+        let bundle = assemble_full_backup(
+            &FullBackupSnapshot {
+                bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                    0x018f_1e2d_3c4b_7a69_8def_2000_0000_0003,
+                )),
+                created_at: "2026-08-29T00:00:00Z".to_owned(),
+                application: ApplicationMetadata {
+                    name: "Eutheto".to_owned(),
+                    version: "0.1.0".to_owned(),
+                },
+                title: "Extensions".to_owned(),
+                scenarios: vec![portable_scenario()?],
+                scenario_revisions: Vec::new(),
+                sections: BackupSections::default(),
+                nonsemantic_extensions: BTreeSet::from(["example.unused".to_owned()]),
+                manifest_extensions: manifest_extensions.clone(),
             },
-            title: "Extensions".to_owned(),
-            scenarios: vec![portable_scenario()?],
-            scenario_revisions: Vec::new(),
-            sections: BackupSections::default(),
-            nonsemantic_extensions: BTreeSet::from(["example.unused".to_owned()]),
-            manifest_extensions: manifest_extensions.clone(),
-        })?;
+            &portable_encode::encode_fixture_domain,
+        )?;
         let inspected = inspect(&bundle)?;
         let local = LocalLibrarySnapshot {
             supplemental_identity_owners: BTreeMap::new(),

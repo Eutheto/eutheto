@@ -14,22 +14,23 @@ use eutheto_domain_ir::{
     VerificationValue, compare_accepted_results, counterfactual_condition_satisfied,
 };
 use eutheto_export::{
-    ApplicationMetadata, PortableScenario, SemanticCapability, collect_scenario_owned_uuids,
-    collect_self_declared_uuids, validate_scenario_owned_uuid_uniqueness,
+    ApplicationMetadata, collect_scenario_owned_uuids, collect_self_declared_uuids,
+    validate_scenario_owned_uuid_uniqueness,
 };
 use eutheto_import::{
-    AppliedMigration, ImportProvenance, MigrationRegistryKind, PreviewBinding,
-    RestoreAuthorization, RestoreMode, SafetyBackupEvidence, StagedBackupRestore,
-    StagedDisposition, StagedImport,
+    AppliedMigration, ImportProvenance, MigrationRegistryKind, MigrationSubject,
+    PackMigrationVersionSpace, PreviewBinding, RestoreAuthorization, RestoreMode,
+    SafetyBackupEvidence, StagedBackupRestore, StagedDisposition, StagedImport,
 };
 use eutheto_types::{
     ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, CounterfactualJobId,
     IanaTimeZone, MAX_SCENARIO_DOCUMENT_BYTES, PackId, PortableAsset, PortableJsonLimits,
     ProjectMetadataDto, ProjectSummaryDto, RequestId, Revision, Rfc3339Timestamp,
     SafeDiagnosticValue, ScenarioDocument, ScenarioId, ScenarioRevisionReference,
-    ScenarioSnapshotId, SolutionId, SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity,
-    SupplementalSectionKind, extract_result_dependency, extract_result_id,
-    extract_scenario_references, validate_nonsecret_portable_json,
+    ScenarioSnapshotId, ScenarioSnapshotV1, SemanticCapability, SolutionId, SolveOptions,
+    SolveRunId, SolveStatus, SupplementalIdentity, SupplementalSectionKind,
+    extract_result_dependency, extract_result_id, extract_scenario_references,
+    validate_nonsecret_portable_json,
 };
 use rusqlite::{
     Connection, MAIN_DB, OpenFlags, OptionalExtension, TransactionBehavior, limits::Limit, params,
@@ -595,7 +596,7 @@ pub struct StoredAcceptedResultSummary {
 /// Exact immutable portable scenario revision required by a retained result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredScenarioRevision {
-    pub scenario: PortableScenario,
+    pub scenario: ScenarioSnapshotV1,
 }
 
 /// Supplemental portable JSON bytes and inert assets with their exact declarations.
@@ -763,6 +764,10 @@ pub struct PersistedAppliedMigration {
     pub name: String,
     pub from_version: u32,
     pub to_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_space: Option<PackMigrationVersionSpace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<MigrationSubject>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -6239,7 +6244,7 @@ fn load_retained_scenario_revisions(
 
 fn synchronize_retained_scenario_revisions(
     transaction: &rusqlite::Transaction<'_>,
-    staged: Vec<PortableScenario>,
+    staged: Vec<ScenarioSnapshotV1>,
 ) -> Result<(), StoreError> {
     let mut candidates = BTreeMap::new();
     for scenario in staged {
@@ -6320,8 +6325,8 @@ fn retain_current_project_revision_if_required(
     Ok(())
 }
 
-fn historical_scenario_from_project(project: StoredProject) -> PortableScenario {
-    let mut scenario = PortableScenario::current(
+fn historical_scenario_from_project(project: StoredProject) -> ScenarioSnapshotV1 {
+    let mut scenario = ScenarioSnapshotV1::current(
         project.summary.revision,
         project.document,
         project.portable.required_capabilities,
@@ -6331,17 +6336,17 @@ fn historical_scenario_from_project(project: StoredProject) -> PortableScenario 
     scenario
 }
 
-fn validate_historical_scenario(scenario: &PortableScenario) -> Result<(), String> {
+fn validate_historical_scenario(scenario: &ScenarioSnapshotV1) -> Result<(), String> {
     if scenario.project.is_some() {
         return Err("immutable scenario revisions may not contain project metadata".to_owned());
     }
-    eutheto_export::validate_current_portable_scenario(scenario)
+    eutheto_export::validate_scenario_snapshot(scenario)
         .map_err(|error| format!("immutable scenario revision is invalid: {error}"))
 }
 
 fn insert_retained_scenario_revision(
     connection: &Connection,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
 ) -> Result<(), StoreError> {
     let scenario_id = scenario.document.scenario_id;
     let revision = scenario.revision;
@@ -6354,7 +6359,7 @@ fn insert_retained_scenario_revision(
         )
         .optional()?;
     if let Some(existing) = existing {
-        let existing: PortableScenario = serde_json::from_str(&existing)?;
+        let existing: ScenarioSnapshotV1 = serde_json::from_str(&existing)?;
         if &existing != scenario {
             return Err(StoreError::InvalidStagedApply(format!(
                 "immutable scenario {} revision {} conflicts with retained content",
@@ -6379,7 +6384,7 @@ fn insert_retained_scenario_revision(
 
 fn read_retained_scenario_revision_rows(
     connection: &Connection,
-) -> Result<BTreeMap<ScenarioRevisionReference, PortableScenario>, StoreError> {
+) -> Result<BTreeMap<ScenarioRevisionReference, ScenarioSnapshotV1>, StoreError> {
     let mut statement = connection.prepare(
         "SELECT scenario_id, revision, scenario_json FROM retained_scenario_revisions ORDER BY scenario_id, revision",
     )?;
@@ -6394,7 +6399,7 @@ fn read_retained_scenario_revision_rows(
         })?;
         let revision = checked_revision(i64_to_u64(row.get(1)?)?)?;
         let json: String = row.get(2)?;
-        let scenario: PortableScenario = serde_json::from_str(&json)?;
+        let scenario: ScenarioSnapshotV1 = serde_json::from_str(&json)?;
         validate_historical_scenario(&scenario).map_err(StoreError::Integrity)?;
         if scenario.document.scenario_id != scenario_id || scenario.revision != revision {
             return Err(StoreError::Integrity(
@@ -7486,7 +7491,7 @@ fn apply_staged_library_transaction(
 fn validate_staged_scenario_revision_targets(
     connection: &Connection,
     scenarios: &[eutheto_import::StagedScenario],
-    staged_history: &[PortableScenario],
+    staged_history: &[ScenarioSnapshotV1],
 ) -> Result<(), StoreError> {
     let mut high_water = load_scenario_revision_high_water(connection)?;
     for historical in staged_history {
@@ -7521,9 +7526,9 @@ fn replace_staged_scenarios(
     transaction: &rusqlite::Transaction<'_>,
     mode: RestoreMode,
     scenarios: Vec<eutheto_import::StagedScenario>,
-    mut retained_candidates: Vec<PortableScenario>,
+    mut retained_candidates: Vec<ScenarioSnapshotV1>,
     remove_scenario_ids: &BTreeSet<ScenarioId>,
-) -> Result<(StagedScenarioOutcome, Vec<PortableScenario>), StoreError> {
+) -> Result<(StagedScenarioOutcome, Vec<ScenarioSnapshotV1>), StoreError> {
     let current_revisions = scenario_revisions(transaction)?;
     let current_ids = current_revisions.keys().copied().collect::<BTreeSet<_>>();
     if mode == RestoreMode::ReplaceLibrary && remove_scenario_ids != &current_ids {
@@ -7756,6 +7761,8 @@ fn persisted_migration(migration: AppliedMigration) -> PersistedAppliedMigration
         name: migration.name,
         from_version: migration.from_version,
         to_version: migration.to_version,
+        version_space: migration.version_space,
+        subject: migration.subject,
     }
 }
 
@@ -8509,7 +8516,7 @@ fn validate_project_owned_uuid_uniqueness(
     revision: Revision,
     portable: &PortableWrapperMetadata,
 ) -> Result<(), String> {
-    let mut scenario = PortableScenario::current(
+    let mut scenario = ScenarioSnapshotV1::current(
         revision,
         document.clone(),
         portable.required_capabilities.clone(),

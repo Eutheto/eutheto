@@ -1,12 +1,133 @@
 //! Shared portable-data safety, identity, asset, and reference contracts.
 
-use crate::{Revision, ScenarioId};
+use crate::{PackId, Revision, Rfc3339Timestamp, ScenarioDocument, ScenarioFormat, ScenarioId};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use uuid::Uuid;
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticCapability {
+    pub id: String,
+    pub version: u32,
+}
+
+/// Versioned pack-owned portable payload.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortableDomainDocument {
+    pub pack_id: PackId,
+    pub schema_version: u32,
+    pub required_capabilities: BTreeSet<SemanticCapability>,
+    pub payload: Value,
+}
+
+/// Frozen persisted snapshot representation, independent of the portable wire schema.
+pub const SCENARIO_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+
+/// Optional project-wrapper metadata present only in full-library backups.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortableProjectMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<Rfc3339Timestamp>,
+}
+
+/// Byte-compatible internal snapshot retained by persistence and import staging.
+///
+/// This frozen representation also decodes genuine global portable-v1 input. It is not the
+/// current portable wire envelope, and its marker must not follow portable schema upgrades.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScenarioSnapshotV1 {
+    pub format: ScenarioFormat,
+    pub schema_version: u32,
+    pub revision: Revision,
+    pub document: ScenarioDocument,
+    /// Wrapper metadata supplied for library backup and restore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<PortableProjectMetadata>,
+    /// Semantic capabilities required to interpret this scenario.
+    #[serde(default)]
+    pub required_capabilities: BTreeSet<SemanticCapability>,
+    /// Known semantic payloads. Each key must have a required capability.
+    #[serde(default)]
+    pub semantic_extensions: BTreeMap<String, Value>,
+    /// Namespaced nonsemantic values preserved without interpretation.
+    #[serde(default)]
+    pub extensions: BTreeMap<String, Value>,
+}
+
+impl ScenarioSnapshotV1 {
+    #[must_use]
+    pub fn current(
+        revision: Revision,
+        document: ScenarioDocument,
+        required_capabilities: BTreeSet<SemanticCapability>,
+    ) -> Self {
+        Self {
+            format: ScenarioFormat::EuthetoScenario,
+            schema_version: SCENARIO_SNAPSHOT_SCHEMA_VERSION,
+            revision,
+            document,
+            required_capabilities,
+            project: None,
+            semantic_extensions: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        }
+    }
+}
+
+/// Decodes record maps without silently replacing equivalent typed identities.
+///
+/// Distinct JSON keys can decode to the same UUID, for example through letter-case aliases.
+/// Reject duplicates before reading their values rather than accepting `BTreeMap`'s overwrite.
+///
+/// # Errors
+///
+/// Returns a deserialization error for invalid keys/values or repeated typed identities.
+pub fn deserialize_unique_id_map<'de, D, K>(deserializer: D) -> Result<BTreeMap<K, Value>, D::Error>
+where
+    D: Deserializer<'de>,
+    K: Deserialize<'de> + Ord,
+{
+    struct UniqueIdMap<K>(std::marker::PhantomData<K>);
+
+    impl<'de, K: Deserialize<'de> + Ord> Visitor<'de> for UniqueIdMap<K> {
+        type Value = BTreeMap<K, Value>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("records with unique typed identities")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut records = BTreeMap::new();
+            while let Some(id) = map.next_key::<K>()? {
+                let std::collections::btree_map::Entry::Vacant(entry) = records.entry(id) else {
+                    return Err(de::Error::custom("duplicate typed record identity"));
+                };
+                entry.insert(map.next_value::<Value>()?);
+            }
+            Ok(records)
+        }
+    }
+
+    deserializer.deserialize_map(UniqueIdMap::<K>(std::marker::PhantomData))
+}
+
+/// Whether a portable capability or nonsemantic extension has the established namespace shape.
+#[must_use]
+pub fn is_portable_namespace(namespace: &str) -> bool {
+    namespace.contains('.')
+        && namespace.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}
 
 /// Limits applied by the shared recursive JSON safety policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,7 +164,16 @@ pub fn validate_nonsecret_portable_json(
     value: &Value,
     limits: &PortableJsonLimits,
 ) -> Result<(), PortableJsonViolation> {
-    validate_json_at(value, limits, 0)
+    validate_json_at(
+        value,
+        &mut StreamingJsonBudget {
+            limits: *limits,
+            nodes: 0,
+            items: 0,
+            string_bytes: 0,
+        },
+        0,
+    )
 }
 
 struct StreamingJsonBudget {
@@ -261,37 +391,36 @@ pub fn validate_nonsecret_portable_json_bytes(
 
 fn validate_json_at(
     value: &Value,
-    limits: &PortableJsonLimits,
+    budget: &mut StreamingJsonBudget,
     depth: usize,
 ) -> Result<(), PortableJsonViolation> {
-    if depth > limits.max_depth {
-        return Err(PortableJsonViolation(
-            "JSON nesting limit exceeded".to_owned(),
-        ));
-    }
+    budget
+        .node::<serde_json::Error>(depth)
+        .map_err(|error| PortableJsonViolation(error.to_string()))?;
     match value {
-        Value::String(text) => validate_string(text, limits),
+        Value::String(text) => {
+            budget
+                .string::<serde_json::Error>(text, false)
+                .map_err(|error| PortableJsonViolation(error.to_string()))?;
+            validate_string(text, &budget.limits)
+        }
         Value::Array(values) => {
-            if values.len() > limits.max_collection_items {
-                return Err(PortableJsonViolation(
-                    "collection limit exceeded".to_owned(),
-                ));
-            }
-            for item in values {
-                validate_json_at(item, limits, depth.saturating_add(1))?;
+            for (index, item) in values.iter().enumerate() {
+                budget
+                    .item::<serde_json::Error>(index)
+                    .map_err(|error| PortableJsonViolation(error.to_string()))?;
+                validate_json_at(item, budget, depth.saturating_add(1))?;
             }
             Ok(())
         }
         Value::Object(values) => {
-            if values.len() > limits.max_collection_items {
-                return Err(PortableJsonViolation("object limit exceeded".to_owned()));
-            }
-            for (key, item) in values {
-                if key.len() > limits.max_string_bytes {
-                    return Err(PortableJsonViolation(
-                        "object key limit exceeded".to_owned(),
-                    ));
-                }
+            for (index, (key, item)) in values.iter().enumerate() {
+                budget
+                    .string::<serde_json::Error>(key, true)
+                    .map_err(|error| PortableJsonViolation(error.to_string()))?;
+                budget
+                    .item::<serde_json::Error>(index)
+                    .map_err(|error| PortableJsonViolation(error.to_string()))?;
                 let normalized = normalize_field(key);
                 if is_prohibited_field(key) {
                     return Err(PortableJsonViolation(format!(
@@ -303,7 +432,7 @@ fn validate_json_at(
                         "provider-restricted content cannot be serialized".to_owned(),
                     ));
                 }
-                validate_json_at(item, limits, depth.saturating_add(1))?;
+                validate_json_at(item, budget, depth.saturating_add(1))?;
             }
             Ok(())
         }
@@ -823,6 +952,25 @@ mod tests {
         max_string_bytes: 1024,
         max_collection_items: 1024,
     };
+
+    #[test]
+    fn value_and_streaming_validation_enforce_the_same_aggregate_boundary()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let limits = PortableJsonLimits {
+            max_collection_items: 128,
+            ..LIMITS
+        };
+        let boundary = json!([vec![0; 62], vec![0; 63]]);
+        validate_nonsecret_portable_json(&boundary, &limits)?;
+        validate_nonsecret_portable_json_bytes(&serde_json::to_vec(&boundary)?, &limits)?;
+        let excessive = json!([vec![0; 63], vec![0; 63]]);
+        assert!(validate_nonsecret_portable_json(&excessive, &limits).is_err());
+        assert!(
+            validate_nonsecret_portable_json_bytes(&serde_json::to_vec(&excessive)?, &limits)
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn exact_credential_fields_are_rejected_without_substring_matching()

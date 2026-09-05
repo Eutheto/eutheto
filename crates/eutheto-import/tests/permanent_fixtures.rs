@@ -1,23 +1,34 @@
+#[path = "../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+#[path = "../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+#[path = "../../../tests/support/portable_migrate.rs"]
+mod portable_migrate;
+
 use eutheto_export::{
     ApplicationMetadata, BackupSections, CHECKSUM_ALGORITHM, CHECKSUMS_PATH, Checksums,
-    MANIFEST_PATH, PORTABLE_LIMITS, PortableScenario, ScenarioExportSnapshot,
-    assemble_scenario_export, canonical_json, sha256_hex,
+    MANIFEST_PATH, PORTABLE_LIMITS, ScenarioExportSnapshot, assemble_scenario_export,
+    canonical_json, sha256_hex,
 };
 use eutheto_import::{
-    ImportError, InspectedBundle, InspectionPolicy, MigrationRegistries, VersionSpace,
-    inspect_bundle, inspect_unopened_bundle_for_exact_reexport, preflight_bundle_metadata,
+    ImportError, InspectedBundle, InspectionPolicy, MigrationRegistries, PortableMigrationStep,
+    VersionSpace, inspect_bundle, inspect_unopened_bundle_for_exact_reexport,
+    preflight_bundle_metadata,
 };
-use eutheto_types::{BundleId, Revision};
+use eutheto_types::{BundleId, Revision, ScenarioSnapshotV1};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::io::{Cursor, Read, Write};
+use std::sync::Arc;
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 const PORTABLE_V1: &str =
     include_str!("../../../tests/migration/fixtures/portable_v1_scenario.json");
+const PORTABLE_V2: &str =
+    include_str!("../../../tests/migration/fixtures/portable_v2_scenario.json");
 const PORTABLE_UNKNOWN_NEWER: &str =
     include_str!("../../../tests/migration/fixtures/portable_unknown_newer.json");
 const ADVERSARIAL_CASES: &str =
@@ -55,7 +66,7 @@ fn required_u64(value: &Value, field: &str) -> TestResult<u64> {
         .ok_or_else(|| std::io::Error::other(format!("missing integer field {field}")).into())
 }
 
-fn portable_input(wrapper: &Value) -> TestResult<PortableScenario> {
+fn portable_input(wrapper: &Value) -> TestResult<ScenarioSnapshotV1> {
     Ok(serde_json::from_value(
         wrapper
             .get("input")
@@ -65,35 +76,49 @@ fn portable_input(wrapper: &Value) -> TestResult<PortableScenario> {
 }
 
 fn production_bundle(
-    scenario: PortableScenario,
+    scenario: ScenarioSnapshotV1,
     bundle_id: &str,
     created_at: &str,
     title: &str,
 ) -> TestResult<Vec<u8>> {
-    Ok(assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: bundle_id.parse::<BundleId>()?,
-        created_at: created_at.to_owned(),
-        application: ApplicationMetadata {
-            name: "Eutheto".to_owned(),
-            version: "0.1.0".to_owned(),
+    Ok(assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: bundle_id.parse::<BundleId>()?,
+            created_at: created_at.to_owned(),
+            application: ApplicationMetadata {
+                name: "Eutheto".to_owned(),
+                version: "0.1.0".to_owned(),
+            },
+            title: title.to_owned(),
+            scenario,
+            scenario_revisions: Vec::new(),
+            sections: BackupSections::default(),
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: BTreeMap::new(),
         },
-        title: title.to_owned(),
-        scenario,
-        scenario_revisions: Vec::new(),
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: BTreeMap::new(),
-    })?)
+        &portable_encode::encode_fixture_domain,
+    )?)
 }
 
-fn inspect_before_authoritative_mutation(
+fn inspect_supported(
     bytes: &[u8],
     policy: &InspectionPolicy,
-    authoritative_mutations: &mut usize,
 ) -> Result<InspectedBundle, ImportError> {
-    let inspected = inspect_bundle(bytes, policy, &MigrationRegistries::current_only())?;
-    *authoritative_mutations += 1;
-    Ok(inspected)
+    let migrations = MigrationRegistries::new(
+        Vec::new(),
+        vec![PortableMigrationStep {
+            from_version: 1,
+            to_version: 2,
+            name: "portable-v1-to-v2",
+            migrate: Arc::new(portable_migrate::migrate_fixture_v1),
+        }],
+    )?;
+    inspect_bundle(
+        bytes,
+        policy,
+        &migrations,
+        &portable_decode::decode_fixture_domain,
+    )
 }
 
 fn archive_entries(bytes: &[u8]) -> TestResult<BTreeMap<String, Vec<u8>>> {
@@ -446,7 +471,10 @@ fn apply_archive_mutation(
     Ok(())
 }
 
-fn materialize_scenario_export(input: &Value, portable: &PortableScenario) -> TestResult<Vec<u8>> {
+fn materialize_scenario_export(
+    input: &Value,
+    portable: &ScenarioSnapshotV1,
+) -> TestResult<Vec<u8>> {
     assert_eq!(
         input.get("portableFixture"),
         Some(&json!({
@@ -469,6 +497,14 @@ fn materialize_scenario_export(input: &Value, portable: &PortableScenario) -> Te
     )?;
     let mut entries = archive_entries(&base)?;
     let scenario_path = format!("scenarios/{}.json", portable.document.scenario_id);
+    // The released adversarial corpus exercises the genuine global-v1 representation.
+    entries.insert(scenario_path.clone(), canonical_json(portable)?);
+    mutate_json_entry(&mut entries, MANIFEST_PATH, |manifest| {
+        manifest["schemaVersion"] = json!(1);
+        manifest["requiredCapabilities"] = serde_json::to_value(&portable.required_capabilities)?;
+        Ok(())
+    })?;
+    recompute_checksums(&mut entries)?;
     let mutations = input
         .get("mutations")
         .and_then(Value::as_array)
@@ -486,7 +522,7 @@ fn materialize_scenario_export(input: &Value, portable: &PortableScenario) -> Te
     )
 }
 
-fn materialize_case(case: &Value, portable: &PortableScenario) -> TestResult<Vec<u8>> {
+fn materialize_case(case: &Value, portable: &ScenarioSnapshotV1) -> TestResult<Vec<u8>> {
     let input = case
         .get("input")
         .ok_or_else(|| std::io::Error::other("adversarial case has no input"))?;
@@ -548,34 +584,30 @@ fn assert_expected_error(error: ImportError, expected: &Value) -> TestResult {
 
 #[test]
 fn current_and_unknown_newer_portable_wrappers_are_executable_contracts() -> TestResult {
-    let current = fixture(PORTABLE_V1, "eutheto.test/portable-scenario-fixture")?;
-    assert_eq!(
-        current.get("expectedOutcome"),
-        Some(&json!({
-            "status": "accepted",
-            "portableSchemaVersion": 1,
-            "revision": 7,
-            "preservedNonsemanticExtensions": ["vendor.example"],
-            "authoritativeMutationDuringInspection": false
-        }))
-    );
-    assert_eq!(
-        current.get("bundleDeclaration"),
-        Some(&json!({"nonsemanticExtensions": ["vendor.example"]}))
-    );
-    let portable = portable_input(&current)?;
+    let legacy = fixture(PORTABLE_V1, "eutheto.test/portable-scenario-fixture")?;
+    let current = fixture(PORTABLE_V2, "eutheto.test/portable-scenario-fixture")?;
+    let portable = portable_input(&legacy)?;
     let bundle = production_bundle(
         portable.clone(),
         "018f47f2-e880-7000-8000-000000000300",
         "2026-08-29T00:00:00Z",
         "Deterministic fixture",
     )?;
+    let scenario_path = format!("scenarios/{}.json", portable.document.scenario_id);
+    let mut entries = archive_entries(&bundle)?;
+    let current_wire: Value = serde_json::from_slice(
+        entries
+            .get(&scenario_path)
+            .ok_or("current scenario entry is missing")?,
+    )?;
+    assert_eq!(current_wire, current["input"]);
     let inspected = inspect_bundle(
         &bundle,
         &InspectionPolicy::default(),
         &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
     )?;
-    assert_eq!(inspected.scenarios, vec![portable]);
+    assert_eq!(inspected.scenarios, vec![portable.clone()]);
     assert_eq!(inspected.scenarios[0].revision, Revision::new(7));
     assert_eq!(
         inspected.scenarios[0].document.extensions,
@@ -589,27 +621,39 @@ fn current_and_unknown_newer_portable_wrappers_are_executable_contracts() -> Tes
         ["vendor.example".to_owned()].into_iter().collect()
     );
     assert!(inspected.applied_migrations.is_empty());
+    entries.insert(scenario_path.clone(), canonical_json(&legacy["input"])?);
+    mutate_json_entry(&mut entries, MANIFEST_PATH, |manifest| {
+        manifest["schemaVersion"] = json!(1);
+        manifest["requiredCapabilities"] = legacy["input"]["requiredCapabilities"].clone();
+        Ok(())
+    })?;
+    recompute_checksums(&mut entries)?;
+    let legacy_bundle = standard_zip(
+        entries.into_iter().map(|(path, bytes)| ArchiveEntry {
+            path,
+            bytes,
+            unix_mode: 0o100_600,
+        }),
+        CompressionMethod::Stored,
+    )?;
+    let migrated = inspect_supported(&legacy_bundle, &InspectionPolicy::default())?;
+    assert_eq!(migrated.scenarios, vec![portable]);
+    assert_eq!(migrated.original_schema_version, 1);
+    assert_eq!(migrated.manifest.schema_version, 2);
+    assert_eq!(
+        migrated
+            .applied_migrations
+            .iter()
+            .map(|step| (step.from_version, step.to_version, step.subject.as_ref()))
+            .collect::<Vec<_>>(),
+        vec![(1, 2, None)],
+    );
 
     let newer = fixture(
         PORTABLE_UNKNOWN_NEWER,
         "eutheto.test/portable-scenario-fixture",
     )?;
-    assert_eq!(
-        newer.get("expectedOutcome"),
-        Some(&json!({
-            "status": "rejected",
-            "errorKind": "UnsupportedNewerVersion",
-            "versionSpace": "portable schema",
-            "foundVersion": 2,
-            "currentVersion": 1,
-            "authoritativeMutation": false
-        }))
-    );
     let mut entries = archive_entries(&bundle)?;
-    let scenario_path = format!(
-        "scenarios/{}.json",
-        inspected.scenarios[0].document.scenario_id
-    );
     entries.insert(
         scenario_path,
         canonical_json(
@@ -618,6 +662,10 @@ fn current_and_unknown_newer_portable_wrappers_are_executable_contracts() -> Tes
                 .ok_or_else(|| std::io::Error::other("newer fixture has no input"))?,
         )?,
     );
+    mutate_json_entry(&mut entries, MANIFEST_PATH, |manifest| {
+        manifest["schemaVersion"] = json!(3);
+        Ok(())
+    })?;
     recompute_checksums(&mut entries)?;
     let newer_bundle = standard_zip(
         entries.into_iter().map(|(path, bytes)| ArchiveEntry {
@@ -627,21 +675,15 @@ fn current_and_unknown_newer_portable_wrappers_are_executable_contracts() -> Tes
         }),
         CompressionMethod::Stored,
     )?;
-    let mut mutations = 0;
-    let refusal = inspect_before_authoritative_mutation(
-        &newer_bundle,
-        &InspectionPolicy::default(),
-        &mut mutations,
-    );
+    let refusal = inspect_supported(&newer_bundle, &InspectionPolicy::default());
     assert!(matches!(
         refusal,
         Err(ImportError::UnsupportedNewerVersion {
             space: VersionSpace::PortableSchema,
-            found: 2,
-            current: 1
+            found: 3,
+            current: 2
         })
     ));
-    assert_eq!(mutations, 0);
     Ok(())
 }
 
@@ -700,12 +742,7 @@ fn every_declarative_adversarial_case_reaches_its_typed_refusal() -> TestResult 
         let id = Uuid::parse_str(required_str(case, "id")?)?;
         assert_eq!(id.get_version_num(), 7);
         let bytes = materialize_case(case, &portable)?;
-        let mut authoritative_mutations = 0;
-        let result = inspect_before_authoritative_mutation(
-            &bytes,
-            &InspectionPolicy::default(),
-            &mut authoritative_mutations,
-        );
+        let result = inspect_supported(&bytes, &InspectionPolicy::default());
         let Err(error) = result else {
             return Err(std::io::Error::other(format!(
                 "{} unexpectedly passed inspection",
@@ -718,12 +755,6 @@ fn every_declarative_adversarial_case_reaches_its_typed_refusal() -> TestResult 
             case.get("expectedOutcome")
                 .ok_or_else(|| std::io::Error::other("case has no expected outcome"))?,
         )?;
-        assert_eq!(
-            authoritative_mutations,
-            0,
-            "{}",
-            required_str(case, "name")?
-        );
     }
     Ok(())
 }
@@ -779,15 +810,15 @@ fn unopened_preflight_streams_unknown_domain_without_constructing_it() -> TestRe
             .get(&scenario_path)
             .ok_or("fixture scenario is missing")?,
     )?;
-    scenario["document"]["domainPack"]["id"] = json!("vendor.unknown");
-    scenario["document"]["domain"] = json!("__SKIPPED_DOMAIN__");
+    scenario["domain"]["packId"] = json!("vendor.unknown");
+    scenario["domain"]["payload"] = json!("__SKIPPED_DOMAIN__");
     let encoded = String::from_utf8(canonical_json(&scenario)?)?;
     let padding = std::iter::repeat_n("null", 100_000)
         .collect::<Vec<_>>()
         .join(",");
     let hostile_domain =
-        format!("\"domain\":{{\"entities\":[],\"entities\":{{}},\"padding\":[{padding}]}}");
-    let encoded = encoded.replace("\"domain\":\"__SKIPPED_DOMAIN__\"", &hostile_domain);
+        format!("\"payload\":{{\"entities\":[],\"entities\":{{}},\"padding\":[{padding}]}}");
+    let encoded = encoded.replace("\"payload\":\"__SKIPPED_DOMAIN__\"", &hostile_domain);
     assert!(encoded.contains("\"entities\":[],\"entities\":{}"));
     entries.insert(scenario_path.clone(), encoded.into_bytes());
     recompute_checksums(&mut entries)?;
@@ -815,6 +846,7 @@ fn unopened_preflight_streams_unknown_domain_without_constructing_it() -> TestRe
         &bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
     );
     assert!(
         matches!(
@@ -889,7 +921,8 @@ fn known_current_pack_rejects_compact_multi_million_tiny_nodes_before_value_grow
         inspect_bundle(
             &bytes,
             &InspectionPolicy::default(),
-            &MigrationRegistries::current_only()
+            &MigrationRegistries::current_only(),
+            &portable_decode::decode_fixture_domain,
         ),
         Err(ImportError::InvalidManifest(_))
     ));
@@ -902,20 +935,23 @@ fn cumulative_multi_entry_representation_is_rejected_incrementally() -> TestResu
     let current = portable_input(&wrapper)?;
     let mut historical = current.clone();
     historical.revision = Revision::new(6);
-    let bundle = assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: "018f1e2d-3c4b-7a69-8def-0123456789ad".parse::<BundleId>()?,
-        created_at: "2026-08-31T00:00:00Z".to_owned(),
-        application: ApplicationMetadata {
-            name: "Eutheto".to_owned(),
-            version: "0.1.0".to_owned(),
+    let bundle = assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: "018f1e2d-3c4b-7a69-8def-0123456789ad".parse::<BundleId>()?,
+            created_at: "2026-08-31T00:00:00Z".to_owned(),
+            application: ApplicationMetadata {
+                name: "Eutheto".to_owned(),
+                version: "0.1.0".to_owned(),
+            },
+            title: "Cumulative representation".to_owned(),
+            scenario: current,
+            scenario_revisions: vec![historical],
+            sections: BackupSections::default(),
+            nonsemantic_extensions: BTreeSet::from(["vendor.mass".to_owned()]),
+            manifest_extensions: BTreeMap::new(),
         },
-        title: "Cumulative representation".to_owned(),
-        scenario: current,
-        scenario_revisions: vec![historical],
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::from(["vendor.mass".to_owned()]),
-        manifest_extensions: BTreeMap::new(),
-    })?;
+        &portable_encode::encode_fixture_domain,
+    )?;
     let mut entries = archive_entries(&bundle)?;
     let scenario_paths = entries
         .keys()
@@ -939,6 +975,7 @@ fn cumulative_multi_entry_representation_is_rejected_incrementally() -> TestResu
         &bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
     );
     assert!(
         matches!(

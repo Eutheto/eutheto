@@ -915,6 +915,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "dirs",
+ "eutheto-command",
  "eutheto-core",
  "eutheto-domain-ir",
  "eutheto-export",
@@ -1025,6 +1026,7 @@ dependencies = [
 name = "eutheto-export"
 version = "0.1.0"
 dependencies = [
+ "eutheto-command",
  "eutheto-types",
  "hex",
  "image",
@@ -1042,6 +1044,7 @@ name = "eutheto-import"
 version = "0.1.0"
 dependencies = [
  "eutheto-command",
+ "eutheto-domain-api",
  "eutheto-export",
  "eutheto-types",
  "serde",
@@ -5521,6 +5524,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "clap",
+ "eutheto-export",
  "eutheto-protocol",
  "eutheto-types",
  "prost",

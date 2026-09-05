@@ -17,8 +17,8 @@ use eutheto_export::{
     PORTABLE_LIMITS, PortableBackupAssetSelection,
 };
 use eutheto_import::{
-    CollisionPlan, ImportOptions, ImportPreview, MigrationRegistryKind, RestoreAuthorization,
-    SafetyBackupEvidence,
+    CollisionPlan, ImportOptions, ImportPreview, MigrationRegistryKind, MigrationSubject,
+    PackMigrationVersionSpace, RestoreAuthorization, SafetyBackupEvidence,
 };
 use eutheto_types::{
     ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
@@ -613,7 +613,8 @@ struct UnopenedBundleScenarioDto {
     path: String,
     scenario_id: Option<String>,
     pack_id: Option<String>,
-    pack_schema_version: Option<u32>,
+    internal_pack_schema_version: Option<u32>,
+    portable_pack_schema_version: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -706,6 +707,10 @@ struct AppliedMigrationDto {
     name: String,
     from_version: u32,
     to_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version_space: Option<PackMigrationVersionSpace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<MigrationSubject>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1527,6 +1532,8 @@ fn portable_preview(preview_id: RequestId, preview: ImportPreview) -> PortablePr
                 name: item.name,
                 from_version: item.from_version,
                 to_version: item.to_version,
+                version_space: item.version_space,
+                subject: item.subject,
             })
             .collect(),
     }
@@ -2612,7 +2619,8 @@ async fn inspect_unopened_bundle_bytes(
                             path: scenario.path,
                             scenario_id: scenario.scenario_id,
                             pack_id: scenario.pack_id,
-                            pack_schema_version: scenario.pack_schema_version,
+                            internal_pack_schema_version: scenario.internal_pack_schema_version,
+                            portable_pack_schema_version: scenario.portable_pack_schema_version,
                         })
                         .collect(),
                 },

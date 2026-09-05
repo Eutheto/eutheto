@@ -1,5 +1,8 @@
 #![no_main]
 
+#[path = "../../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+
 use eutheto_export::{
     CHECKSUM_ALGORITHM, CHECKSUMS_PATH, Checksums, MANIFEST_PATH, PORTABLE_LIMITS, canonical_json,
     sha256_hex,
@@ -36,7 +39,7 @@ fn wrap_scenario(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     let manifest_bytes = canonical_json(&json!({
         "format": "eutheto-bundle",
         "formatVersion": 1,
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "bundleId": "0195a5e4-7c00-7000-8000-000000000010",
         "bundleKind": "scenario-export",
         "createdAt": "2026-08-29T12:00:00Z",
@@ -49,7 +52,7 @@ fn wrap_scenario(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
             "preferences": 0,
             "assets": 0
         },
-        "requiredCapabilities": [],
+        "requiredCapabilities": [{"id": "official.test.portable", "version": 2}],
         "nonsemanticExtensions": [],
         "integrity": {
             "algorithm": CHECKSUM_ALGORITHM,
@@ -89,6 +92,11 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(bundle) = wrap_scenario(data) {
         let policy = bounded_policy();
         let registries = MigrationRegistries::current_only();
-        let _inspection = inspect_bundle(&bundle, &policy, &registries);
+        let _inspection = inspect_bundle(
+            &bundle,
+            &policy,
+            &registries,
+            &portable_decode::decode_fixture_domain,
+        );
     }
 });

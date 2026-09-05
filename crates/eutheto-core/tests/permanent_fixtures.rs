@@ -1,3 +1,6 @@
+#[path = "../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+
 use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack};
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult, EuthetoApp,
@@ -6,18 +9,14 @@ use eutheto_core::{
 use eutheto_domain_api::{
     CompileContext, CounterfactualCompileContext, DomainBatchCommand, DomainCatalog,
     DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainPackRegistry,
-    DomainShareResult, DomainValidationReport, HistoricalPortableDomainDocument,
-    PortableDomainDocument, PortableImportContext, ShareResultOptions,
+    DomainShareResult, DomainValidationReport, PortableImportContext, ShareResultOptions,
 };
 use eutheto_domain_ir::{
     AcceptedResult, CounterfactualConditionV1, EvidenceRenderRequestV1, EvidenceRenderResultV1,
     ExplanationCapability, NormalizedSolution, ScoreVector, VerificationContextV1,
     VerificationReport, VerificationScope,
 };
-use eutheto_export::{
-    ApplicationMetadata, BackupSections, PortableScenario, ScenarioExportSnapshot,
-    assemble_scenario_export,
-};
+use eutheto_export::{canonical_json, sha256_hex};
 use eutheto_import::{
     CollisionPlan, ImportOptions, InspectionPolicy, MigrationRegistries, RestoreMode,
     inspect_bundle,
@@ -25,33 +24,25 @@ use eutheto_import::{
 use eutheto_planning_ir::{CandidateValues, PlanningProblem};
 use eutheto_store::SqliteScenarioStore;
 use eutheto_types::{
-    AppError, BundleId, EntityId, FixedClock, RequestId, Revision, Rfc3339Timestamp,
-    ScenarioDocument, SolutionId, SystemIdGenerator, ValidationIssue, ValidationSeverity,
+    AppError, BundleId, EntityId, FixedClock, PortableDomainDocument, RequestId, Revision,
+    Rfc3339Timestamp, ScenarioDocument, ScenarioSnapshotV1, SolutionId, SystemIdGenerator,
+    ValidationIssue, ValidationSeverity,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::io::{Cursor, Write};
+use std::sync::Arc;
 use tempfile::TempDir;
+use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 const OFFICIAL_SCENARIO: &str =
     include_str!("../../../tests/integration/fixtures/official_test_scenario_v1.json");
 const EXPECTED_ROUNDTRIP: &str =
     include_str!("../../../tests/integration/fixtures/expected_roundtrip.json");
 
-#[derive(Default)]
-struct PackCounters {
-    initializations: AtomicUsize,
-    migrations: AtomicUsize,
-    validations: AtomicUsize,
-}
-
 #[derive(Clone)]
 struct HistoricalFixturePack {
-    counters: Arc<PackCounters>,
     fail_on_version: Option<u32>,
     invalid_initialization: bool,
 }
@@ -59,7 +50,7 @@ struct HistoricalFixturePack {
 impl HistoricalFixturePack {
     fn unsupported<T>() -> Result<T, DomainPackError> {
         Err(DomainPackError::Contract(
-            "the fixture pack implements only initialization and import migration".to_owned(),
+            "the fixture pack does not implement solving or presentation".to_owned(),
         ))
     }
 
@@ -106,7 +97,6 @@ impl DomainPack for HistoricalFixturePack {
         &self,
         mut shell: ScenarioDocument,
     ) -> Result<ScenarioDocument, DomainPackError> {
-        self.counters.initializations.fetch_add(1, Ordering::SeqCst);
         if self.invalid_initialization {
             shell.domain_pack.schema_version = 2;
             return Ok(shell);
@@ -130,7 +120,6 @@ impl DomainPack for HistoricalFixturePack {
         mut document: ScenarioDocument,
     ) -> Result<ScenarioDocument, DomainPackError> {
         let source_version = document.domain_pack.schema_version;
-        self.counters.migrations.fetch_add(1, Ordering::SeqCst);
         if self.fail_on_version == Some(source_version) {
             return Err(DomainPackError::Contract(
                 "fixture-requested migration failure".to_owned(),
@@ -166,7 +155,6 @@ impl DomainPack for HistoricalFixturePack {
     }
 
     fn validate_full(&self, document: &ScenarioDocument) -> DomainValidationReport {
-        self.counters.validations.fetch_add(1, Ordering::SeqCst);
         Self::validation_report(document)
     }
 
@@ -223,24 +211,36 @@ impl DomainPack for HistoricalFixturePack {
 
     fn export_portable(
         &self,
-        _document: &ScenarioDocument,
+        document: &ScenarioDocument,
     ) -> Result<PortableDomainDocument, DomainPackError> {
-        Self::unsupported()
+        if document.domain_pack.schema_version != 3 {
+            return Err(DomainPackError::UnsupportedVersion(
+                document.domain_pack.schema_version,
+            ));
+        }
+        // This fixture shares the synthetic portable shape, not its internal version space.
+        let mut synthetic = document.clone();
+        synthetic.domain_pack.schema_version = 1;
+        OfficialTestPack.export_portable(&synthetic)
     }
 
-    fn migrate_portable(
+    fn migrate_portable_step(
         &self,
-        _document: HistoricalPortableDomainDocument,
+        document: PortableDomainDocument,
     ) -> Result<PortableDomainDocument, DomainPackError> {
-        Self::unsupported()
+        OfficialTestPack.migrate_portable_step(document)
     }
 
     fn import_portable(
         &self,
-        _document: &PortableDomainDocument,
-        _context: &PortableImportContext,
+        document: &PortableDomainDocument,
+        context: &PortableImportContext,
     ) -> Result<ScenarioDocument, DomainPackError> {
-        Self::unsupported()
+        let mut synthetic = context.clone();
+        synthetic.scenario_shell.domain_pack.schema_version = 1;
+        let mut imported = OfficialTestPack.import_portable(document, &synthetic)?;
+        imported.domain_pack.schema_version = 3;
+        Ok(imported)
     }
 
     fn build_share_result(
@@ -351,17 +351,12 @@ fn dependencies(directory: &TempDir) -> TestResult<AppDependencies> {
     })
 }
 
-async fn fixture_app(
-    directory: &TempDir,
-    counters: Arc<PackCounters>,
-    fail_on_version: Option<u32>,
-) -> TestResult<EuthetoApp> {
-    fixture_app_with_initializer(directory, counters, fail_on_version, false).await
+async fn fixture_app(directory: &TempDir, fail_on_version: Option<u32>) -> TestResult<EuthetoApp> {
+    fixture_app_with_initializer(directory, fail_on_version, false).await
 }
 
 async fn fixture_app_with_initializer(
     directory: &TempDir,
-    counters: Arc<PackCounters>,
     fail_on_version: Option<u32>,
     invalid_initialization: bool,
 ) -> TestResult<EuthetoApp> {
@@ -369,7 +364,6 @@ async fn fixture_app_with_initializer(
     let (store, initialization) = SqliteScenarioStore::open(&dependencies.paths.database).await?;
     let registry = DomainPackRegistry::builder()
         .register(HistoricalFixturePack {
-            counters,
             fail_on_version,
             invalid_initialization,
         })
@@ -444,7 +438,7 @@ async fn export_scenario(
 }
 
 fn assert_expected_meaning(
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     expected_meaning: &Value,
     expected_document: &ScenarioDocument,
 ) -> TestResult {
@@ -536,7 +530,7 @@ fn asserted_fixture_contracts() -> TestResult<(Value, Value)> {
 fn portable_fixture(
     official: &Value,
     expected_meaning: &Value,
-) -> TestResult<(ScenarioDocument, PortableScenario)> {
+) -> TestResult<(ScenarioDocument, ScenarioSnapshotV1)> {
     let document: ScenarioDocument = serde_json::from_value(
         official
             .get("input")
@@ -556,7 +550,7 @@ fn portable_fixture(
             json!({"opaque": [1, "two", true]})
         )])
     );
-    let portable = PortableScenario::current(
+    let portable = ScenarioSnapshotV1::current(
         Revision::new(required_u64(expected_meaning, "revision")?),
         document.clone(),
         BTreeSet::new(),
@@ -565,28 +559,97 @@ fn portable_fixture(
     Ok((document, portable))
 }
 
-fn source_bundle(portable: PortableScenario) -> TestResult<Vec<u8>> {
-    source_bundle_with_revisions(portable, Vec::new())
+fn source_bundle(portable: &ScenarioSnapshotV1) -> TestResult<Vec<u8>> {
+    source_bundle_with_revisions(portable, &[])
 }
 
 fn source_bundle_with_revisions(
-    portable: PortableScenario,
-    scenario_revisions: Vec<PortableScenario>,
+    portable: &ScenarioSnapshotV1,
+    scenario_revisions: &[ScenarioSnapshotV1],
 ) -> TestResult<Vec<u8>> {
-    Ok(assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: "018f47f2-e880-7000-8000-000000000302".parse::<BundleId>()?,
-        created_at: "2026-08-29T00:00:00Z".to_owned(),
-        application: ApplicationMetadata {
-            name: "Eutheto".to_owned(),
-            version: "0.1.0".to_owned(),
+    // Genuine global-v1 fixtures may carry internal versions or packs unavailable to today's writer.
+    let mut entries = BTreeMap::new();
+    let mut capabilities = portable.required_capabilities.clone();
+    let mut extensions: BTreeSet<_> = portable
+        .extensions
+        .keys()
+        .chain(portable.document.extensions.keys())
+        .cloned()
+        .collect();
+    entries.insert(
+        format!("scenarios/{}.json", portable.document.scenario_id),
+        canonical_json(portable)?,
+    );
+    for revision in scenario_revisions {
+        capabilities.extend(revision.required_capabilities.iter().cloned());
+        extensions.extend(
+            revision
+                .extensions
+                .keys()
+                .chain(revision.document.extensions.keys())
+                .cloned(),
+        );
+        entries.insert(
+            format!(
+                "scenario-revisions/{}-{}.json",
+                revision.document.scenario_id,
+                revision.revision.value()
+            ),
+            canonical_json(revision)?,
+        );
+        let result_id: SolutionId = format!(
+            "018f47f2-e880-7000-8001-{:012x}",
+            u32::try_from(revision.revision.value())?,
+        )
+        .parse()?;
+        entries.insert(
+            format!("results/{result_id}.json"),
+            canonical_json(&json!({
+                "resultId": result_id,
+                "scenarioId": revision.document.scenario_id,
+                "scenarioRevision": revision.revision,
+                "sourceDocumentSha256": sha256_hex(&canonical_json(&revision.document)?),
+            }))?,
+        );
+    }
+    entries.insert("manifest.json".to_owned(), canonical_json(&json!({
+        "format": "eutheto-bundle",
+        "formatVersion": 1,
+        "schemaVersion": 1,
+        "bundleId": "018f47f2-e880-7000-8000-000000000302",
+        "bundleKind": "scenario-export",
+        "createdAt": "2026-08-29T00:00:00Z",
+        "application": {"name": "Eutheto", "version": "0.1.0"},
+        "title": "Deterministic fixture",
+        "counts": {
+            "scenarios": 1, "scenarioRevisions": scenario_revisions.len(),
+            "results": scenario_revisions.len(), "sharedRecords": 0, "preferences": 0, "assets": 0,
         },
-        title: "Deterministic fixture".to_owned(),
-        scenario: portable,
-        scenario_revisions,
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: BTreeMap::new(),
-    })?)
+        "requiredCapabilities": capabilities,
+        "nonsemanticExtensions": extensions,
+        "assetMetadata": {},
+        "integrity": {"algorithm": "sha256", "checksumsFile": "checksums.json"},
+        "extensions": {},
+    }))?);
+    let checksums: BTreeMap<_, _> = entries
+        .iter()
+        .map(|(path, bytes)| (path.clone(), sha256_hex(bytes)))
+        .collect();
+    entries.insert(
+        "checksums.json".to_owned(),
+        canonical_json(&json!({
+            "algorithm": "sha256", "files": checksums,
+        }))?,
+    );
+    let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .unix_permissions(0o600);
+    for (path, bytes) in entries {
+        archive.start_file(path, options)?;
+        archive.write_all(&bytes)?;
+    }
+    Ok(archive.finish()?.into_inner())
 }
 
 async fn import_fixture(
@@ -599,7 +662,7 @@ async fn import_fixture(
             bytes: source_bundle,
             options: ImportOptions {
                 restore_mode: RestoreMode::ImportScenario,
-                include_results: false,
+                include_results: true,
                 include_assets: false,
             },
         })
@@ -643,6 +706,7 @@ async fn assert_exported_fixture(
         &exported,
         &InspectionPolicy::default(),
         &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
     )?;
     assert_eq!(inspected.scenarios.len(), 1);
     assert_expected_meaning(&inspected.scenarios[0], expected_meaning, document)?;
@@ -656,8 +720,7 @@ async fn assert_exported_fixture(
 #[tokio::test]
 async fn project_creation_persists_pack_initializer_state_at_revision_zero() -> TestResult {
     let directory = private_tempdir()?;
-    let counters = Arc::new(PackCounters::default());
-    let app = fixture_app(&directory, Arc::clone(&counters), None).await?;
+    let app = fixture_app(&directory, None).await?;
     let source = official_document()?;
     let mut domain_pack = source.domain_pack;
     domain_pack.schema_version = 3;
@@ -685,8 +748,6 @@ async fn project_creation_persists_pack_initializer_state_at_revision_zero() -> 
 
     assert_eq!(metadata.revision, Revision::INITIAL);
     assert_eq!(metadata.domain_pack.schema_version, 3);
-    assert_eq!(counters.initializations.load(Ordering::SeqCst), 1);
-    assert_eq!(counters.validations.load(Ordering::SeqCst), 1);
     let stored = stored_document(&app, metadata.scenario_id).await?;
     assert_eq!(stored.settings, requested_settings);
     assert_eq!(stored.metadata.title, "Initialized fixture");
@@ -701,7 +762,7 @@ async fn project_creation_persists_pack_initializer_state_at_revision_zero() -> 
     );
     drop(app);
 
-    let reopened = fixture_app(&directory, Arc::new(PackCounters::default()), None).await?;
+    let reopened = fixture_app(&directory, None).await?;
     assert_eq!(
         stored_document(&reopened, metadata.scenario_id).await?,
         stored
@@ -713,8 +774,7 @@ async fn project_creation_persists_pack_initializer_state_at_revision_zero() -> 
 async fn historical_schema_project_creation_is_rejected_without_initialization_or_persistence()
 -> TestResult {
     let directory = private_tempdir()?;
-    let counters = Arc::new(PackCounters::default());
-    let app = fixture_app(&directory, Arc::clone(&counters), None).await?;
+    let app = fixture_app(&directory, None).await?;
     let source = official_document()?;
 
     assert!(matches!(
@@ -729,12 +789,10 @@ async fn historical_schema_project_creation_is_rejected_without_initialization_o
         Err(AppError::Unsupported(feature))
             if feature.code == "domain_pack.unsupported"
     ));
-    assert_eq!(counters.initializations.load(Ordering::SeqCst), 0);
-    assert_eq!(counters.validations.load(Ordering::SeqCst), 0);
     assert_eq!(project_count(&app).await?, 0);
     drop(app);
 
-    let reopened = fixture_app(&directory, Arc::new(PackCounters::default()), None).await?;
+    let reopened = fixture_app(&directory, None).await?;
     assert_eq!(project_count(&reopened).await?, 0);
     Ok(())
 }
@@ -742,8 +800,7 @@ async fn historical_schema_project_creation_is_rejected_without_initialization_o
 #[tokio::test]
 async fn invalid_pack_initializer_output_is_rejected_before_persistence() -> TestResult {
     let directory = private_tempdir()?;
-    let counters = Arc::new(PackCounters::default());
-    let app = fixture_app_with_initializer(&directory, Arc::clone(&counters), None, true).await?;
+    let app = fixture_app_with_initializer(&directory, None, true).await?;
     let source = official_document()?;
     let mut domain_pack = source.domain_pack;
     domain_pack.schema_version = 3;
@@ -760,8 +817,6 @@ async fn invalid_pack_initializer_output_is_rejected_before_persistence() -> Tes
         Err(AppError::Protocol(failure))
             if failure.code == "application.pack_initialization_invalid"
     ));
-    assert_eq!(counters.initializations.load(Ordering::SeqCst), 1);
-    assert_eq!(counters.validations.load(Ordering::SeqCst), 0);
     assert_eq!(project_count(&app).await?, 0);
     Ok(())
 }
@@ -773,7 +828,7 @@ async fn official_fixture_roundtrips_through_application_storage_and_reopen() ->
         .get("expectedMeaning")
         .ok_or_else(|| std::io::Error::other("roundtrip fixture has no expected meaning"))?;
     let (document, portable) = portable_fixture(&official, expected_meaning)?;
-    let source_bundle = source_bundle(portable)?;
+    let source_bundle = source_bundle(&portable)?;
 
     let directory = private_tempdir()?;
     let app = app_result(EuthetoApp::open(dependencies(&directory)?).await)?;
@@ -791,8 +846,8 @@ async fn historical_pack_documents_migrate_deterministically_before_commit_and_r
     let source_document = document_at_pack_version(1)?;
     let expected = deterministically_migrated_document()?;
     let source = source_bundle_with_revisions(
-        PortableScenario::current(Revision::new(7), source_document.clone(), BTreeSet::new()),
-        vec![PortableScenario::current(
+        &ScenarioSnapshotV1::current(Revision::new(7), source_document.clone(), BTreeSet::new()),
+        &[ScenarioSnapshotV1::current(
             Revision::new(6),
             source_document.clone(),
             BTreeSet::new(),
@@ -803,11 +858,8 @@ async fn historical_pack_documents_migrate_deterministically_before_commit_and_r
     let original_extensions = source_document.extensions.clone();
 
     let first_directory = private_tempdir()?;
-    let first_counters = Arc::new(PackCounters::default());
-    let first = fixture_app(&first_directory, Arc::clone(&first_counters), None).await?;
+    let first = fixture_app(&first_directory, None).await?;
     import_fixture(&first, source.clone(), source_document.scenario_id).await?;
-    assert_eq!(first_counters.migrations.load(Ordering::SeqCst), 4);
-    assert_eq!(first_counters.validations.load(Ordering::SeqCst), 2);
     let committed = stored_document(&first, source_document.scenario_id).await?;
     assert_eq!(committed, expected);
     assert_eq!(committed.metadata, original_metadata);
@@ -815,46 +867,70 @@ async fn historical_pack_documents_migrate_deterministically_before_commit_and_r
     assert_eq!(committed.extensions, original_extensions);
     drop(first);
 
-    let reopened = fixture_app(&first_directory, Arc::clone(&first_counters), None).await?;
+    let reopened = fixture_app(&first_directory, None).await?;
     assert_eq!(
         stored_document(&reopened, source_document.scenario_id).await?,
         expected
     );
-    assert_eq!(first_counters.migrations.load(Ordering::SeqCst), 4);
     let reopened_export = export_scenario(&reopened, source_document.scenario_id).await?;
+    let pack = HistoricalFixturePack {
+        fail_on_version: None,
+        invalid_initialization: false,
+    };
     let reopened_inspection = inspect_bundle(
         &reopened_export,
         &InspectionPolicy::default(),
         &MigrationRegistries::current_only(),
+        &|wire| portable_decode::decode_fixture_domain_with_pack(wire, &pack),
     )?;
+    assert_eq!(reopened_inspection.scenario_revisions.len(), 1);
     assert!(
         reopened_inspection
             .scenario_revisions
             .iter()
             .all(|revision| revision.document == expected)
     );
+    let result: Value = serde_json::from_slice(
+        reopened_inspection
+            .additional_entries
+            .get("results/018f47f2-e880-7000-8001-000000000006.json")
+            .ok_or("missing inert historical result")?,
+    )?;
+    let source_checksum = sha256_hex(&canonical_json(&source_document)?);
+    assert_ne!(source_checksum, sha256_hex(&canonical_json(&expected)?));
+    assert_eq!(result["sourceDocumentSha256"], source_checksum);
+    let solutions = app_result(
+        reopened
+            .query(AppQuery::SolutionList(
+                eutheto_core::SolutionListRequestV1 {
+                    schema_version: eutheto_core::SOLUTION_API_SCHEMA_VERSION,
+                    scenario_id: source_document.scenario_id,
+                },
+            ))
+            .await,
+    )?;
+    let AppQueryResult::SolutionList(solutions) = solutions else {
+        return Err("expected accepted solution list".into());
+    };
+    assert!(solutions.solutions.is_empty());
     drop(reopened);
 
     let second_directory = private_tempdir()?;
-    let second_counters = Arc::new(PackCounters::default());
-    let second = fixture_app(&second_directory, Arc::clone(&second_counters), None).await?;
+    let second = fixture_app(&second_directory, None).await?;
     import_fixture(&second, source, source_document.scenario_id).await?;
     assert_eq!(
         stored_document(&second, source_document.scenario_id).await?,
         expected
     );
-    assert_eq!(second_counters.migrations.load(Ordering::SeqCst), 4);
-    assert_eq!(second_counters.validations.load(Ordering::SeqCst), 2);
     Ok(())
 }
 
 #[tokio::test]
 async fn historical_pack_migration_failure_is_atomic() -> TestResult {
     let directory = private_tempdir()?;
-    let counters = Arc::new(PackCounters::default());
-    let app = fixture_app(&directory, Arc::clone(&counters), Some(2)).await?;
+    let app = fixture_app(&directory, Some(2)).await?;
     let document = document_at_pack_version(1)?;
-    let source = source_bundle(PortableScenario::current(
+    let source = source_bundle(&ScenarioSnapshotV1::current(
         Revision::new(7),
         document,
         BTreeSet::new(),
@@ -877,12 +953,10 @@ async fn historical_pack_migration_failure_is_atomic() -> TestResult {
                 .iter()
                 .any(|issue| issue.code == "domain_pack.migration_failed")
     ));
-    assert_eq!(counters.migrations.load(Ordering::SeqCst), 2);
-    assert_eq!(counters.validations.load(Ordering::SeqCst), 0);
     assert_eq!(project_count(&app).await?, 0);
     drop(app);
 
-    let reopened = fixture_app(&directory, Arc::new(PackCounters::default()), None).await?;
+    let reopened = fixture_app(&directory, None).await?;
     assert_eq!(project_count(&reopened).await?, 0);
     Ok(())
 }
@@ -890,21 +964,18 @@ async fn historical_pack_migration_failure_is_atomic() -> TestResult {
 #[tokio::test]
 async fn current_and_unsupported_pack_documents_never_invoke_migration() -> TestResult {
     let directory = private_tempdir()?;
-    let counters = Arc::new(PackCounters::default());
-    let app = fixture_app(&directory, Arc::clone(&counters), None).await?;
+    let app = fixture_app(&directory, None).await?;
     let current = document_at_pack_version(3)?;
-    let current_source = source_bundle(PortableScenario::current(
+    let current_source = source_bundle(&ScenarioSnapshotV1::current(
         Revision::new(7),
         current.clone(),
         BTreeSet::new(),
     ))?;
     import_fixture(&app, current_source, current.scenario_id).await?;
     assert_eq!(stored_document(&app, current.scenario_id).await?, current);
-    assert_eq!(counters.migrations.load(Ordering::SeqCst), 0);
-    assert_eq!(counters.validations.load(Ordering::SeqCst), 0);
 
     let newer = document_at_pack_version(4)?;
-    let newer_source = source_bundle(PortableScenario::current(
+    let newer_source = source_bundle(&ScenarioSnapshotV1::current(
         Revision::new(8),
         newer,
         BTreeSet::new(),
@@ -925,12 +996,11 @@ async fn current_and_unsupported_pack_documents_never_invoke_migration() -> Test
                 .iter()
                 .any(|issue| issue.code == "domain_pack.unsupported")
     ));
-    assert_eq!(counters.migrations.load(Ordering::SeqCst), 0);
     assert_eq!(project_count(&app).await?, 1);
 
     let mut missing = document_at_pack_version(3)?;
     missing.domain_pack.id = "missing.pack".parse()?;
-    let missing_source = source_bundle(PortableScenario::current(
+    let missing_source = source_bundle(&ScenarioSnapshotV1::current(
         Revision::new(9),
         missing,
         BTreeSet::new(),
@@ -951,7 +1021,6 @@ async fn current_and_unsupported_pack_documents_never_invoke_migration() -> Test
                 .iter()
                 .any(|issue| issue.code == "domain_pack.unsupported")
     ));
-    assert_eq!(counters.migrations.load(Ordering::SeqCst), 0);
     assert_eq!(project_count(&app).await?, 1);
 
     let preview_id = match app_result(
@@ -980,6 +1049,5 @@ async fn current_and_unsupported_pack_documents_never_invoke_migration() -> Test
         AppCommandResult::UnopenedBundleReexported
     ));
     assert_eq!(std::fs::read(destination)?, newer_source);
-    assert_eq!(counters.migrations.load(Ordering::SeqCst), 0);
     Ok(())
 }

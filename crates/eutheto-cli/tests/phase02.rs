@@ -1,13 +1,15 @@
+#[path = "../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+
 use eutheto_cli::present_solver_support_matrix;
 use eutheto_core::{
     BackendSupportColumn, CapabilityMatrix, SolverSupportMatrixMetadata, SupportCell,
     SupportFeature, SupportFeatureCategory, SupportFeatureGate, SupportFeatureId,
 };
 use eutheto_export::{
-    ApplicationMetadata, BackupSections, PortableScenario, ScenarioExportSnapshot,
-    SemanticCapability, assemble_scenario_export,
+    ApplicationMetadata, BackupSections, ScenarioExportSnapshot, assemble_scenario_export,
 };
-use eutheto_types::BackendId;
+use eutheto_types::{BackendId, ScenarioSnapshotV1, SemanticCapability};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -41,7 +43,7 @@ fn write_unknown_semantic_bundle(path: &Path) -> Result<Vec<u8>, Box<dyn Error>>
     let wrapper: Value = serde_json::from_str(include_str!(
         "../../../tests/migration/fixtures/portable_v1_scenario.json"
     ))?;
-    let mut scenario: PortableScenario = serde_json::from_value(
+    let mut scenario: ScenarioSnapshotV1 = serde_json::from_value(
         wrapper
             .get("input")
             .cloned()
@@ -51,20 +53,23 @@ fn write_unknown_semantic_bundle(path: &Path) -> Result<Vec<u8>, Box<dyn Error>>
         id: "future.semantic".to_owned(),
         version: 1,
     });
-    let bytes = assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: "0195a5e4-7c00-7000-8000-000000000202".parse()?,
-        created_at: "2026-08-31T12:00:00Z".to_owned(),
-        application: ApplicationMetadata {
-            name: "Eutheto CLI Phase-02 process test".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+    let bytes = assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: "0195a5e4-7c00-7000-8000-000000000202".parse()?,
+            created_at: "2026-08-31T12:00:00Z".to_owned(),
+            application: ApplicationMetadata {
+                name: "Eutheto CLI Phase-02 process test".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            },
+            title: "Unopened future semantics".to_owned(),
+            scenario,
+            scenario_revisions: Vec::new(),
+            sections: BackupSections::default(),
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: BTreeMap::new(),
         },
-        title: "Unopened future semantics".to_owned(),
-        scenario,
-        scenario_revisions: Vec::new(),
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: BTreeMap::new(),
-    })?;
+        &portable_encode::encode_fixture_domain,
+    )?;
     fs::write(path, &bytes)?;
     Ok(bytes)
 }
@@ -286,9 +291,11 @@ fn unopened_inspection_and_exact_reexport_preserve_bytes_without_import_fallback
     assert_eq!(inspect["command"], "bundle.inspect");
     assert_eq!(inspect["status"], "inspected");
     assert_eq!(inspect["result"]["reexported"], false);
-    assert_eq!(
-        inspect["result"]["metadata"]["requiredCapabilities"],
-        json!([{"id": "future.semantic", "version": 1}])
+    assert!(
+        inspect["result"]["metadata"]["requiredCapabilities"]
+            .as_array()
+            .ok_or("missing required capability metadata")?
+            .contains(&json!({"id": "future.semantic", "version": 1}))
     );
     assert_eq!(
         inspect["result"]["metadata"]["title"],

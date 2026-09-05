@@ -1,17 +1,22 @@
 #![no_main]
 
+#[path = "../../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+#[path = "../../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+
 use eutheto_export::{
     ApplicationMetadata, BACKUP_SELECTION_EXTENSION, BackupSections, BackupSelection,
     BackupSelectionScope, ExportError, FixedExclusion, FullBackupSnapshot, PORTABLE_LIMITS,
-    PortableBackupAssetSelection, PortableScenario, assemble_full_backup,
-    backup_selection_extension_value, canonical_json,
+    PortableBackupAssetSelection, assemble_full_backup, backup_selection_extension_value,
+    canonical_json,
 };
 use eutheto_import::{
     CollisionAction, CollisionPlan, ImportError, ImportOptions, InspectionPolicy,
     LocalLibrarySnapshot, MigrationRegistries, RestoreMode, StagedDisposition, StagedImport,
     SupplementalCollisionAction, build_preview, inspect_bundle, stage_import,
 };
-use eutheto_types::{REVISION_MAX_V1, Revision, SupplementalIdentity};
+use eutheto_types::{REVISION_MAX_V1, Revision, ScenarioSnapshotV1, SupplementalIdentity};
 use libfuzzer_sys::fuzz_target;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,7 +55,6 @@ fn root_state(data: &[u8]) -> RootState {
     }
 }
 fn reference_case(data: &[u8]) -> ReferenceCase {
-
     let fields = [
         ("participantId", false),
         ("participant_id", false),
@@ -101,12 +105,12 @@ fn scenario(
     linked_entity_id: &str,
     fuzz_marker: &str,
     reference: &ReferenceCase,
-) -> Result<PortableScenario, serde_json::Error> {
+) -> Result<ScenarioSnapshotV1, serde_json::Error> {
     let mut document = json!({
         "format": "eutheto/scenario",
         "formatVersion": 1,
         "scenarioId": scenario_id,
-        "domainPack": {"id": "official.generic", "schemaVersion": 1},
+        "domainPack": {"id": "official.test", "schemaVersion": 1},
         "metadata": {
             "title": "Bundle remap fuzz",
             "description": "",
@@ -163,20 +167,10 @@ fn remap_bundle(data: &[u8], reference: &ReferenceCase) -> Result<Vec<u8>, Expor
     let marker = marker(data);
     let scenarios = vec![
         scenario(
-            SCENARIO_A,
-            ENTITY_A,
-            SCENARIO_B,
-            ENTITY_B,
-            &marker,
-            reference,
+            SCENARIO_A, ENTITY_A, SCENARIO_B, ENTITY_B, &marker, reference,
         )?,
         scenario(
-            SCENARIO_B,
-            ENTITY_B,
-            SCENARIO_A,
-            ENTITY_A,
-            &marker,
-            reference,
+            SCENARIO_B, ENTITY_B, SCENARIO_A, ENTITY_A, &marker, reference,
         )?,
     ];
     let mut historical_scenario = scenarios[0].clone();
@@ -219,25 +213,26 @@ fn remap_bundle(data: &[u8], reference: &ReferenceCase) -> Result<Vec<u8>, Expor
         fixed_exclusions: FixedExclusion::ALL.into_iter().collect(),
         scope: BackupSelectionScope::Library,
     };
-    assemble_full_backup(&FullBackupSnapshot {
-        bundle_id: serde_json::from_value(json!(
-            "0195a5e4-7c00-7000-8000-000000000222"
-        ))?,
-        created_at: "2026-08-29T00:00:00Z".to_owned(),
-        application: ApplicationMetadata {
-            name: "eutheto-import-fuzz".to_owned(),
-            version: "0".to_owned(),
+    assemble_full_backup(
+        &FullBackupSnapshot {
+            bundle_id: serde_json::from_value(json!("0195a5e4-7c00-7000-8000-000000000222"))?,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            application: ApplicationMetadata {
+                name: "eutheto-import-fuzz".to_owned(),
+                version: "0".to_owned(),
+            },
+            title: "Bundle-wide remap".to_owned(),
+            scenarios,
+            scenario_revisions: vec![historical_scenario],
+            sections,
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: BTreeMap::from([(
+                BACKUP_SELECTION_EXTENSION.to_owned(),
+                backup_selection_extension_value(&backup_selection)?,
+            )]),
         },
-        title: "Bundle-wide remap".to_owned(),
-        scenarios,
-        scenario_revisions: vec![historical_scenario],
-        sections,
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: BTreeMap::from([(
-            BACKUP_SELECTION_EXTENSION.to_owned(),
-            backup_selection_extension_value(&backup_selection)?,
-        )]),
-    })
+        &portable_encode::encode_fixture_domain,
+    )
 }
 
 fn bounded_policy() -> InspectionPolicy {
@@ -419,7 +414,7 @@ fn staged_declared_ids(staged: &StagedImport) -> BTreeSet<String> {
 }
 
 fn collect_preserved_positions(
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
     external_ids: &mut BTreeSet<String>,
     prose: &mut BTreeSet<String>,
 ) {
@@ -532,7 +527,12 @@ fuzz_target!(|data: &[u8]| {
         Err(error) => panic!("valid declared reference fixture was rejected: {error}"),
     };
     let policy = bounded_policy();
-    let inspected = match inspect_bundle(&bytes, &policy, &MigrationRegistries::current_only()) {
+    let inspected = match inspect_bundle(
+        &bytes,
+        &policy,
+        &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
+    ) {
         Ok(inspected) => inspected,
         Err(_typed_refusal) if !reference.valid_shape => return,
         Err(error) => panic!("valid declared reference bundle was rejected: {error}"),
@@ -651,8 +651,7 @@ fuzz_target!(|data: &[u8]| {
         RootState::Live => {
             assert_eq!(
                 scenario_a_preview.same_identity_revision.value(),
-                revision_floor.value().max(7)
-                    + u64::from(revision_floor.value() >= 7)
+                revision_floor.value().max(7) + u64::from(revision_floor.value() >= 7)
             );
         }
         RootState::Overflow => unreachable!(),

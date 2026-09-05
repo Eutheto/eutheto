@@ -172,6 +172,12 @@ Checksums detect corruption and inconsistent assembly. They do not authenticate 
 
 A schema version changes whenever structure or meaning changes materially: renames/moves, split fields, unit changes, enum meaning changes, solver-relevant removal, constraint restructuring, or new required semantic concepts. An additive default is safe only when it preserves old behavior, not merely syntactic validity.
 
+The implemented [portable-v2 prerequisite compatibility](../architecture/compatibility-policy.md#portable-v2-prerequisite-compatibility)
+keeps outer format V1 and internal/database representations unchanged while current writers emit
+global portable schema V2. Its host-owned shell contains one pack-owned domain envelope; genuine
+global V1 imports migrate through the registered pack before preview or staging. This prerequisite
+does not implement Workforce or later result-sharing formats.
+
 ### Migration pipeline
 
 Portable migrations are small sequential steps: `v1 → v2 → … → current`. Each step is pure, deterministic, offline, side-effect-free, bounded, typed against its historical representation, and testable independently. It has no live-database, provider, credential, clock, locale, or network dependency.

@@ -21,3 +21,5 @@ tempfile = "=3.27.0"
 uuid = "=1.26.0"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+eutheto-command = { path = "../eutheto-command" }
