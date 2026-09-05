@@ -48,9 +48,11 @@ pub struct WorkforceScenario {
 
 All IDs are typed stable identities; names are display fields, never identity keys. External JSON is camelCase and versioned. Unknown-newer schema versions fail safely. The authoritative pack document is stored once and migrated through pure sequential functions; generated instances/indexes are deterministic derived state unless explicitly detached.
 
+Host-owned generic entity storage and generic entity commands use `EntityId`; `PersonId` identifies people, not qualifications, locations, or other entity kinds. Pack-owned typed identities cross the storage boundary through their existing UUID values. This distinction does not change the version-1 scenario envelope, UUID JSON strings, domain map layout, or persisted command representation.
+
 ### Planning horizon and calendars
 
-`PlanningHorizon` defines inclusive local dates plus an explicit primary IANA timezone and DST policy from the scenario envelope. `WorkCalendar` defines named day/week/pay/custom periods and reporting boundaries used by fixed-window rules and workload summaries. Calendar definitions must be deterministic and explicit; no host locale, timezone, wall clock, or “current date” is consulted during compilation.
+`PlanningHorizon` defines inclusive local **shift-start dates** plus an explicit primary IANA timezone and DST policy from the scenario envelope. An overnight shift starting on the last included date remains in scope even when it ends on the following date; retain its complete interval for availability, overlap, rest, and elapsed-hour evaluation. `WorkCalendar` defines named day/week/pay/custom periods and reporting boundaries used by fixed-window rules and workload summaries. Calendar definitions must be deterministic and explicit; no host locale, timezone, wall clock, or “current date” is consulted during compilation.
 
 ### Person
 
@@ -69,7 +71,7 @@ Imports require a stable external ID or an explicit matching/review decision. Si
 
 ### Qualification
 
-A named capability such as `physician`, `pediatrics`, `overnight-call`, `supervisor`, or `lab-certified`. A person's qualification may be effective-dated and expiring; eligibility checks use the qualification's validity at the shift instant/date according to the declared semantic policy.
+A named capability such as `physician`, `pediatrics`, `overnight-call`, `supervisor`, or `lab-certified`. A person's qualification may be effective-dated and expiring. It must remain valid throughout the complete half-open shift interval, including an overnight extension beyond the final horizon start date. A qualification expiring during an assignment makes that person ineligible; validity ending exactly at the shift end is sufficient.
 
 ### Location
 
@@ -99,11 +101,11 @@ pub struct ShiftInstance {
 }
 ```
 
-A generated instance may detach from its template for a one-off edit. Regeneration presents a deterministic diff and never overwrites a detached/manual change without confirmation. Template generation is stable for the same horizon/timezone/DST policy and never creates instances outside the horizon.
+A generated instance may detach from its template for a one-off edit. Regeneration presents a deterministic diff and never overwrites a detached/manual change without confirmation. Template generation is stable for the same horizon/timezone/DST policy and never creates instances whose local start date is outside the inclusive horizon.
 
 ### Coverage requirement
 
-Coverage can be embedded in generated instances and/or represented as stable requirements. It supports exact count, minimum count, bounded maximum, and one or more required qualification expressions/slots. Qualification slots identify the minimum number of assigned people satisfying each expression; the same assignment's contribution follows explicit slot semantics rather than accidental double counting.
+Coverage can be embedded in generated instances and/or represented as stable requirements. It supports exact count, minimum count, bounded maximum, and one or more required qualification expressions/slots. Each qualification slot is an independent minimum among assigned people: a dual-qualified person may satisfy both a supervisor requirement and a specialist requirement, while counting only once toward total headcount. Slots do not imply distinct staffed positions.
 
 ### Availability rule
 
@@ -524,11 +526,15 @@ Phase 05 completes people CSV end to end under the backend contract above. The c
 
 The complete result-view ledger for Phase 07/desktop is person schedule grid, shift/location grid, person timeline, uncovered/overcovered work, required-rule summary, preference summary, fairness distribution, base-schedule changes, warnings/status, and explanation panel. Large grids are virtualized rather than creating a DOM cell for a year-long matrix.
 
-The complete export ledger is editable scenario/full backup through the proposed `.eutheto` portable contract, assignments CSV, people/shift summary CSV, per-person/combined ICS, one-file privacy-filtered standalone HTML, direct PDF, and CLI JSON. Phase 05 supplies workforce current/historical portable conversion fixtures and accepted Result→Share Result payload groundwork; Phase 07 completes recipient rendering/privacy UX. XLSX, payroll/vendor adapters, live calendar synchronization, encryption, signatures, and hosted sharing are post-MVP.
+The complete export ledger is editable scenario/full backup through the proposed `.eutheto` portable contract, assignments CSV, people/shift summary CSV, per-person/combined ICS, one-file privacy-filtered standalone HTML, direct PDF, and CLI JSON. Phase 05 supplies workforce current portable conversion fixtures, every genuine supported historical conversion, and accepted Result→Share Result payload groundwork; the initial-schema history policy below applies. Phase 07 completes recipient rendering/privacy UX. XLSX, payroll/vendor adapters, live calendar synchronization, encryption, signatures, and hosted sharing are post-MVP.
+
+The Phase-10 assistant consumes the same generated command/catalog and bounded query/evidence contracts as deterministic clients. For each Phase-05-complete rule, record stable entity/rule IDs, parameter units, scope and empty-scope behavior, Required/Preference support, timezone/effective-range semantics, localized command-derived summaries, and explicit implemented/unsupported capability status. These are domain contracts, not a second AI schema registry. Later-rule metadata must not imply that a reserved rule already compiles or verifies.
+
+Preserve examples that expose ambiguous names, overnight/DST interpretation, and the difference between an invalid document, valid but contradictory requirements, and an unresolved search. Phase 10 adds conversational interpretation and proposal tests; Phase 13 adds experiments and voice. Neither requires AI providers, profiles, microphones, agents, or assistant production code in Phase 05.
 
 ## Ordered work packages
 
-1. **WF-001 — schema/entities/migrations and people CSV import:** version the aggregate and every entity/value object, internal and portable JSON Schema, stable typed IDs and capability metadata, current/historical portable conversions/migrations, commands, semantic round-trip fixtures, and future-rule/declared-nonsemantic-extension preservation; complete bounded CSV detection, explicit mapping/identity decisions, validated preview, atomic batch apply, one-step undo/redo, and rejected-row report services.
+1. **WF-001 — schema/entities/migrations and people CSV import:** version the aggregate and every entity/value object, internal and portable JSON Schema, stable typed IDs and capability metadata, current portable conversions and every genuine supported historical migration, commands, semantic round-trip fixtures, and future-rule/declared-nonsemantic-extension preservation. First complete the unregistered module's bounded CSV detection, explicit mapping/identity decisions, validated preview, command-batch construction, and rejected-row reports. Application-level atomic batch apply and one-step undo/redo remain required and close after WF-007 under the staged integration policy below.
 2. **WF-002 — timezone/shift generation:** calendars, horizon bounds, recurring templates, detached-instance diff semantics, overnight/reporting day, ambiguous/nonexistent local time policy, and deterministic generation.
 3. **WF-003 — eligibility, availability, coverage, and no-overlap:** build the static candidate graph from qualification/assignment eligibility, effective ranges, and availability predicates; retain rejection provenance and the model-size estimate; complete coverage/qualification slots and no-overlap/compatibility through the full rule-completion artifacts.
 4. **WF-004 slice — minimum rest:** complete scoped cross-category elapsed minimum rest, including overnight and DST boundaries, through compiler, verifier, provenance/explanation, command/document/CLI, and edge/infeasible fixtures. Maximum-hours and consecutive-assignment rules remain parse-and-preserve catalog entries here and are completed in Phase 07.
@@ -536,6 +542,10 @@ The complete export ledger is editable scenario/full backup through the proposed
 6. **WF-007 slice — workforce verifier/score/evidence:** independent structural/eligibility/availability/coverage/overlap/rest evaluation, verifier-owned score/evidence/checksum, stable workforce message keys, and acceptance/quarantine integration against the completed Phase 04 pack contract.
 7. **WF-008 — CLI and fixtures:** create/apply/validate/solve/verify/explain/export flow, stable envelopes/exit codes, Appendix F fixture, benchmark manifests for small/typical/stress workloads, required timing/quality evidence, acceptance corpus, and UI-independent execution.
 8. **Phase 07 handoff:** preserve and test schema/catalog entries for hours, rolling windows, consecutive/count/skill/lock/mutual/travel, every preference, fairness, repair, the four remaining import formats, results, and remaining exports.
+
+**Maintainer-approved staged integration (2026-09-04):** WF-001's schema, pure commands, and CSV review may land before the complete pack exists; that is module completion, not application-end-to-end completion. Implement WF-002 through WF-007 in the listed order, then register the complete production pack and close WF-001's application CSV apply, rejection-report, atomicity, and restart-safe one-step undo/redo acceptance before WF-008's CLI closure. Do not add placeholder pack methods, bypass normal application dispatch, or invent a partial-pack lifecycle to claim earlier availability.
+
+**Maintainer-approved initial-schema history (2026-09-04):** Workforce starts at internal schema v1 and portable schema v1 with no supported historical Workforce versions. Require current round trips and explicit rejection of unsupported older/newer versions now. Historical Workforce migrations and sequential migration fixtures become mandatory at the first genuine schema change; never invent a v0 or an artificial immediate v2 to manufacture history. Existing real global portable-format migration fixtures and compatibility gates remain required.
 
 ## Rule-completion discipline
 
@@ -549,7 +559,7 @@ Every official rule or preference—including each initial Phase 05 rule—requi
 6. backend capability and translation tests;
 7. independent verifier evaluation;
 8. provenance and deterministic explanation;
-9. AI tool/schema exposure when appropriate, with invalid shapes impossible;
+9. generated AI-proposal metadata where appropriate, with strict schemas and invalid-input rejection; production assistant exposure remains Phase 10;
 10. CLI/document-format example;
 11. valid, invalid, boundary, empty-scope, infeasible, DST/time-boundary, and relevant import fixtures;
 12. user semantics, examples, limitations, and noncompliance disclaimer where relevant;
@@ -562,13 +572,13 @@ Additionally, Required/Preference meaning must be unambiguous; empty/default sco
 ### Schema, command, migration, import, and time tests
 
 - JSON Schema accepts all valid entity/rule shapes and rejects missing, unknown-newer, invalid reference, negative/bounds, and unsafe empty-scope cases;
-- command/inverse restores canonical hash; batches are atomic/undoable; migration fixtures upgrade sequentially and round-trip without losing stable IDs/later catalog entries;
-- workforce current portable export/import preserves every enabled Required rule, Preference, stable reference, time-zone/DST meaning and accepted-result identity; historical migration fixtures are deterministic; unknown semantic rule/capability blocks while declared nonsemantic extensions preserve;
+- command/inverse restores canonical hash; batches are atomic/undoable; fixtures for genuine supported historical versions upgrade sequentially and round-trip without losing stable IDs/later catalog entries, subject to the initial-schema history policy above;
+- workforce current portable export/import preserves every enabled Required rule, Preference, stable reference, time-zone/DST meaning and accepted-result identity; every supported historical migration is deterministic; unknown semantic rule/capability blocks while declared nonsemantic extensions preserve;
 - initial workforce Share Result contribution rejects unaccepted/mismatched revisions and exposes only explicit recipient view fields, privacy flags, status/provenance and stable identities—not the full Scenario Model.
 - people CSV tests cover supported encoding/header detection, explicit column mapping, exact external-ID updates, unresolved/similar-name review, additions/duplicates/rejections, proposed-state validation, bounded reports, cancellation, stale revision/input/mapping rejection, atomic failure, and one-step apply/undo/redo;
 - template regeneration/detach diffs never overwrite manual changes silently;
 - timezone tests cover normal days, nonexistent spring time, both ambiguous fall instants, overnight boundaries, reporting-day policy, effective qualification/availability edges, inclusive horizon end, wall/elapsed duration differences;
-- property tests cover instant conversion, overlap symmetry, rest boundary equality, deterministic reorder/serialization, and no generated instance outside horizon.
+- property tests cover instant conversion, overlap symmetry, rest boundary equality, deterministic reorder/serialization, and no generated instance with a local start date outside the horizon; an overnight shift starting on the inclusive final date retains its entire next-day interval.
 
 ### Compiler/verifier tests
 
@@ -624,6 +634,7 @@ Phase 05 exits only when workforce schema/migrations/entities are versioned; ini
 Evidence date: **2026-08-29**.
 
 - Review workforce defaults with real scheduling practitioners. Validate DST, rolling-hours, rest, reporting-day, qualification-slot, and repair semantics using domain examples.
+- Maintainer semantic decisions (2026-09-04): qualifications must remain valid for the entire shift; qualification slots allow shared contribution with distinct total headcount; horizon membership uses the local shift-start date and retains complete overnight intervals. These decisions do not substitute for the broader practitioner/defaults and fairness review gates.
 - Exact public fairness presets and weights require usability/practitioner evidence. Until then fixtures use explicit recorded policies rather than claiming universal fairness.
 - OR-Tools **9.15** is used only after Phase 03 platform/build/benchmark/license/protobuf/assumption-core gates. Workforce infeasibility wording respects the known assumption-core issue gate.
 - Rust stays **1.97.1** until a fixed stable newer than 1.98.0 resolves the known P-critical compiler issue.

@@ -389,6 +389,8 @@ after [ Overnight call ] before [ Clinic ].
 
 Below it, preview all currently scoped people and assignment types. An empty scope cannot save accidentally; the only alternative is an explicit inactive-state choice. `Required` means the app will not accept a solution that breaks it. `Preference` means optimization tries to honor it and reports tradeoffs. Explain these labels on first use/help; “hard/soft” stays in developer diagnostics.
 
+Generate the authoritative preview from validated typed commands, not free-form prose: show before/after values, affected identities/counts, explicit units, effective dates and scenario timezone, Required/Preference behavior, and unresolved choices. A name is not identity, and a shift-sequence restriction is not interchangeable with elapsed minimum rest. Keep draft edits, the applied scenario revision, validation state, and later accepted results visibly distinct. Phase 10 reuses these semantics for proposal cards; this phase does not build a chat panel or microphone controls.
+
 Only Phase 05-complete rule types are enabled as executable normal-flow choices. Later catalog items may appear only with accurate unavailable status; never save a rule the core will ignore.
 
 ### Validation experience
@@ -526,6 +528,7 @@ English is sufficient for MVP, but all user strings use message keys; explanatio
 - opening a proposed `.eutheto` bundle shows exact inspect/migration/reconnection/collision preview before mutation; Create copy/Replace/Skip, cancellation and stale preview map to Phase-01 typed services without frontend authority;
 - scenario export is labelled editable; full backup lists included/excluded data; add versus replace restore is unmistakable; destructive replace requires confirmation and truthfully reports pre-restore safety-backup failure/recovery;
 - all validation severities link to exact editors/fields and distinguish data issues from infeasibility.
+- users can distinguish draft from applied configuration and explain the proposed scope, units, and Required/Preference meaning before committing; ambiguous identity or time interpretation is resolved explicitly rather than silently guessed.
 
 ### State/performance matrix
 

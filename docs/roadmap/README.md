@@ -45,6 +45,8 @@ The platform comprises:
 
 The public MVP contains production workforce and event-seating packs, bundled OR-Tools CP-SAT workers for supported platforms, experimental Pumpkin only for proven-compatible subsets, local persistence, proposed `.eutheto` editable scenario export/import and full-backup/add-or-replace restore, immutable privacy-filtered offline HTML/PDF result sharing, undo/redo/repair/comparison/explanations, optional BYOK/local AI with preview-and-apply changes, cross-platform artifacts, examples, notices, SBOMs, checksums, and signed update metadata. School timetabling is the first major post-MVP pack and influences foundation contracts without delaying the MVP. [Phase 14](14-transportation-domain-pack.md) is the detailed proposed post-MVP plan for household transportation; it is not current product behavior and selects no calendar, routing, or transit provider.
 
+Conversational planning follows **describe → clarify → preview → explore → compare → decide**, with typed domain meaning and independently verified evidence at every applicable step. Complete reviewed text assistance remains a Phase-10 MVP commitment. Conversational experiments and voice are prioritized early post-MVP deliveries in [Phase 13, Branch K](13-post-mvp-roadmap.md#branch-k--early-conversational-experiments-voice-and-optional-integrations), useful across workforce and seating rather than dependent on a new domain pack. External-assistant access and supported subscription runtimes are separate, gated extensions—not prerequisites for local scheduling or voice.
+
 ## Product principles
 
 - **Human language before solver language.** Say “Required,” “Preference,” and “minimum rest after call”; reserve solver terminology for an advanced inspector.
@@ -223,13 +225,25 @@ Pause work and write an ADR before continuing if a rule cannot be independently 
                                                                workforce and seating flows]
 
 00–10 all complete ──> 11 packaging/docs ──> 12 stabilization/release
-                                               ├─> 13 post-MVP school/platform
+                                               ├─> 13 independent school/platform/assistant tracks
                                                └─> 14 post-MVP transportation
 ```
 
 The arrows are phase-entry gates, not merely suggested sequencing: transitive prerequisites remain mandatory where a later node names only its immediate predecessor. Within an entered phase, genuinely independent work packages may proceed in parallel after the contracts they consume are stable, but parallel preparation never waives an entry gate or permits an integration/exit claim early.
 
 Phase 13 and Phase 14 are sibling post-MVP branches entered directly from completed Phase 12. Neither branch requires completion of the other.
+
+Within Phase 13, the early Branch-K experiment and voice deliveries require the completed Phase-12 public release and their own named prerequisites, not completion of school timetabling, transportation, the documentation site, or the entire Phase-13 immediate milestone. They may release independently; the original school, portfolio, explanation, and site commitments remain intact. General branching/reconciliation, remote service deployment, and organization administration retain their separate later gates.
+
+| Assistant-related work | Owning phase and boundary |
+|---|---|
+| Typed commands, revisions, undo, jobs, verification, evidence | Existing Phases 01–04 authorities; reuse them, do not create an AI-specific core. |
+| Domain meaning, accessible editing, bounded catalogs and evidence | Phases 05–09; no production AI/audio work or future-domain prerequisite. |
+| Named profiles, bounded text discussion, reviewed proposals, separately confirmed solve action | Phase 10; preserve native-only secrets, independent verification, and no AI export/privacy authority. |
+| Applicable text-AI setup, recovery, security, accessibility and exact-candidate evidence | Phases 11–12; future voice, MCP, and runtime gates do not delay the MVP. |
+| Isolated conversational experiments and staged dictation/realtime voice | Early Phase-13 Branch K; existing asynchronous jobs before optional measured reasoning delegation. |
+| Restricted MCP server, conditional official runtime, remote/managed organization deployment | Separate Phase-13 gates; MCP is not an inference protocol, and a local runtime is not inherently hosted. |
+| School and transportation assistant evaluations | Extend only after the respective production pack/capability gates; neither is required for workforce/seating AI acceptance. |
 
 After contracts exist, prefer complete thin paths—one person, one shift, coverage → compile → solve → verify → display → edit → undo—over horizontal mock layers. Add each official rule with schema/migration analysis, command DTO/validation, plain-language editor, fast/full validation, planning compilation, backend capability/translation tests, independent verification, provenance/explanation, appropriate AI schema, CLI/document example, edge/infeasible fixtures, user limitations, and model/benchmark review. Solver formulation alone is never “done.”
 
@@ -305,10 +319,10 @@ An AI capability has a deterministic non-AI equivalent, typed allowlisted risk-c
 | [07](07-workforce-solving-results-repair-and-export.md) | Workforce solve/results, explanations, repair, comparison, and export. |
 | [08](08-pumpkin-backend-and-router.md) | Gated experimental Pumpkin adapter and deterministic routing. |
 | [09](09-seating-domain-and-venue-experience.md) | Seating domain, deterministic geometry, accessible venue experience, solve/repair/export. |
-| [10](10-ai-assistant-mvp.md) | Optional provider-neutral AI with keyring credentials and typed proposal workflow. |
+| [10](10-ai-assistant-mvp.md) | Optional provider-neutral text AI with named profiles, native keyring credentials, privacy controls, and reviewed typed proposals. |
 | [11](11-public-mvp-packaging-and-documentation.md) | Public-MVP packaging, updater, supply-chain artifacts, and documentation. |
 | [12](12-stabilization-and-public-release-gate.md) | Correctness, usability, accessibility, security, performance, compliance, and public release gate. |
-| [13](13-post-mvp-roadmap.md) | School timetabling and explicitly gated platform expansion. |
+| [13](13-post-mvp-roadmap.md) | School/platform expansion plus independently gated early conversational experiments and voice; later external-assistant and managed-service extensions. |
 | [14](14-transportation-domain-pack.md) | Proposed post-MVP household transportation pack with provider-neutral immutable snapshots, verified planning, and gated calendar/routing/transit adapters. |
 
 ## Complete blueprint coverage matrix

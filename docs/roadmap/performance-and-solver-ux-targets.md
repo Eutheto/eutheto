@@ -105,6 +105,8 @@ Strict no-transit-first solving remains semantic policy, not merely an optimizat
 
 AI may propose structured inputs before a solve or paraphrase deterministic evidence afterward. The deterministic optimized result is never withheld while waiting for an LLM, and provider failure cannot prevent non-AI solve, verification, status, or deterministic explanation. AI time is measured separately and never included in a claim about core optimizer latency.
 
+For the post-MVP [Phase-13 Branch-K](13-post-mvp-roadmap.md#branch-k--early-conversational-experiments-voice-and-optional-integrations) voice/experiment releases, measure local action acknowledgement, actual capture/playback shutdown, interruption and first useful response separately from model and solver latency. Record the exact platform/webview, audio device, transport, endpoint/model, network, power mode, and workload; exercise media and solver CPU load together. Set measured per-mode thresholds before release rather than adopting universal audio-latency promises. Local Stop must terminate capture/playback even when the network or provider is unavailable. Existing asynchronous jobs precede additional reasoning delegation; a second model requires measured benefit and explicit data/spend scope.
+
 ## Candidate-space management
 
 Use deterministic filtering for easy impossibilities and reserve solver search for combinatorial choices. Before Planning IR, prune candidates proven impossible by:
@@ -190,6 +192,7 @@ Each manifest records source/generator hash, fixed seed, schema/compiler/backend
 | 10 | AI/provider latency outside the deterministic result path and separate measurement. |
 | 11 | Exact-candidate benchmark summary and accurate public performance/limitation documentation. |
 | 12 | Calibrated baseline, percentile/regression thresholds, supported-envelope decision, and release gate. |
+| 13 Branch K | Separate experiment, provider and media timings; one parent compute budget; real offline Stop/interruption and responsive interaction under concurrent solver/audio load; capability-specific release evidence. |
 | 14 | Bounded snapshot enrichment, warm/cold transportation benchmarks, Stage-A/Stage-B shared budget, and cache/freshness metrics. |
 
 ## MVP acceptance

@@ -239,7 +239,7 @@ All public claims are checked against the exact candidate. Documentation include
 - workforce guide and exhaustive rule reference with semantics, required/preference classification, scope/default behavior, units/time-zone/DST limits, examples, infeasible/boundary cases, scoring/fairness interpretation, import/export behavior, and model-size implications;
 - seating guide and exhaustive rule/geometry reference with canvas and accessible list workflows, proximity classifications, overlays, keyboard operation, examples, limits, repair, and export;
 - locks, repair, comparison, alternatives, explanations, sufficient-versus-minimal conflict wording, counterfactual limitations, and accurate feasible/optimal/unknown status language;
-- AI/privacy/provider guide covering opt-in configuration, credential handling, provider/local-endpoint data boundaries, typed tools, preview/apply/undo, capability warnings, deterministic non-AI equivalents, and AI-disabled operation;
+- AI/privacy/provider guide covering named profiles; native-only credential entry and keyring recovery; synthetic opt-in connection tests and capability limitations; exact destination and billing route; local endpoint versus genuinely offline inference; context disclosure, aliases and notes; safe profile switching without transferring earlier private context; opt-in local conversation retention/deletion; typed proposals, command-derived preview/apply/undo and separately confirmed solve actions; usage uncertainty/cancellation; deterministic non-AI equivalents; and AI-disabled operation;
 - intent-led portable-data guide that distinguishes **Export editable scenario**, **Back up everything**, and **Share Result**; documents proposed/final extension status, manifest/current-export/historical-import policy, stable identity, exclusions, bounded inspection, migrations, Create copy/Replace/Skip, integration reconnection, add/replace restore, pre-restore safety backup, atomicity, fresh-install recovery, CLI inspection, limits, and failure handling;
 - standalone-result guide covering accepted-result provenance, exact privacy preview/defaults, immutable snapshots, one-file offline `file://` HTML, direct PDF/print behavior, accessibility/list alternatives, no-network guarantee, safe external-link behavior, supported browsers, status/version metadata, and limitations;
 - installer/update/uninstall/offline behavior by platform, supported OS/architecture matrix, WebView2 requirements, Gatekeeper/SmartScreen guidance, and checksum/signature verification;
@@ -296,6 +296,7 @@ Phase 11 supplies candidate-level evidence; Phase 12 repeats/expands release-gat
 - Standalone-report fixtures prove accepted-result and exact privacy-preview gates, default sensitive-field exclusion, inert malicious text, immutable source snapshots, one-file `file://` operation with zero required network requests, supported-browser/keyboard/screen-reader/list-table behavior, deterministic schematic/data agreement, print/PDF provenance/readability, atomic cleanup, and large-report responsiveness.
 - Security review proves minimum capabilities, restrictive CSP, Rust-only provider network path, safe rendering, strict parser limits, worker integrity validation, credential non-disclosure, structured redaction, and no required telemetry.
 - Documentation walkthroughs are executed against the candidate: quick start, workforce, seating, required/preference distinction, infeasibility wording, lock/repair, export, offline, update, backup/recovery, checksum/signature verification, support bundle, and AI-disabled operation.
+- Packaged text-AI walkthroughs cover a tested API profile and compatible local profile using synthetic data, native credential entry/replace/delete and unavailable-store recovery, workforce and seating clarification/proposal/apply/undo, stale revisions, profile-switch privacy, conversation-retention choice, and failure without damage to the scenario. Recorded/fake-provider paths are reproducible without paid inference; any live conformance evidence is separately opt-in and budgeted.
 - candidate benchmark summaries identify exact corpus/build/reference environment, warm/cold state, full operation boundary and provisional status; public copy never turns a backend microbenchmark or one best run into a universal latency guarantee.
 - Migrations and backups from every previous beta build fixture pass.
 - Public text accurately states supported targets, experimental features, feasible/optimal/unknown meaning, explanation limits, privacy boundaries, and non-certification.
@@ -331,6 +332,7 @@ Phase 11 exits only when:
 - every supported historical database and portable version plus previous-beta backup/restore fixture passes;
 - every unresolved identity, target, updater, governance, and signing gate has a recorded decision rather than an implicit default;
 - immutable candidate digests and evidence are handed to [Phase 12](12-stabilization-and-public-release-gate.md).
+- Phase-10 named-profile, privacy, retention, native-credential, proposal and recovery documentation matches the enabled adapter contracts and exact packaged behavior; credentials and conversation/provider payloads remain absent from portable/share data.
 
 Phase completion does not authorize public publication; Phase 12 does.
 
@@ -344,6 +346,7 @@ Phase completion does not authorize public publication; Phase 12 does.
 - No claim of bit-for-bit reproducible signed/notarized platform bundles when timestamps/platform services prevent it.
 - No “legally compliant,” certified, guaranteed optimal, or minimal-conflict claim unless separately proven.
 - Post-MVP telemetry, sandboxed packs, additional solvers, collaboration, server mode, hosted services, and new targets belong to [Phase 13](13-post-mvp-roadmap.md); the proposed household-transportation pack has its separate sibling plan in [Phase 14](14-transportation-domain-pack.md).
+- Early post-MVP conversational experiments, dictation/realtime voice, MCP access, delegated reasoning, and conditional subscription-runtime integrations belong to Phase-13 Branch K. They do not add audio runtimes, microphone permissions, server listeners, provider login promises, or new candidate gates to this MVP. Each later release must repeat the applicable packaging, license, credential, privacy, accessibility, and documentation evidence for its actual supported modes.
 
 ## Assumption and version gates
 

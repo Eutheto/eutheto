@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Deliver an optional, provider-neutral assistant for natural-language configuration and deterministic-evidence explanation. It can inspect a bounded scenario through typed reads and assemble typed command proposals, but it is never the solver, verifier, policy authority, or source of truth. Every AI-assisted write is previewed as a structured diff, validated at a specific base revision, explicitly applied by the user as one undoable command batch, and rejected or revalidated when stale.
+Deliver a complete optional, provider-neutral **text** assistant in the MVP, after deterministic workforce and seating workflows. It supports natural-language configuration and deterministic-evidence explanation through named provider profiles and task-bounded context. It can inspect a bounded scenario through typed reads and assemble typed command proposals, but it is never the solver, independent domain verifier, policy authority, or source of truth. Every AI-assisted write is previewed as a structured diff, validated at a specific base revision, explicitly applied by the user as one undoable command batch, and rejected or revalidated when stale. Conversations are ephemeral by default, with explicit local retention opt-in; applied edits retain only the necessary provenance in normal command history.
 
 Eutheto remains fully usable with AI disabled: workforce and seating creation, imports, rules, validation, optimization, deterministic explanations, repair, comparison, and export all have equivalent non-AI interfaces. Provider/network failure or a fully compromised model response cannot expand tool authority or mutate scenario state by itself.
 
@@ -11,6 +11,8 @@ Eutheto remains fully usable with AI disabled: workforce and seating creation, i
 This phase is the implementation source of truth for blueprint Section 23; the AI-relevant controls of Section 24; AI placement and failure states in Section 22; Phase 10; AI Definition of Done 33.5; relevant core/desktop definitions of done; CLI/API Appendix C–D; current-provider assumptions from Appendix K.6/J.5; backlog `AI-001` through `AI-005` plus the AI-relevant parts of `SEC-001` from Appendix I; the AI critical-path exclusion in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md); and the no-AI-authority boundary in [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md).
 
 Project-wide principles and ADRs are in [README.md](README.md); dated API/version evidence and unresolved conformance gates are in [assumptions.md](assumptions.md). Typed domain commands come from [Phase 02](02-domain-pack-and-planning-ir-contracts.md), deterministic verification/evidence from [Phase 04](04-independent-verifier-and-explanations.md), workforce tools from [Phase 07](07-workforce-solving-results-repair-and-export.md), and seating tools from [Phase 09](09-seating-domain-and-venue-experience.md). The assistant must not depend on the experimental backend in [Phase 08](08-pumpkin-backend-and-router.md).
+
+Experimental planning, voice, external-assistant integration, and conditional embedded runtimes belong to [Phase 13, Branch K](13-post-mvp-roadmap.md), not Phase 10 acceptance or entry gates. Its early post-MVP experimental-planning and voice deliveries each require completed Phase 12, not school, transportation, or other immediate Phase 13 branches.
 
 Section 24 ownership is intentionally split. This phase owns only AI-relevant capability/CSP, credential, provider-network, parser, redaction, and dependency-change controls. Bundled OR-Tools worker manifest/hash/location integrity belongs to [Phase 03](03-ortools-worker-vertical-slice.md). Signed updater metadata/channel separation and project dependency/lockfile/action/SBOM policy belong to [Phase 11](11-public-mvp-packaging-and-documentation.md). Cross-cutting security and public-release review gates belong to [Phase 12](12-stabilization-and-public-release-gate.md). Future plugin capability sandboxing belongs to [Phase 13](13-post-mvp-roadmap.md).
 
@@ -60,13 +62,17 @@ pub trait AiProvider: Send + Sync {
 }
 ```
 
-`AiProviderDescriptor` records stable provider ID, display name, API family/version, default and configurable endpoints, remote/local classification, authentication modes, tool/stream/strict-schema capabilities, model-list capability, limits, warnings, and build/runtime availability (`Enabled`, `Disabled`, or `Unavailable`) with a stable reason. A build-excluded adapter remains accurately discoverable as unavailable rather than appearing enabled. `AiModelDescriptor` includes stable provider/model reference and only capabilities the adapter has established.
+`AiProviderDescriptor` records stable provider ID, display name, API family/version, default and configurable endpoints, remote/local classification, authentication modes, adapter-level supported features, warnings, and build/runtime availability (`Enabled`, `Disabled`, or `Unavailable`) with a stable reason. A build-excluded adapter remains accurately discoverable as unavailable rather than appearing enabled. `AiModelDescriptor` includes stable provider/model reference and only capabilities established for the configured context; adapter support alone is not proof of model or endpoint support.
+
+Named profiles live in the existing AI configuration and provider catalog, not a second registry. Each has a stable ID and user-facing name, adapter, canonical endpoint, opaque authentication reference and nonsecret account/project context, model reference, data policy/locality, locally enforced limits, and disclosed billing route (for MVP: provider API account, organization gateway, or local infrastructure, as actually configured). One selected profile serves the text assistant first; elaborate role routing is deferred. Profile selection does not grant new tools or override scenario privacy controls.
+
+Capability observations are specific to **adapter + endpoint + authentication context + model**, with evidence date/source and established, unsupported, or unknown status. Retain them through existing configuration/descriptor mechanisms; changing any part invalidates affected observations. Separate documented/advertised features from fixture-tested and live-probed behavior. A profile cannot inherit another endpoint's tool support, strict-schema claims, limits, or entitlement merely because both say “OpenAI-compatible.” No hidden fallback changes provider, endpoint, account, model, billing route, or local/cloud destination after failure; a user-selected replacement receives its own disclosure and context review.
 
 Adapters translate the internal message/tool/event model to native HTTP requests and normalize native stream deltas, tool calls, finish reasons, refusals, usage, rate-limit details, and typed errors. Provider-native DTOs remain inside adapter crates/modules. Use bounded HTTP clients with connect/read/total timeouts, cancellation, redirect policy, TLS validation, body limits, decompression limits, and redacted tracing.
 
 ### Current provider contracts to implement and fixture
 
-Provider APIs are mutable HTTP contracts rather than lockfile packages. The following contracts were verified on 2026-08-29 and must be rechecked against official documentation when adapters are implemented or updated:
+Provider APIs are mutable HTTP contracts rather than lockfile packages. The following are dated 2026-08-29 investigation baselines, with evidence tracked in [assumptions.md](assumptions.md), not enduring support or entitlement promises. Recheck official documentation and recorded conformance when adapters are implemented or updated; current support claims require evidence for the implemented configuration:
 
 | Adapter | Current request contract | Authentication/version headers | Tool-result correlation and caveats |
 |---|---|---|---|
@@ -79,7 +85,7 @@ Provider requests are stateless by default. OpenAI Responses and Gemini Interact
 
 Local convenience presets may populate, but never silently contact, current endpoints such as Ollama at `http://localhost:11434/v1` and LM Studio at `http://localhost:1234/v1`. They remain user-installed services, not eutheto dependencies or pinned runtime guarantees. As of the evidence date, the tested preset references are Ollama 0.33.2 and LM Studio 0.4.23; actual capability is model/server-specific.
 
-For OpenAI-compatible services, probe only after explicit user action and without a credential where possible. Present a capability matrix for Responses versus Chat Completions, streaming, tool calls, strict schema, parallel tool calls, model listing, no-auth, and context limits. Unsupported functionality is disabled or warned before a turn, not discovered after an unsafe write proposal.
+For every adapter, `ai_test_provider` performs synthetic, bounded probes only after explicit user action, without credentials where possible and never with scenario data or conversation history. Disclose destination, any credential attachment, possible usage/billing, and limits before the probe. For OpenAI-compatible services, present a capability matrix for Responses versus Chat Completions, streaming, tool calls, strict schema, parallel tool calls, model listing, no-auth, and context limits. Record observations for the exact adapter/endpoint/authentication context/model; unknown is not supported. Unsupported functionality is disabled or warned before a turn, not discovered after an unsafe write proposal; lack of tool support cannot authorize free-text command parsing.
 Every adapter that is enabled in the build must pass recorded request/response/stream conformance for its exact endpoint, authentication, statelessness, tool correlation, capability claims, normalization, and error behavior before enablement and again when implemented or updated. Adapters omitted from the build or failing that gate are `Unavailable` or `Disabled` with a stable user-visible reason in the provider catalog and settings; their absence cannot fail the core release or impair deterministic workflows.
 
 ## Authentication and credential lifecycle
@@ -87,6 +93,8 @@ Every adapter that is enabled in the build must pass recorded request/response/s
 MVP authentication supports API keys, optional custom base URL, provider-specific project/organization identifiers when required, and explicitly enabled no-auth local endpoints. OAuth is excluded unless a provider later publishes a desktop third-party authorization flow appropriate to eutheto. Never reuse consumer chat subscriptions, scrape browser cookies, or imply subscription/API billing equivalence.
 
 Store credential bytes only in the OS credential store through the pinned reviewed `keyring` Rust crate. SQLite and settings persist an opaque `CredentialRef` plus nonsecret provider metadata. Credential entry is mandatory in a Rust/native-owned secure surface outside the webview; Vue may invoke `ai_store_credential` only with nonsecret provider/entry intent, and the Vue → Rust IPC request must never contain credential bytes. The native surface passes the value directly to Rust, which stores it immediately, best-effort zeroizes/drops transient buffers, and returns only opaque reference/status. No Vue/HTML credential input, JavaScript object, DOM state, Pinia/conversation state, analytics, diagnostics, URL, persisted form state, command response, query, or event may contain the value.
+
+This boundary covers every provider secret, including any future short-lived token; short lifetime is not permission to enter Vue or ordinary IPC. No session-only credential fallback is approved. A locked/unavailable OS store remains an actionable setup failure; an alternative storage/entry/transport boundary requires a future explicit ADR.
 
 Provide replace and delete. Deletion removes the OS-store entry and marks dependent configuration invalid without leaking whether unrelated entries exist. On Linux, handle absent/locked Secret Service implementations with a typed setup/recovery error; never fall back to plaintext storage. CI uses a fake credential store.
 
@@ -101,9 +109,9 @@ For a custom base URL:
 1. require explicit user entry and confirmation;
 2. parse and canonicalize it as a URL, rejecting embedded username/password and fragments;
 3. reject unsafe schemes; default to HTTPS except explicitly acknowledged localhost/private local endpoints;
-4. show exact destination host and remote/local classification whenever a credential is attached;
+4. show exact destination origin (scheme, host, port) and remote/local classification whenever a credential is attached; bind the credential reference to that user-approved origin and authentication context, and require explicit rebinding before a changed endpoint can receive it;
 5. resolve/validate the destination under the application’s SSRF/private-address policy;
-6. prevent credential-bearing redirects to an unrelated host or downgraded scheme; require new confirmation rather than forwarding;
+6. prevent credential-bearing redirects to a different origin or downgraded scheme; never forward authorization automatically, and require destination review and explicit rebinding rather than treating a host label or successful login as approval;
 7. apply response, decompressed-body, header, stream-event, and duration limits;
 8. keep web/search/fetch tools absent from the MVP, so model-produced URLs are never executed.
 
@@ -123,9 +131,15 @@ pub struct AiTurnRequest {
 }
 ```
 
-Persist conversations locally with stable conversation/turn/message IDs, provider/model references, scenario ID and revision context, policy/schema versions, redacted normalized content blocks, tool call/result records, proposal IDs, completion/failure/cancellation status, and provider-neutral usage where available. Do not persist credentials or raw authorization/provider transport records. Retention obeys user settings; delete conversations transactionally and make their removal visible.
+Conversations are Rust-owned ephemeral sessions by default. The existing create/list/get/send/delete APIs serve live sessions without requiring durable chat storage. Only an explicit local retention opt-in persists stable conversation/turn/message IDs, selected profile/provider/model references, scenario ID and revision context, policy/schema versions, redacted normalized content blocks, tool call/result records, proposal IDs, completion/failure/cancellation status, and provider-neutral usage where available. Clearly distinguish live-only from retained sessions; disabling retention stops new persistence and exposes deletion of existing retained records. Do not persist credentials or raw authorization/provider transport records. Delete retained conversations transactionally and make removal visible; a persistence failure must not silently promise retention or mutate a scenario.
+
+Applied-proposal provenance is independent of transcript retention. The existing command journal records the minimal proposal/profile/model identity, base/applied revisions, explicit user apply, and batch outcome needed to explain and undo an edit; no copied chat, prompts, or provider payloads are required. Commit that provenance with the normal command batch. Conversation deletion neither deletes applied domain edits nor breaks normal history/undo, and history may indicate that the source conversation is unavailable. Unapplied drafts do not become durable scenario authority. Do not add a competing AI audit service or undo stack.
+
+AI-004 extends the [Phase-01 journal contract](01-core-application-shell-and-persistence.md#command-journal-undo-and-audit-contracts) with typed optional AI provenance; applied AI proposals require proposal/profile and provider/model identity, while existing non-AI entries remain valid without it. Own the versioned DTO/schema updates, generated artifacts, and forward-only database migration in Phase 10, without retrofitting speculative fields into Phase 01. Migration/round-trip fixtures, atomic apply/provenance rollback, and history/undo after chat or profile deletion must pass; an opaque profile ID identifies the historical source even if its configuration no longer exists. Preserve the existing opt-in audit portability boundary and never copy credentials, transcripts, or provider payloads into journal metadata.
 
 `ScenarioContextPacket` is assembled from typed queries for the exact task. Include only required fields and label source/revision/sensitivity. Large scenarios are summarized and paged through bounded tools rather than copied wholesale. Stable aliases may replace person/guest names where practical; notes are excluded unless explicitly enabled. Imported notes, CSV cells, scenario descriptions, and all external text are marked untrusted data, never concatenated as policy instructions.
+
+Rebuild bounded context from current typed facts after profile/model changes, scenario edits/switches, app restart of a retained conversation, and context compaction. Summaries are untrusted conversational aids, not new rules or current facts; refresh revision-bound evidence and discard stale tool results. Switching from local to cloud starts a newly scoped outbound context and must not upload old private history, notes, or a summary derived from them. Any explicitly selected historical excerpt still passes the destination/data-policy review; selecting a profile is not consent to replay its predecessor's transcript.
 
 `AiTurnLimits` bounds context bytes/tokens, output, tool calls, tool rounds, entity/page counts, per-tool response size, total wall time, and provider response body. Enforce limits locally even when a provider advertises more.
 
@@ -219,9 +233,11 @@ pub struct AiSolveStartProposal {
 }
 ```
 
-Proposal assembly is transactional in memory/application storage. For a scenario batch, validate the command sequence against a temporary copy in order, then validate the resulting whole scenario. Render title/rationale as untrusted model text and render the authoritative command-derived structured diff outside the chat. Show additions, edits, deletions, rule strength/scope, affected entities, warnings/errors, validation changes, and exact base/current revisions.
+Proposal assembly is transactional in memory/application storage. For a scenario batch, validate the command sequence against a temporary copy in order, then validate the resulting whole scenario. Render title/rationale as untrusted model text and render the authoritative command-derived structured diff outside the chat. Show additions, edits, deletions, **Required versus Preference** behavior and supported priority, scope, affected entities, units, time horizon/time-zone interpretation where relevant, warnings/errors, validation changes, and exact base/current revisions. Resolve ambiguous entities, dates, durations, distance units, or rule strength through clarification; do not invent unsupported semantics or silently reinterpret “try,” “must,” or “only if necessary.” Make any proposed weakening from Required to Preference conspicuous.
 
-Apply is enabled only for a valid complete proposal at the current revision. A `ScenarioBatch` invokes the same `scenario_apply_batch` service as non-AI edits, records AI provenance without granting special authority, commits once, and creates one undo unit. A `SolveStart` renders a separate action preview with mode, limits, warnings, validation, and revision; after its own explicit confirmation, Rust rechecks the revision and pre-solve validation and dispatches the typed request to `solve_start`. It does not mutate the scenario and is not an undoable command batch. Reject changes status without touching the scenario or starting a job.
+Keep draft, validated proposal, user-applied scenario revision, and independently verified/accepted solution states distinct. Structural/domain validation does not establish feasibility; a feasible or verified candidate does not authorize applying edits or imply optimality; user Apply is not result acceptance. Model prose, reassuring language, or a generated “approved” claim cannot supply any of these statuses. The normal job/result lifecycle and independent domain verifier remain authoritative.
+
+Apply is enabled only for a valid complete proposal at the current revision. A `ScenarioBatch` invokes the same `scenario_apply_batch` service as non-AI edits, records minimal AI provenance without granting special authority, commits once, and creates one undo unit in the existing command journal. Normal non-AI Undo/Redo restores/reapplies the batch under existing revision rules; no AI-specific inverse generation or second undo history is introduced. A `SolveStart` renders a separate action preview with mode, limits, warnings, validation, and revision; after its own explicit confirmation, Rust rechecks the revision and pre-solve validation and dispatches the typed request to `solve_start`. Applying a scenario proposal never implies solve confirmation. Solve start does not mutate the scenario and is not an undoable command batch; cancellation uses the normal job controls. Reject changes status without touching the scenario or starting a job.
 
 If the revision changed, mark the proposal stale. `ai_rebase_proposal` requires the proposal ID and expected current revision; Rust confirms that revision, reruns every scenario command against the current document, resolves conflicts through normal typed errors/disambiguation, recomputes full validation and the structured diff, and returns a fresh preview requiring a fresh Apply. A stale solve-start proposal is likewise revalidated against the current revision and returns a fresh action preview. Stale proposals never apply or start a job.
 
@@ -239,9 +255,13 @@ The assistant may quote/describe suspicious imported text only when needed and c
 
 For a question such as why Jones received Tuesday overnight, the context contains structured evidence—not a raw solver narrative—including eligible assignment facts, unavailable alternatives and source rule IDs, rest conflict hours, preference contributions, fairness/stability deltas, proof/status, scenario/solution revision, and certainty `deterministic-evidence`.
 
-AI may turn this into plain language, but `View evidence` exposes the original structured facts and deterministic explanation. If evidence is incomplete, multiple equivalent optima exist, or a counterfactual timed out, say so. Never call a heuristic narrative proof, invent unique causality, or claim optimality from feasibility.
+AI may turn this into plain language, but `View evidence` exposes the original structured facts and deterministic explanation. A real evidence ID or citation is not sufficient: the cited record must support the particular claim at the stated scenario/solution revision, rule scope, and units. Check numerical and causal claims against their evidence, including citations that exist but say something different. If evidence is incomplete, multiple equivalent optima exist, or a counterfactual timed out, say so. Never call a heuristic narrative proof, invent unique causality, or claim optimality from feasibility; free-form model confidence is not verification.
 
-Assistant actions can request the existing bounded counterfactual service only through a typed read/explicit proposal flow as designed; its result must independently verify before use.
+Distinguish “can this one assignment move with the others fixed?” from “could a globally rescheduled plan permit it?” A local conflict proves only the tested move invalid, not global impossibility or necessity. A global counterfactual must identify fixed/free assignments, changed rules, objective threshold if any, budget, revision, and independently verified result/proof status. Timeout, cancellation, unsupported scope, or no candidate without a proof is unresolved, not infeasible. Necessity and minimal-conflict claims require the corresponding completed deterministic checks.
+
+Use existing metric/evidence and comparison contracts: name the metric/version, units, direction, population, horizon, normalization, and baseline. Compare under a common evaluation policy; if policies or scopes differ, disclose that difference rather than claiming improvement from incomparable scores. Workforce examples include rest/coverage and fairness/stability tradeoffs; seating examples include relationship/distance rule evidence and seating-quality tradeoffs.
+
+The eight-read MVP allowlist does not gain a counterfactual-start tool here. Existing bounded deterministic counterfactual results may be exposed through the allowlisted evidence reads; any compute remains in the existing deterministic UI/service/job flow, with independent verification before use. Broader assistant-driven what-if experiments are deferred to Phase 13 Branch K, not implied by an evidence question.
 
 ## Privacy, user control, cost, and retention
 
@@ -255,11 +275,13 @@ Before first AI use, disclose:
 - provider API usage is distinct from consumer subscriptions;
 - AI suggestions are not legal/professional advice.
 
-Settings provide AI globally disabled; global or per-project provider/model; alias substitution for names where practical; notes included/excluded; conversation retention; credential deletion; conversation deletion; and local-only-provider mode. Configuration does not transmit data. Per-turn context preview/size disclosure and confirmation apply before unusually large sends.
+Settings provide AI globally disabled; global or per-project selection of a named profile; alias substitution for names where practical; notes included/excluded; explicit local conversation retention opt-in (off by default); credential deletion; conversation deletion; and local-only-provider mode. Show profile destination, authentication context without secrets, model, capability evidence/unknowns, data policy, limits, and actual billing route. Configuration does not transmit data. Per-turn context preview/size disclosure and confirmation apply before unusually large sends; changed destinations or expanded data categories require explicit review regardless of size. Local-only mode restricts eutheto's outbound AI destinations but cannot certify that a user-installed gateway has no upstream service.
 
 Show provider-neutral input/output/total usage estimates when adapters report them, but do not promise exact prices. Bound context, output, tool rounds, and total time; allow per-turn cancellation; optionally retain a local usage log without secrets/content; never hide automatic retries after authentication or billing failure. Any retry policy is bounded, visible, cancellation-aware, and restricted to explicitly transient failures.
 
 Provider-side storage is disabled by default independently of local conversation retention: OpenAI Responses and Gemini Interactions always send `store: false`. Deleting a local conversation therefore does not depend on provider-retained state. Any future provider-retention mode must disclose its retention period and data destination, obtain separate consent, expose provider deletion, and complete that deletion when the user requests it; otherwise the mode cannot be enabled.
+
+`store: false` controls the supported provider API's application-state retention; it is not a blanket claim about provider logging, abuse monitoring, training, or contractual retention. Treat [official provider data-control documentation](https://developers.openai.com/api/docs/guides/your-data) and account-specific terms as investigation evidence and disclose applicable unknowns, not privacy promises inferred from a request flag.
 
 No required telemetry ships. If diagnostics are ever added, they are explicit opt-in, schema/code-public, contain no scenario/chat/name data, are inspectable/deletable, and do not affect functionality.
 
@@ -281,7 +303,7 @@ Handle all of these as typed recoverable states while preserving scenario integr
 - credential store absent/locked/unavailable;
 - proposal command or whole-proposal validation failure;
 - stale revision/rebase conflict;
-- conversation persistence failure.
+- opted-in conversation persistence failure.
 
 Preserve completed safe reads with clear status. Do not apply any proposal on failure. Do not endlessly retry auth, billing, refusal, invalid schema, or incompatibility. Provide retry/reconfigure/switch provider/copy sanitized diagnostic actions. The core application and current scenario continue normally when the assistant is unavailable.
 
@@ -318,7 +340,11 @@ Required Tauri commands/queries:
 
 Mutating operations include request ID and expected revision where applicable. `ai_rebase_proposal` takes proposal ID plus expected current revision and returns the recomputed validation/diff or action preview at that revision. Responses include schema version, warnings, and current revision. Errors use stable category/code, retryability, safe field errors/details, and diagnostic ID without raw provider bodies/backtraces.
 
+Use these existing APIs and normal settings persistence for profiles, capability observations, and retention choices rather than adding parallel services. Conversation queries distinguish live-only and retained records. Turn/proposal records bind the selected profile/configuration context so a later setting change cannot silently reroute an in-flight request.
+
 Events are `ai://stream`, `ai://proposal-ready`, and `ai://completed`, with event version, timestamp, request/turn/conversation/scenario IDs and revision where applicable. Normalize text deltas, tool-status summaries, usage, refusal, and completion without sending secrets/provider-private payloads to Vue. Only `apps/desktop/src/api` invokes Tauri/event APIs.
+
+Correlate events to the originating turn, scenario/revision, and selected profile context. Cancellation, scenario/profile switches, conversation deletion, and a newer turn retire the relevant active UI context; late/duplicate/out-of-order events cannot attach content or proposal readiness to the replacement context, resurrect a deleted chat, auto-apply, or start a job. Preserve attributable terminal status without presenting stale evidence as current; scenario changes require the existing revalidation path.
 
 The assistant is a collapsible side panel, never the only interface. It can answer typed current-scenario questions, propose setup/rule changes, guide imports, propose validation/optimization with confirmation, and paraphrase deterministic results. Proposal diff and Apply/Reject are outside model-authored chat. Design AI-disabled, unconfigured, credential error, offline, loading, streaming, cancelled, refusal, rate-limited, incompatible endpoint, stale proposal, validation failure, and partial stream states; no indefinite spinner.
 
@@ -326,15 +352,17 @@ AI-specific CLI commands are optional to expose in the MVP command catalog; if e
 
 ## Ordered work packages
 
-1. **AI-001 — Provider-neutral core and fake:** internal DTOs/events/errors, descriptor/capability model, limits, cancellation, fake credential/provider, deterministic scripted turns.
-2. **AI-002a — Credential/network boundary:** mandatory Rust/native-owned secure entry, nonsecret request and opaque reference/status response IPC, OS keyring storage/delete/replace, CSP/capabilities, bounded HTTP, redirect/destination/redaction policy, Linux unavailable-store UX, and request/response/DOM secret-canary tests.
-3. **AI-002b — Current adapters:** OpenAI Responses, Anthropic Messages, Gemini Interactions, and capability-detected OpenAI-compatible/local presets with recorded conformance fixtures.
-4. **AI-003 — Context and reads:** scoped packet builder, aliases/note policy, paging/summaries, eight allowlisted read tools, limits and untrusted-data labeling.
-5. **AI-004 — Proposals and application actions:** generated schemas for eleven scenario-write tools plus the separately typed solve-start application action; validation loop; disambiguation; whole-batch diff preview; solve-action preview; typed stale rebase; batch apply/reject and one-step undo; revision-checked `solve_start` dispatch.
-6. **AI-005a — Evidence:** structured deterministic explanation packet, incomplete/counterfactual disclosure, evidence inspector.
-7. **AI-005b — Desktop UX/settings:** first-use disclosure, provider/model/endpoint configuration, conversation retention/deletion, privacy/context controls, usage/cancellation, all failure/empty states, accessible assistant panel.
-8. **Security hardening:** injection corpus, malicious endpoint/redirect/body tests, redaction/support-bundle checks, capability/CSP review, dependency/license audit.
-9. **Provider and cross-domain acceptance:** representative workforce and seating conversational setup using real typed proposals plus complete AI-disabled regression.
+1. **AI-001 — Provider-neutral core and fake:** internal DTOs/events/errors, named profiles within existing configuration, context-specific capability evidence, limits, cancellation and late-event correlation, fake credential/provider, deterministic scripted turns; one selected text-role path first.
+2. **AI-002a — Credential/network boundary:** mandatory Rust/native-owned secure entry, nonsecret request and opaque reference/status response IPC, OS keyring storage/delete/replace, credential-origin/auth-context binding, CSP/capabilities, bounded HTTP, redirect/destination/redaction policy, no hidden fallback, Linux unavailable-store UX, and request/response/DOM secret-canary tests.
+3. **AI-002b — Current adapters:** OpenAI Responses, Anthropic Messages, Gemini Interactions, and capability-detected OpenAI-compatible/local presets with recorded conformance fixtures and opt-in synthetic probes. Establish one provider-native path plus one tested compatible/local path for the first vertical slice, then complete the remaining native adapter work under the unchanged per-enabled-adapter conformance gate; sequencing is not removal of those commitments.
+4. **AI-003 — Context and reads:** scoped packet builder, aliases/note policy, paging/summaries, eight allowlisted read tools, limits and untrusted-data labeling; fresh context after compaction/profile/scenario changes and no local-history replay to cloud.
+5. **AI-004 — Proposals and application actions:** generated schemas for eleven scenario-write tools plus the separately typed solve-start application action; validation loop; entity/semantic disambiguation; authoritative Required/Preference, scope/unit/time diff preview; solve-action preview; typed stale rebase; batch apply/reject and normal one-step undo; minimal durable applied-proposal provenance through the existing journal's versioned optional AI metadata, migration/generated contracts and compatibility/deletion/rollback fixtures; revision-checked `solve_start` dispatch.
+6. **AI-005a — Evidence:** structured deterministic explanation packet, claim-to-evidence checks, comparable metric policy, local-move/global-counterfactual distinction, incomplete/unresolved disclosure, evidence inspector; no second verifier or experimental tool.
+7. **AI-005b — Desktop UX/settings:** first-use disclosure, named profile configuration/destination/billing/capability display, ephemeral sessions and explicit local retention/deletion, privacy/context controls, usage/cancellation, draft/applied/accepted distinctions, all failure/empty states, accessible assistant panel.
+8. **Security hardening:** injection corpus, malicious endpoint/redirect/body tests, profile-switch leakage and stale/late-event tests, redaction/support-bundle checks, capability/CSP review, dependency/license audit.
+9. **Provider and cross-domain acceptance:** representative workforce and seating conversational setup using real typed proposals plus complete AI-disabled regression; evaluate claim fidelity and users' understanding of approval/result states in both domains.
+
+**First vertical slice through AI-001–AI-005:** open a small workforce scenario, configure and synthetically test the selected native or compatible/local profile, inspect the outbound context, request a supported availability or fairness change, resolve ambiguity, review the command-derived diff, Apply once, inspect the new revision, and use normal Undo/Redo. Separately confirm a solve, observe the independently verified result before AI, and explain one evidenced metric with its inspector. Repeat the same boundaries with a supported seating relationship/distance proposal. Exercise both selected adapter paths before widening the adapter matrix and full eleven-tool coverage. Export remains exclusively the existing non-AI workflow, not an assistant action. This slice is sequencing inside the existing packages, not a reduced Phase 10 exit gate.
 
 ## Tests and acceptance
 
@@ -344,6 +372,8 @@ Recorded secret-redacted request/response/stream fixtures cover current endpoint
 
 For enabled built-in adapters, test Anthropic `tool_use`/immediate `tool_result`; OpenAI flat Responses calls/output, strict-schema subset, and `store: false`; Gemini current `/v1beta/interactions`, `store: false`, step/call IDs, and function results; and local capability warnings when strict/stream/parallel/Responses are absent. Verify no provider DTO escapes adapter modules and no default request depends on provider-retained state. A listed adapter that is build-excluded, disabled, or fails conformance must report `Unavailable`/`Disabled` with its stable reason in catalog, configuration, and assistant UI tests and cannot fail AI-disabled/core-release acceptance.
 
+Capabilities and probe results must not transfer across endpoint, authentication context, or model changes. Test that probes are opt-in and synthetic, configuration performs no network calls, advertised but unestablished features remain unknown, profile billing/destination is accurate, and auth/quota/compatibility failures never trigger hidden profile/model/cloud fallback. Document measured context/latency/quality observations for tested configurations; numeric targets are provisional until measured, not universal model-support claims.
+
 ### Policy, proposal, and security
 
 - exact allowlist and strict schemas, unknown field denial, every size/count/nesting/round/time boundary;
@@ -351,19 +381,21 @@ For enabled built-in adapters, test Anthropic `tool_use`/immediate `tool_result`
 - safe read scope/paging and cross-project/secret/file denial;
 - every scenario write requires a proposal, whole validation, structured diff preview, explicit apply through `scenario_apply_batch`, and one-step undo;
 - solve start remains a separately confirmed typed application action, is revision/pre-solve-validation checked, dispatches only to `solve_start`, and never enters a scenario-command vector or batch;
-- a stale proposal cannot apply or start a job; typed rebase with proposal/current-revision input produces recomputed validation and a fresh diff/action preview;
+- a stale proposal cannot apply or start a job; typed rebase with proposal/current-revision input produces recomputed validation and a fresh diff/action preview; Required/Preference, scope, units, time interpretation, and ambiguous names cannot be silently changed or concealed by model prose;
 - provider interruption never applies a partial proposal;
 - model URLs, paths, code, SQL, and shell are inert;
 - injection corpus in CSV, notes, descriptions, names, old messages, and endpoint responses cannot expand capability;
-- malicious redirect cannot receive credentials; unsafe schemes/URL credentials/private-policy violations reject;
+- malicious redirects and endpoint edits cannot receive credentials without origin/auth-context approval; unsafe schemes/URL credentials/private-policy violations reject;
 - native-entry canary tests inspect the serialized Vue → Rust `ai_store_credential` request and prove it contains only nonsecret provider/entry intent; paired Rust → Vue command responses, events, and errors contain only opaque reference/status and safe metadata;
 - instrumented webview tests prove the canary secret never enters JavaScript objects, Vue/Pinia state, DOM values/attributes/text, persistence, logs, support bundles, fixtures, errors, or usage records; credential replacement/deletion and unavailable/locked keyring states preserve the same boundary;
-- cancellation and stream interruption races;
+- cancellation, profile/scenario switches, deletion, newer turns, and stream interruption races reject or quarantine attributable late/duplicate/out-of-order events without wrong-session content, stale proposal readiness, resurrection, or mutation;
 - large context/output/body/decompression/tool-loop limits;
-- conversation retention/deletion and persistence failure;
+- ephemeral-by-default sessions create no durable chat content; explicit local retention, transactional deletion, and persistence failure behave honestly; deleting a chat preserves applied edits, minimal journal provenance, and normal Undo/Redo without preserving copied transcript content;
 - OpenAI Responses and Gemini Interactions default fixtures always set `store: false`; any future consented provider-retention mode proves disclosure, provider deletion, and end-to-end delete behavior;
-- deterministic evidence grounding, incomplete evidence, and equivalent-optimum language;
+- deterministic evidence grounding includes a real citation attached to a wrong claim, wrong revision/scope/units, incomparable policy metrics, local-move failure misrepresented as global impossibility, incomplete evidence, equivalent optima, and feasible/infeasible/unresolved results;
 - import/restore/export/backup/share/privacy operations are absent from the allowlist, and model text cannot alter portable inclusion, report fields, or output destinations.
+- local-to-cloud profile switching cannot transmit prior private messages or summaries, excluded notes, stale facts, or credentials; compaction and scenario/profile changes rebuild bounded current context under the selected data policy;
+- validation, feasibility, explicit Apply, separate solve confirmation, independent verification, and result acceptance cannot substitute for one another.
 
 ### Product acceptance
 
@@ -374,7 +406,8 @@ For enabled built-in adapters, test Anthropic `tool_use`/immediate `tool_result`
 - representative seating flow proposes a guest/relationship/minimum-distance/seat-lock configuration and applies only after preview;
 - identical operations are possible through deterministic non-AI UI/CLI;
 - assistant panel is keyboard operable, correctly labeled, restores focus, announces stream/proposal completion without excessive chatter, supports reduced motion, and never uses color alone;
-- users understand provider destination, data scope, key storage, usage uncertainty, AI optionality, and proposal-versus-applied state.
+- users can identify provider destination, billing route, data scope, key storage, usage uncertainty, AI optionality, and local retention behavior; in both workforce and seating tasks they can distinguish a draft/validated proposal, an applied scenario revision, and an independently verified/accepted result, and understand that Apply did not confirm a solve;
+- workforce and seating evaluation cases include ambiguous names, Required-versus-Preference language, scope/unit/time interpretation, stale/partial proposals, incorrect citations, and unresolved results; record task completion, unsafe-proposal rejection, semantic/claim fidelity, and comprehension findings before setting measured targets. School and transportation evaluations follow their respective pack gates, not Phase 10.
 
 ## Risks and failure handling
 
@@ -387,10 +420,11 @@ For enabled built-in adapters, test Anthropic `tool_use`/immediate `tool_result`
 - **Cost surprise/tool loop:** local hard limits, usage display, confirmation for large context, bounded retries and cancellation.
 - **Misleading explanation:** deterministic evidence inspector and explicit uncertainty/proof language.
 - **Sensitive scenario disclosure:** task-minimal context, aliases, notes opt-in, remote/local disclosure, configuration sends nothing.
-- **Keyring absent on Linux:** actionable error, no plaintext fallback, AI remains disabled/core usable.
+- **Keyring absent on Linux:** actionable error, no plaintext or session-only fallback; the affected credential-dependent profile remains unavailable while core workflows and explicitly approved no-auth local profiles remain usable.
 - **AI mistaken for compliance authority:** clear preset/advice/verification disclaimers.
+- **Profile/context leakage:** origin-bound credentials, explicit destination/data review, fresh bounded context, no private-history replay or hidden fallback, and attributable stale-event rejection.
 
-Pause and write an ADR if an AI flow needs arbitrary file/code/shell/network authority, a write cannot use normal typed commands, a deterministic non-AI equivalent is absent, a secret must be persisted outside the OS store, security depends only on prompting, or correctness relies on undocumented provider behavior.
+Pause and write an ADR if an AI flow needs arbitrary file/code/shell/network authority, a write cannot use normal typed commands, a deterministic non-AI equivalent is absent, a secret must be persisted outside the OS store or enter a webview/ordinary IPC even briefly, a session-only credential fallback is proposed, security depends only on prompting, or correctness relies on undocumented provider behavior. This plan approves none of those exceptions.
 
 ## Exit gate
 
@@ -400,24 +434,29 @@ Phase 10 is complete only when:
 - provider-neutral internal contracts and fake provider support complete CI behavior without live credentials;
 - every AI adapter enabled in a build passes recorded conformance for its exact endpoint/header/statelessness/tool/stream/error contract, including the current Gemini `/v1beta/interactions` endpoint and required OpenAI/Gemini `store: false`; excluded, disabled, stale, or failing adapters expose accurate unavailable status/reasons and do not block the core release;
 - credentials persist only as OS-keyring secrets plus opaque references; mandatory Rust/native-owned secure entry keeps secret bytes out of Vue → Rust requests, and only opaque reference/status returns through Rust → Vue responses/events; tests prove secrets never enter webview JavaScript/DOM state or logs/support data;
+- named profiles use existing configuration/catalog authorities, capabilities are evidenced per adapter/endpoint/authentication context/model, synthetic probes are explicit and bounded, credentials remain origin-bound, and profile changes cannot introduce hidden fallback or private-history leakage;
 - every tool is typed, allowlisted, risk-classified, bounded, and validated in Rust;
 - scenario writes always produce a command-derived structured diff and require explicit apply as one undoable command batch; solve start uses a separately confirmed, revision-checked typed action dispatched only to `solve_start`;
 - stale and partial proposals cannot apply or start a job; `ai_rebase_proposal` recomputes validation and the diff/action preview for the checked current revision;
 - imported prompt injection, malicious endpoints, malformed calls, redirects, and tool loops cannot expand capabilities or leak credentials;
 - provider timeout/rate/auth/model/refusal/incompatibility/stream/proposal failures preserve scenario state;
-- deterministic explanation evidence remains inspectable and incomplete evidence is accurately labeled;
+- deterministic explanation evidence remains inspectable; real-but-inapplicable citations, local-versus-global claims, common-policy metrics, and infeasible-versus-unresolved language pass the workforce and seating evidence evaluations;
 - deterministic accepted results remain available without waiting for AI, provider failures cannot affect their status, and AI latency is excluded from core optimizer performance claims;
 - import/restore/export/backup/share behavior and privacy selections remain wholly deterministic and AI-independent; AI conversations/provider payloads do not leak into portable/share output;
-- privacy, stateless provider requests, retention, destination, alias/notes, local-only, usage, cancellation, credential/conversation deletion, future consented provider-retention deletion, and all accessibility/error-state UX pass;
-- representative workforce and seating rules can be configured conversationally and through equivalent deterministic UI.
+- privacy, stateless provider requests, destination, alias/notes, local-only, usage, cancellation, credential/conversation deletion, future consented provider-retention deletion, and all accessibility/error-state UX pass; chat is ephemeral by default, local retention is explicit, and minimal applied-proposal journal provenance survives chat deletion without retaining its content;
+- representative workforce and seating rules can be configured conversationally and through equivalent deterministic UI; users understand authoritative Required/Preference semantics and draft/applied/accepted states;
+- profile/scenario changes and compaction rebuild bounded context, and stale/late events cannot contaminate the replacement session, revive deleted history, apply a proposal, or start a job.
 
 ## Deferred and non-goals
 
 - OAuth without an official appropriate desktop third-party flow.
-- Consumer subscription/cookie reuse, browser automation, arbitrary web browsing/fetch, shell/code/SQL execution, arbitrary local-file reads, autonomous export/delete/credential operations.
+- Consumer subscription/cookie reuse, browser automation, arbitrary web browsing/fetch, shell/code/SQL execution, arbitrary local-file reads, autonomous export/delete/credential operations. A documented embedded subscription runtime is a separate conditional Phase 13 Branch K investigation, not assumed API entitlement or permission to reuse consumer credentials.
 - AI-generated solver/backend code, AI verification, autonomous application, legal/compliance decisions, or AI-only workflows.
 - Hidden agents, background autonomous edits, unbounded tool loops/retries, hosted eutheto accounts/services, and cross-project memory.
 - Domain-guided templates, local-model tuning, richer provider portfolios, semantic retrieval, and hosted collaboration are post-MVP unless separately approved.
+- Elaborate multi-role routing, managed multi-tenant policy infrastructure, broad retrieval, and duplicate tool/capability/audit/undo registries are not prerequisites for this single-user text path.
+- [Phase 13 Branch K](13-post-mvp-roadmap.md) owns early post-MVP experimental planning and voice as independent deliveries gated on completed Phase 12, not school/transport or other immediate branches. Isolated what-if snapshots reuse specific existing comparison/job/evidence contracts rather than requiring universal branching/merge. Voice is native-first; no short-lived credential exposure to Vue or session-only fallback is authorized here.
+- External-assistant access through an MCP **server** is distinct from inference adapters or an MCP client and starts with a local-first integration before any remote service. Conditional embedded subscription runtimes may be local-capable, not inherently hosted, but require official terms, entitlement, tool-confinement, credential, and license evidence and any necessary future ADR before production enablement. None of experiments, voice, MCP production, or runtime investigation gates Phase 10.
 
 ## Assumption and version gates
 

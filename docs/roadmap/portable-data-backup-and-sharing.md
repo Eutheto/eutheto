@@ -153,6 +153,8 @@ It excludes credentials, OAuth tokens, API keys, passwords, session cookies, pri
 
 A portable integration binding preserves provider kind, nonsecret source description, privacy-safe external identity/provenance where needed, and `requires-reconnection`; it never preserves authentication material. The imported scenario remains inspectable before reconnection. Solve availability depends on whether valid required normalized facts were embedded.
 
+Phase-10 live or opt-in retained conversations, transcripts, prompts, provider payloads, and credential references remain outside scenario exports, full backups, and Share Result data. Minimal applied-command provenance follows the existing history contract independently of chat retention; deleting a conversation does not erase the applied domain edit. Portable nonsecret integration metadata is descriptive, not transferred authorization: import/restore never replays proposals or approvals, starts AI/provider requests or solver jobs, or activates a microphone. Reconnection and any data-sharing permission require fresh explicit review. Post-MVP Branch-K raw audio and temporary experiment artifacts are likewise excluded; retaining an experiment is not consent to export it, and only explicitly promoted scenario meaning enters ordinary scenario portability.
+
 User-confirmed coordinates may be scenario data. Opaque geocoding, route, traffic, transit, directions, and tile data is derived. It may be persisted or bundled only when current provider terms permit that data class and the payload records provenance, provider/model version, freshness, units, and expiry semantics. Omission of replaceable cache data cannot make the portable document structurally invalid, though rerunning may require manual data or a reconnected provider. Imported stale derived data is never silently treated as current.
 
 Checksums detect corruption and inconsistent assembly. They do not authenticate the sender, approve semantic meaning, or justify a `trusted`/`verified source` badge.
@@ -392,10 +394,10 @@ Visual regression protects shared view components and print layout, but semantic
 | 06 | Intent-led import/backup/share UI primitives, preview/accessibility/error states, safe file grants, and nonblocking operation shell. |
 | 07 | Generic Share Result builder/renderer/component boundary; workforce standalone HTML and direct PDF; privacy preview/options; CSV/ICS/JSON coexist under distinct gates. |
 | 09 | Seating Share Result payload/views, deterministic schematic/SVG integration, standalone HTML/PDF through the shared renderer, and privacy/accessibility evidence. |
-| 10 | No AI authority to export/restore; AI content is never required in a report and receives no implicit bundle/share access. |
+| 10 | No AI authority to export/restore; conversation/provider data stays excluded, minimal command provenance remains independent of chat retention, and imported integration metadata grants no authority. |
 | 11 | Final `.eutheto` identity/media-type/file-association ADR; exact target/browser/PDF packaging; public format/report documentation; compatibility/support matrix; release security review. |
 | 12 | Historical migration/security/fuzz/restore/report/browser/print/PDF/large-fixture release gates on exact candidates. |
-| 13 | Explicit post-MVP backup/encryption/signature/hosted-sharing branches only. |
+| 13 | Explicit post-MVP backup/encryption/signature/hosted-sharing branches; Branch-K experiment retention and promotion preserve exclusions, disclosure, and inert restore without adding an implicit export path. |
 | 14 | Transportation portable semantics/provider restrictions and Share Result itinerary/coordination payload with complete offline non-map meaning. |
 
 ## MVP acceptance

@@ -2,13 +2,15 @@
 
 ## Outcome
 
-Extend the released local-first `eutheto` platform without weakening public-MVP contracts. The immediate release delivers the complete official school-timetabling pack, deeper explainability, stronger verified portfolio routing and alternative generation, and a separate Nuxt documentation/community website. Dependency-gated planner evolution then deepens repair, semantic comparison, plan health, trade-off exploration, history, resilience analysis, and person-aware fairness before any generalized platform claim. Later independent branches may add sandboxed domain packs, optional solver adapters, specialized algorithms, new targets, richer imports, collaboration/server mode, enterprise integrations, additional official domains, improved AI, optional telemetry, and optional hosted services. Every branch remains independently gated, capability-scoped, license-reviewed, resource-bounded, migration-safe, accessible, and optional relative to the open-source core and desktop application.
+Extend the released local-first `eutheto` platform without weakening public-MVP contracts. The original immediate release delivers the complete official school-timetabling pack, deeper explainability, stronger verified portfolio routing and alternative generation, and a separate Nuxt documentation/community website. Independently, early post-MVP Branch K delivers bounded conversational experiments and staged voice capabilities from completed Phase 12, without waiting for school, transportation, or the original immediate-wave exit. Dependency-gated planner evolution deepens repair, semantic comparison, plan health, trade-off exploration, history, resilience analysis, and person-aware fairness before any generalized platform claim. Later independent branches may add sandboxed domain packs, optional solver adapters, specialized algorithms, new targets, richer imports, collaboration/server mode, enterprise integrations, additional official domains, advanced AI integrations, optional telemetry, and optional hosted services. Every branch remains independently gated, capability-scoped, license-reviewed, resource-bounded, migration-safe, accessible, and optional relative to the open-source core and desktop application.
 
 The public-MVP baseline is defined in [Phase 11](11-public-mvp-packaging-and-documentation.md) and approved in [Phase 12](12-stabilization-and-public-release-gate.md). Version and decision evidence is in [the assumptions ledger](assumptions.md).
 
 ## Source coverage
 
 This phase fully maps blueprint Section 20; immediate/later scope in Sections 6.4–6.5; Section 12.2's post-MVP pack model; Section 14.11; Sections 16.3–16.6; Sections 24.9 and 24.12; future targets and distribution options in Section 27; every branch in Section 30; Appendix C.8; applicable validation/definition-of-done/stop-condition gates; and the explicitly deferred opportunities in [Performance and Solver UX Targets](performance-and-solver-ux-targets.md) and [Portable Data, Backup, and Result Sharing](portable-data-backup-and-sharing.md). It also incorporates the accepted, scope-disciplined recommendations from **Eutheto — Feature Expansion and Product Evolution Roadmap**, dated 2026-08-29, source SHA-256 `b55dc5a3e423a955a7dabb0a62cebd283be54598d5fc0afc6f6bf90cd37bb7cb`.
+
+Branch K incorporates selected recommendations from **Eutheto: AI, Voice, and External Assistant Implementation Plan**, dated 2026-09-04, as proposal input rather than a replacement architecture or approval of its suggested ADRs. Existing ADRs and Phase-10 policy control conflicts; external integration references below are investigation starting points, not verified support or entitlement promises.
 
 ## Dependencies
 
@@ -45,12 +47,16 @@ Every branch delivered at or after 1.0 must:
 
 ## Delivery branches and ordering
 
-### Immediate post-MVP
+### Original immediate post-MVP wave
 
 1. Complete official school-timetabling pack.
 2. Deeper explainability and explanation-quality evaluation.
 3. Stronger local portfolio routing and explicit alternative/diversity generation.
 4. Nuxt documentation/community site separate from the desktop Vue/Vite SPA.
+
+### Independent early post-MVP — Branch K
+
+Enter from completed Phase 12, alongside rather than after the original immediate wave. Bounded conversational experiments and dictation have independent deliveries; realtime voice follows its own media/security gate and does not require experiments to ship. Workforce and seating provide the initial cross-domain evidence. Neither school/transport completion, generalized Scenario Compare, richer branching/merge, nor Branches H/I/N is a prerequisite for these local desktop deliveries. The restricted local MCP server is a separate optional increment; conditional runtime integration and organization administration do not gate planning or voice.
 
 ### Later post-MVP
 
@@ -64,7 +70,7 @@ Every branch delivered at or after 1.0 must:
 - the proposed [Transportation domain-pack plan](14-transportation-domain-pack.md), independently entered from completed Phase 12;
 - additional official domain packs;
 - richer imports and structured import assistance;
-- AI/local-provider improvements;
+- advanced AI/import integrations beyond the independently gated early Branch-K deliveries;
 - encrypted/automatic backup, signed bundles, selected multi-scenario portability, richer result-report profiles, annotations/branding, and optional hosted sharing;
 - optional anonymous diagnostics;
 - Linux arm64, Windows arm64, and additional package/repository targets;
@@ -248,13 +254,15 @@ run manifest + frozen provider snapshots
 5. **Refresh and compare:** calendar, routing, price, or other provider updates create a reviewed immutable input snapshot and a new run; they never overwrite the accepted result's basis. The user can review source/freshness changes, refresh and compare, or retain the prior snapshot.
 6. **Person-aware fairness expansion:** expose named burden definitions, populations, targets, distributions, deviations, and pack-owned balancing presets. Accessibility and safety remain requirements, not fairness trade-offs; equal treatment is not asserted to be equitable.
 
+Branch-K isolated experiments reuse the existing revision/run/result identities, verified metric/evidence contracts, and bounded comparison views they actually need. They do not wait for arbitrary-pair Scenario Compare, the full timeline, curated trade-off UI, or the complete planner-evolution sequence above; neither do they claim to deliver those broader capabilities.
+
 ### Advanced post-MVP
 
 1. **Deterministic stress tests first:** packs define bounded, understandable perturbations and recovery criteria. Each test records its base revision, immutable inputs, perturbation, budget, candidate, independent verification, and repair cost; supports progress/cancellation; and never emits a success probability without a reviewed empirical distribution.
 2. **Resilience objectives and interactive trade-offs:** only after deterministic tests, performance evidence, and domain semantics mature may a pack trade a recorded amount of nominal score for a recorded resilience measure or expose interactive movement among competing objectives.
 3. **Multi-period fairness:** burden history and rotation require explicit retention, correction/deletion, time-window, baseline, weighting, and privacy semantics. Historical disadvantage is not inferred from opaque scores.
-4. **Scenario branching and reconciliation:** branches retain provenance and immutable base identities; guided reconciliation previews semantic conflicts and applies revision-checked commands. Do not expose source-control terminology by default.
-5. **Reviewed conversational changes:** the optional AI may translate “Make it fit” language only into the same typed pack commands available to deterministic UI. The user reviews hard-versus-soft meaning and affected scope before apply; solving and verification remain deterministic authorities.
+4. **Scenario branching and reconciliation:** richer generic branching retains provenance and immutable base identities; guided reconciliation previews pack-defined semantic conflicts and applies revision-checked commands. Do not expose source-control terminology by default. This advanced scope is distinct from Branch-K isolated snapshots and reviewed promotion, which require no general branching or merge engine.
+5. **Advanced conversational repair:** extend Branch-K reviewed conversations to richer repair alternatives only as those deterministic capabilities pass their own gates. Basic typed conversational edits remain Phase 10, and early bounded experiments remain Branch K; neither is deferred to this advanced track. The user reviews hard-versus-soft meaning and affected scope before apply; solving and independent verification remain deterministic authorities.
 6. **Advanced result capsules:** precomputed alternatives, annotations, recipient-specific disclosure, or capsule-to-scenario conversion follow Branch O and the cross-cutting portable-data specification. A capsule never gains ambient network, filesystem, credential, or mutable-scenario authority.
 
 ### Platform research gates
@@ -336,9 +344,13 @@ The provisional `optimizer serve` uses a separately designed authenticated API, 
 
 Potential scope: local network service, authenticated organization server, scheduled jobs, webhooks/import pipelines, review/approval, shared history, and role-based permissions. Before implementation design concurrency/revisions, audit, authentication/session/token lifecycle, authorization/RBAC, tenant isolation, quotas, cancellation, secrets, backup/restore, TLS/proxy deployment, abuse prevention, migration/rollback, incident response, retention/privacy. Desktop remains server-independent.
 
+This branch does not gate Branch-K desktop experiments, voice, a restricted local MCP server, or a locally embedded supported runtime. A remote/managed Branch-K deployment must first satisfy the applicable service identity, authorization, concurrency, quota, audit, and operations gates here; it cannot expose Tauri IPC as its service API.
+
 ## Branch I — Enterprise integrations
 
 Optional directory/HRIS import, calendar sync, school information systems, event/guest platforms, signed policy packs, user-provided solver discovery, server SSO, and audit/report exports. Keep vendor fields out of core models. Each adapter needs typed boundary, disclosed data scope, credentials, rate/retry/cancellation, conformance fixtures, version mapping, preview/transactional apply, audit/redaction, license review, offline/failure behavior, and removal/migration path.
+
+Branch-K local privacy and provider controls precede organization administration. Central provider allowlists, roles, SSO, and managed policy distribution enter only with the applicable H/I deployment gates; they are not dependencies of desktop planning, voice, or local MCP.
 
 ## Branch J — Additional official packs
 
@@ -360,11 +372,88 @@ Other candidates:
 
 Select other packs on reusable primitives, domain maintainers, and clear UX—not modelability alone. Define privacy, rules/preferences, imports/exports, IR needs, verifier, explanations, accessibility, benchmark corpus, practitioner review, migration, ownership, and disclaimers before commitment.
 
-## Branch K — AI and import improvements
+## Branch K — Early conversational experiments, voice, and optional integrations
 
-Potential additions: domain-guided conversations, local-model capability profiles, structured import assistance, reusable typed rule macros, provider OAuth only through official flows, organization provider policies in server mode, deterministic redaction/pseudonymization, and optional voice as another typed-tool client.
+### Entry, authority, and local privacy
 
-Every write remains typed, validated, previewed, explicitly applied, revision-checked, and undoable. AI never generates backend code, bypasses validation/verification, invents facts, accepts its own writes, reads arbitrary files, executes shell, or receives credentials. Reverify current provider contracts and local capability warnings. Import assistance uses bounded parsers and transactional preview/apply.
+Completed Phase 12 is the entry gate. [Phase 10](10-ai-assistant-mvp.md) remains the complete text-AI MVP after deterministic workforce and seating, including profiles and opt-in local conversation retention; this branch extends rather than postpones it. Planning experiments and voice have separate early exits, independent of the school/portfolio/explainability/site wave and Phase 14. Use the existing command journal/undo, solver jobs, typed catalogs, revision/result identities, and evidence services as single authorities; do not introduce a universal agent framework, duplicate approval store, or generic branch/merge platform.
+
+- Every persistent scenario mutation is typed, validated, previewed, explicitly applied through trusted Eutheto GUI/keyboard controls, revision-checked, atomic, and undoable. AI never accepts its own proposal, generates backend code, invents domain facts, bypasses independent verification, reads arbitrary files, executes shell, or receives credentials.
+- Preserve Phase-10 separate explicit solve-start confirmation. A conversational request or open voice session is not compute permission. Any future session-budget compute grant requires an explicit reviewed native permission design and any necessary future ADR **before enablement**, with selected scenario/snapshot, allowed operations, total budget, expiry, revocation, and visible remaining allowance; it cannot authorize writes, protected-rule relaxation, provider changes, or export/import/backup/privacy actions. No such exception is approved here.
+- Native code owns credential entry/custody, authenticated provider networking, authorization, and transport. Secrets, including ephemeral provider/session credentials, never enter Vue or ordinary IPC. OS-store failure disables the affected integration with an actionable error; frontend credentials or session-only fallback require a future explicit ADR, not an implementation shortcut.
+- Carry local privacy controls into every increment: AI-disabled makes no AI network requests; local-only restricts Eutheto traffic to approved local routes without claiming an endpoint cannot forward upstream; external routes require disclosed destination and permitted data categories with no silent fallback. Apply minimization to typed input, transcript, tool context, and output; treat imported notes and transcripts as untrusted data. Users inspect/delete opt-in local conversations and transcripts with bounded retention; raw audio is not retained in logs, databases, backups, or diagnostics and transient media buffers are cleared on teardown.
+- AI gains no portability, publication, privacy-selection, or import/restore/backup authority. Any later structured import assistance uses existing bounded parsers and deterministic preview/transactional apply; no assistant receives raw bundle or arbitrary-file access. Organization-wide administration is later H/I scope, not a prerequisite for these local controls.
+
+Retain later domain-guided conversation templates, improved local-model capability profiles, reusable typed rule macros, and deterministic redaction/pseudonymization as bounded extensions of the existing profiles and catalogs. Macros expand to the same reviewed typed commands, not a second rule language; provider OAuth remains conditional on official suitable third-party flows. None of these later improvements delays the early exits below.
+
+### K1 — Bounded conversational planning experiments
+
+1. Create a visibly isolated experiment from an immutable selected baseline snapshot plus typed changes; record scenario/base revision, input snapshot, proposed assumptions, and hypothetical entities. Resolve missing eligibility, availability, capacity, dates, and hard-versus-soft meaning through the pack catalog, never model invention. Label hypothetical entities and results throughout, including retained views, and never silently change the working scenario or accepted result.
+2. Submit only validated, explicitly confirmed requests to existing asynchronous solver jobs. Record the exact baseline and candidate input/revision, run and accepted-result identities, pack/compiler/verifier versions, objective configuration, metric definition/version/unit/direction/population/time window, budgets, assumptions, and proof/verification status. A completed job is not necessarily feasible, accepted, or optimal; a short-budget unknown outcome is not infeasibility.
+3. Compare independently verified outcomes under named, compatible metrics. When objectives or weights differ, evaluate both results under a common recorded comparison policy where meaningful; otherwise report raw comparable metrics and explicit non-comparability, never compare unlike aggregate scores. “Improve fairness without increasing overtime” requires an explicit pack-supported overtime bound derived from the identified baseline, not a large penalty weight. Reject unsupported bound semantics rather than approximating a requirement.
+4. Provide baseline-versus-experiment differences, assignments/disruption, required-rule checks, metric deltas, assumptions, and evidence-backed status through deterministic accessible views. Distinguish direct fixed-assignment diagnostics from global rescheduling; only the exact recorded diagnostic justifies causal claims. The experiment remains useful without AI paraphrase.
+5. Support **Retain experiment**, **Discard**, **Keep as scenario**, and **Apply reviewed changes**. Retention/expiry and crash recovery keep temporary artifacts visibly separate, with predictable deletion and no implicit ordinary export inclusion. Promotion uses existing copy/command operations, fresh revision validation and approval; stale promotion produces a new review, never hidden rebase or partial application. General three-way merge, arbitrary branching, and richer timeline reconciliation are not prerequisites.
+
+### K2 — Dictation, then independently gated realtime voice
+
+Dictation ships first: explicit microphone activation → permitted transcription → editable transcript → ordinary text copilot. Sending the corrected transcript is explicit; partial utterances never apply writes or start jobs. A cascaded local/approved STT → text → TTS mode may follow but is labeled accurately, not called native realtime/full-duplex voice.
+
+Before realtime delivery, prove capture, playback, microphone permission denial/revocation, device changes, echo/interruption handling, and the selected native-owned transport in the actual packaged Tauri application on each advertised OS. Measure under representative concurrent workforce/seating solver load, including audio responsiveness, resource pressure, and teardown; standalone browser success or an STT demo is insufficient. Proceed from safe capture/playback/shutdown to the provider route, read-only tools, then typed proposals with existing review controls. Unsupported platform/provider/model/transport combinations stay disabled with an explanation.
+
+- Push-to-talk is the default. Show capture/playback state, provider/destination, scenario, current proposal/experiment, active jobs, and an always-accessible local **Stop everything in this session** control. Stop acknowledges locally and stops capture/playback/transports while requesting job cancellation even without network or speech recognition. All controls have keyboard/screen-reader equivalents.
+- Distinguish **Stop playback**, **Mute capture**, **End voice session**, **Cancel analysis**, and **Cancel experiment**. Mute is not disconnect; end stops media/tracks/transports and clears buffers but does not silently cancel separately visible solver jobs. The combined Stop makes its broader cancellation scope explicit. Cancellation is not rollback of committed writes; show the committed change and normal undo.
+- Opening/importing/restoring a scenario, application restart, retained conversation replay, or reconnection never activates capture, resurrects approvals, or automatically starts jobs. Require fresh explicit activation after teardown or loss of microphone permission.
+- Interruptions stop audible output and reconcile what was actually heard. Corrections supersede draft interpretations; partial/duplicate/reordered/reconnected tool events cannot execute partial arguments or replay side effects. Bind events to session/turn/proposal/revision/job identities; late results remain attached to the original experiment and cannot overwrite or be narrated as the current answer.
+- GUI/keyboard approval tied to the current authoritative diff remains mandatory for persistent writes, and solve start retains its separate confirmation. Background speech or an ambient “yes” is never authorization; speaker recognition and host/model confirmations confer no authority. Spoken authorization is not part of this delivery.
+- Audio policy is separate from text policy: no external data permits only fully local selected components or disables the mode; filtered external text may use local transcription plus approved text/TTS filtering but forbids direct external microphone streaming; external audio requires explicit destination/data-sharing consent and current provider-handling review. Transcript redaction cannot undo raw-audio disclosure.
+- Numerical/status narration uses deterministic text rendered from independently verified result/evidence cards, with visible evidence links, units, limitations and baseline identity. Free-form dialogue cannot invent progress, metrics, feasibility, optimality, or causality. Pending, infeasible, unknown, cancelled, and superseded outcomes remain distinct.
+
+### K3 — One parent budget before optional reasoning delegation
+
+Use the existing asynchronous solver-job lifecycle first, so conversation remains responsive without a second reasoning agent. All experiment/reasoning children share one visible parent operation budget for time, solver CPU/threads/memory, request/token/output limits and known or estimated provider usage; missing cost data is unknown, not free. Bound queues/concurrency, default to one heavy foreground solve, and preserve Phase-10 native confirmations. Starting another turn or child does not reset limits or silently extend the operation.
+
+Cancellation propagates to queued/running work, requests cooperative solver cancellation with bounded fallback, preserves verified incumbents and truthful termination reasons, and rejects stale completions. An optional single-level reasoning delegation is enabled only after measured quality or responsiveness benefit over this baseline: bounded task count/deadline, same approved profile/data/tool scope, explicit evidence references, no recursion, no permission/provider escalation, and no independent budget. Delegated findings are untrusted data, not instructions or proof. Numeric performance/concurrency targets remain provisional until measured on declared workloads/platforms; no delegation framework is a first-release dependency.
+
+### K4 — Restricted local MCP server, not inference or an MCP client
+
+Build an optional Eutheto **MCP server** over the existing typed application services: bounded scenario/catalog/result/evidence reads and proposal/confirmed-job requests, with caller-specific exposure. An OpenAI-compatible inference adapter is not this server, and this milestone does not add a general MCP client or arbitrary third-party tools.
+
+Start with explicitly launched authenticated local stdio or loopback transport and restricted scenario/resource/operation scope. Local process identity/permissions or per-session credentials must be verified; loopback alone is not authorization and network transport needs origin/DNS-rebinding protections. Bound request sizes, rates, time, output and parent compute budgets; preserve proposal/revision approval, idempotency/replay protection, cancellation, disconnect/revocation, redacted activity records, and independent result verification. Host tool annotations, screenshots, and host confirmation prompts never replace Eutheto authorization or its exact-diff approval. Inference credentials are not service-access tokens; never pass through tokens for another audience.
+
+Disclose that an external host can forward returned data even if MCP is local. Verify actual host transport, tools, authentication and voice support before advertising it. A cloud host cannot reach a local desktop by implication: remote access requires a separately reviewed, explicitly enabled/revocable reachability mechanism; no silent tunnel, inbound listener, scenario upload, or hosted proxy. Only remote/managed deployments depend on applicable H service-security/operations, I organization-integration, and N hosted-service gates. Host-specific UI/distribution follow the proven local tool boundary and never gate the desktop product.
+
+### K5 — Conditional supported embedded-runtime investigation
+
+Investigate Codex App Server or another officially supported runtime as an optional local-capable provider-runtime route, not inherently an Eutheto-hosted service and not generic API access. No supported provider/model/entitlement is asserted here. This investigation never blocks the first experiment, voice, or local MCP release.
+
+Before enabling an adapter, require official evidence that suitable third-party embedding, authentication, and the intended scheduling/tool use are permitted; distinguish identity, account/workspace entitlement, inference capability, and quota/billing. No extraction, impersonation, consumer-session reuse, token repurposing, or unofficial OAuth. Use OS credential-store custody through the native boundary, with explicit signout/revocation, cancellation, quota exhaustion and unavailable-store behavior; authentication success alone does not enable inference.
+
+Prove confinement with inherited native shell, filesystem, network, tools/MCP servers, configuration, and plug-in capabilities disabled or isolated by an enforceable boundary. Only the explicitly approved native-brokered inference route and Eutheto typed capabilities may remain; prompts or runtime “approval” modes are not isolation. Inspect effective configuration and negative tests for hidden defaults, startup hooks, and ambient credentials. If that boundary cannot be enforced, keep the adapter disabled. Realtime/voice entitlement, media route, and cost are independently reviewed, never inferred from a text subscription. Exact runtime/dependency licenses, redistribution/bundling terms, notices/SBOM, update/compatibility, signed packaging, supported targets, resource limits and removal must pass before distribution; applicable H/I/N gates attach only to remote/managed deployments.
+
+### K6 — Acceptance and independent staged exits
+
+Use synthetic versioned workforce **and seating** scenarios now; extend evaluation to school only after Branch A's pack gates and transportation only after Phase 14's gates. Later domain coverage is not an early release prerequisite, and illustrative nurse/student/travel dialogue does not promise unsupported pack semantics.
+
+- **Workforce:** clarify a hypothetical part-time worker's qualifications, dates and availability; refine weekdays to selected days without altering the real roster; compare verified coverage and declared fairness metrics. For “improve weekend fairness without increasing overtime,” enforce the exact baseline overtime bound, show raw metrics under a common policy when objectives differ, and never imply hiring guarantees.
+- **Seating:** propose a hypothetical guest or party with resolved identity, relationship and accessibility assumptions supported by the catalog; revise its size or seat request without changing the accepted plan. Preserve capacity, accessibility, minimum-distance rules and locks; compare verified preference/assignment disruption metrics. Unsupported requests require clarification/refusal rather than invented seat, relationship, or safety semantics.
+- **Both domains:** retain/discard/copy/promote experiments; reject stale approvals after another edit; distinguish proven infeasibility from deliberately time-limited unknown outcomes; compare changed objectives without misleading aggregate scores. Prove prompt injection, duplicate/reordered calls, cancellation and superseded completions cannot mutate the baseline or fabricate results; ordinary UI/CLI flows remain usable with AI disabled.
+- **Voice in both domains:** correct an utterance before approval, inject background “yes,” interrupt numerical narration, switch/deny/revoke devices, disconnect the network during Stop, cancel under solver load, and restart/import/restore without capture or replay. Enforce filtered-text-only versus external-audio policy; retain no raw audio and expose no credentials, including ephemeral credentials, to Vue/ordinary IPC.
+- Measure intent/entity resolution, clarification and hard/soft correctness, unsupported-request handling, evidence/numerical accuracy, correction effort, cancellation/stale-event handling, latency and resource use with recorded pack/model/prompt/adapter versions. Forbidden writes and credential exposure must be absent in the maintained adversarial corpus; this is a release gate, not proof of universal security. Use domain/verifier truth and human review, not a model judge alone. Live-provider evaluations are opt-in, synthetic, budgeted and separate from deterministic suites.
+
+| Increment | Independent exit |
+|---|---|
+| K1 early planning | Isolated typed experiments, exact identities/common evaluation/explicit bounds, one-parent jobs and cancellation, reviewed retention/promotion, and workforce/seating evidence pass; no school, transport, generic merge, or voice prerequisite. |
+| K2 early dictation | Editable transcript, explicit activation/send, local privacy, credential boundary, accessible controls and verified platform media teardown pass; no K1 or realtime prerequisite. |
+| K2 realtime | Dictation baseline plus packaged media/transport evidence under solver load, interruption/corrections/stale-event handling, offline Stop, audio policy and deterministic narration pass. K1 is required only when advertising voice-driven experiments; K3 delegation is optional. |
+| K3 delegation | Existing async-job baseline is measured first; bounded single-level delegation demonstrates benefit and all scope/budget/cancellation/authorization invariants. |
+| K4 local MCP | Tested host/transport, authenticated scoped tools, Eutheto approvals, replay/resource/disclosure/revocation gates pass without H/I/N services. Remote/managed variants exit separately under applicable service gates. |
+| K5 runtime | Official third-party terms/entitlement, secure custody, effective tool confinement, cancellation/signout/quota, independent voice entitlement where claimed, and exact-artifact license/package evidence pass; otherwise disabled. |
+
+Each shipped increment also meets the common Phase-12-derived acceptance and branch exit requirements below. None authorizes a policy exception or makes another optional increment mandatory.
+
+### Investigation references, not support promises
+
+Recheck current official [Tauri capabilities](https://v2.tauri.app/security/capabilities/), [realtime audio](https://developers.openai.com/api/docs/guides/realtime), [WebRTC guidance](https://developers.openai.com/api/docs/guides/realtime-webrtc), [Codex App Server](https://developers.openai.com/codex/app-server), [Codex authentication](https://developers.openai.com/codex/auth), [MCP specification](https://modelcontextprotocol.io/specification), and [native OAuth guidance](https://www.rfc-editor.org/rfc/rfc8252.html) when investigating a concrete adapter. Client-side ephemeral-credential examples do not override Eutheto's native-only secret boundary. Record dated official provider terms, entitlement and exact-artifact evidence separately before enablement; mutable examples, model names, prices or successful login are not release authorization.
 
 ## Branch L — Optional anonymous diagnostics
 
@@ -386,6 +475,8 @@ Each completes the same one-install, worker, license/SBOM/provenance, signing, u
 ## Branch N — Hosted services, if ever added
 
 Potential update/catalog hosting, shared projects, remote solves, and managed AI gateways remain optional and never gate open-source core/desktop. Separate open-source capabilities from paid services. Require independent governance, tenancy, security/privacy/compliance, auth, retention/deletion, audit, availability/recovery, abuse controls, compatibility, export/exit, incident response, and disclosure.
+
+Branch-K local MCP and local-capable embedded runtimes do not inherently require this branch. Managed gateways, hosted runtimes, or remote assistant access inherit these gates only when that deployment is explicitly selected; they never become prerequisites for early desktop experiments or voice.
 
 ## Branch O — Portable data, backup, and sharing enhancements
 
@@ -414,6 +505,10 @@ Every enhancement has version/migration/downgrade behavior, bounded resource and
 7. Portfolio/resource/diversity improvements.
 8. Separate Nuxt site.
 
+### Independent early Branch-K work packages
+
+From completed Phase 12, run the K1 isolated-experiment/verified-comparison delivery and K2 dictation/media-feasibility delivery independently of items 1–8. Realtime follows K2's own gate; the existing one-parent asynchronous-job controls apply before optional K3 reasoning delegation. K4 local MCP and K5 conditional runtime investigation are separately gated optional increments, not dependencies of those early deliveries. Use K6's staged exits rather than waiting for the original immediate-wave exit.
+
 ### Later independent waves
 
 9. Proven-structure algorithms.
@@ -422,7 +517,7 @@ Every enhancement has version/migration/downgrade behavior, bounded resource and
 12. Authenticated service/collaboration design.
 13. Enterprise adapters.
 14. Other selected official domains; transportation is ordered separately in its sibling [Phase-14 plan](14-transportation-domain-pack.md).
-15. AI/import improvements.
+15. Advanced AI/import integrations and organization administration beyond the early Branch-K increments, under their applicable deterministic/security/service gates.
 16. Optional diagnostics.
 17. Additional targets/distribution.
 18. Optional hosted services.
@@ -431,6 +526,8 @@ Every enhancement has version/migration/downgrade behavior, bounded resource and
 ## Tests and acceptance
 
 Every branch inherits Phase-12 definitions of done and adds backward compatibility/permanent migrations; typed unknown-newer rejection; independent verifier coverage; cancellation/crash/malformed/resource/failure tests; exact-artifact license/SBOM/notices/provenance; property/differential/metamorphic/fuzz/benchmark/E2E/accessibility/usability evidence; accurate capability/stability/privacy labels; docs/ADRs/ownership/recovery; exact portable/share preview and offline/local behavior when optional components fail.
+
+Branch-K acceptance is staged by K6: workforce/seating planning and voice evidence precede only the increments that use them; school/transport evaluations follow their completed pack gates. Verify packaged native media and OS-store behavior on every advertised voice/runtime target, and external-host/runtime conformance for every advertised combination. No provider/model/voice support or numerical performance target is promoted from an investigation example without measured evidence.
 
 ## Risks and failure handling
 
@@ -449,15 +546,21 @@ Every branch inherits Phase-12 definitions of done and adds backward compatibili
 | Cache/warm start changes meaning or hides budget | Hash every semantic input, retain cold-path parity, verify every candidate, account one explicit operation budget, and require measured equivalence/regression evidence. |
 | Automated/encrypted/hosted portability traps or loses data | Preserve local current-format export, authenticated/versioned envelopes, visible backup health, restore drills, exact preview, revocation/deletion/export and documented exit. |
 | AI/import needs arbitrary file/shell | Redesign typed scoped tools. |
+| Experiment changes baseline or compares unlike objectives | Keep immutable isolated inputs, enforce reviewed promotion, record exact result/metric identities, and use common evaluation or explicit non-comparability. |
+| Voice needs frontend secrets, ignores Stop, or leaks prohibited audio | Keep the mode disabled; prove native custody/transport, offline teardown, and distinct audio policy without waiving ADRs. |
+| Runtime login succeeds but terms, entitlement, confinement, or packaging remain unproven | Keep the optional adapter disabled; do not reuse tokens, inherit ambient tools, or infer voice access. |
+| Local MCP assumes cloud reachability or trusts host approval | Preserve scoped Eutheto authorization; require explicit separately reviewed remote deployment and applicable H/I/N gates. |
 | Telemetry contains identifiers | Block collection/release and redesign. |
 | Target lacks clean-machine evidence | Do not advertise it. |
 | Correctness depends on undocumented behavior | Obtain official conformance evidence or remove capability. |
 
 ## Exit gates
 
-The immediate milestone exits only when the complete school contract and nine scenarios pass; school Portable Scenario/Share Result migrations and offline reports meet Phase-12 contracts; explanation/portfolio features preserve verification, certainty, one-budget/resource and cache/hint provenance invariants; diversity is explicit and accurately scored; the Nuxt site is separate and accessible; formats migrate safely; and exact artifacts pass Phase-12 gates.
+The **original immediate-wave milestone** exits only when the complete school contract and nine scenarios pass; school Portable Scenario/Share Result migrations and offline reports meet Phase-12 contracts; explanation/portfolio features preserve verification, certainty, one-budget/resource and cache/hint provenance invariants; diversity is explicit and accurately scored; the Nuxt site is separate and accessible; formats migrate safely; and exact artifacts pass Phase-12 gates. These commitments are unchanged, but their completion is not an entry or exit prerequisite for Branch K.
 
-A later branch exits only when its contract, tests, security/privacy/license review, migration/compatibility, accessibility/usability, packaging/operations, ownership/docs, and rollback/removal path are complete. One branch never makes another an implicit commitment.
+**Branch K exits incrementally under K6**, beginning independently from completed Phase 12. Planning, dictation/realtime, optional delegation, local MCP, and conditional runtime support each meet their own listed gates and the common branch contract; no combined “all Phase 13 complete” gate holds early planning or voice behind school, transportation, or services. The original immediate wave likewise does not require Branch K.
+
+Any independently delivered branch or increment exits only when its contract, tests, security/privacy/license review, migration/compatibility, accessibility/usability, packaging/operations, ownership/docs, and rollback/removal path are complete. One branch never makes another an implicit commitment, and a conditional integration cannot be marked supported until its evidence gates pass.
 
 ## Deferred and non-goals
 
@@ -469,6 +572,8 @@ A later branch exits only when its contract, tests, security/privacy/license rev
 - Server mode never directly exposes Tauri IPC.
 - Vendor fields never pollute core domain contracts.
 - Hosted/paid services never remove required local open-source functionality.
+- Branch-K isolated experiments do not require or deliver universal branching/merge, a general agent framework, or coordinated cross-pack solving.
+- Voice, MCP, and embedded runtimes never grant ambient approval, frontend credentials, export/privacy/import/backup authority, or an automatic session-budget compute permission; any policy exception requires a future explicit ADR before enablement.
 
 ## Assumption and version gates
 
@@ -479,6 +584,7 @@ A later branch exits only when its contract, tests, security/privacy/license rev
 - HiGHS 1.15.1, SCIP 10.0.3, and MiniZinc 2.10.0 are discovery values, not automatic pins; reverify and inspect exact licenses at branch start.
 - WASM ABI/signatures/resources/UI/catalog/migrations require an ADR.
 - Provider APIs/local endpoints are mutable; reverify official contracts, OAuth, streaming, schemas, and keyring behavior per release.
+- Branch-K provider/runtime terms, suitable third-party authorization, entitlement, effective tool confinement, media/platform capability, credential-store behavior, and exact-package licenses remain investigation gates. Numeric limits and latency targets are provisional until measured; text access never proves realtime/voice entitlement.
 - Final CLI name must precede stable `optimizer serve` docs. Auth/token/binding/TLS/audit/concurrency remain service gates.
 - Telemetry needs separately approved schema, consent/preview/deletion/retention and privacy review.
 - Linux arm64, Windows arm64, rpm/repositories, universal macOS, and new endpoints require the full target gate.

@@ -161,7 +161,9 @@ Use a command journal with periodic snapshots, not distributed event sourcing:
 - large imports may store compressed before/after snapshots instead of thousands of inverses;
 - journal reconstruction only replays pure commands from a known snapshot for repair, never arbitrary side effects.
 
-Journal metadata: timestamp, actor/source, human summary, command type, revision before/after, later AI provider/model but no key, import checksum, optional note. Audit remains local and is excluded from bundles unless the user explicitly opts in.
+Journal metadata: timestamp, actor/source, human summary, command type, revision before/after, import checksum, optional note, and later typed optional AI provenance containing proposal/profile identity plus provider/model identity—not credentials or conversation content. An applied AI proposal must retain its proposal/profile identity independently of the continued existence of its chat or profile configuration. Audit remains local and is excluded from bundles unless the user explicitly opts in.
+
+[Phase 10, AI-004](10-ai-assistant-mvp.md#ordered-work-packages) owns that AI metadata extension to the existing journal, versioned DTO/schema generation and forward-only database migration when AI is implemented. Existing non-AI history remains valid without AI metadata; the applying user, base/applied revisions, batch identity/outcome, commands and inverses remain under the normal atomic journal contract. Prove migration/round-trip compatibility, apply/provenance rollback together, and history/undo after conversation or profile deletion. Do not add speculative AI columns or reopen Phase-01 production work now, and do not create a second audit/undo store.
 
 ## Persistence contract
 
