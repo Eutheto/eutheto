@@ -1,11 +1,15 @@
+#[path = "../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+#[path = "../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+
 use eutheto_export::{
-    ApplicationMetadata, BackupSections, PortableScenario, ScenarioExportSnapshot,
-    assemble_scenario_export,
+    ApplicationMetadata, BackupSections, ScenarioExportSnapshot, assemble_scenario_export,
 };
 use eutheto_import::{
     ImportError, InspectedBundle, InspectionPolicy, MigrationRegistries, inspect_bundle,
 };
-use eutheto_types::{BundleId, Revision, ScenarioDocument};
+use eutheto_types::{BundleId, Revision, ScenarioDocument, ScenarioSnapshotV1};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use uuid::Uuid;
@@ -37,6 +41,7 @@ fn inspect(bytes: &[u8]) -> Result<InspectedBundle, ImportError> {
         bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
     )
 }
 
@@ -364,12 +369,12 @@ fn ambiguous_eocd_in_archive_comment_is_invalid() -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
-fn portable_scenario() -> Result<PortableScenario, Box<dyn Error>> {
+fn portable_scenario() -> Result<ScenarioSnapshotV1, Box<dyn Error>> {
     let document: ScenarioDocument = serde_json::from_value(serde_json::json!({
         "format": "eutheto/scenario",
         "formatVersion": 1,
         "scenarioId": "018f1e2d-3c4b-7a69-8def-0123456789ab",
-        "domainPack": {"id": "official.generic", "schemaVersion": 1},
+        "domainPack": {"id": "official.test", "schemaVersion": 1},
         "metadata": {
             "title": "Central directory control",
             "description": "",
@@ -395,7 +400,7 @@ fn portable_scenario() -> Result<PortableScenario, Box<dyn Error>> {
         },
         "extensions": {}
     }))?;
-    Ok(PortableScenario::current(
+    Ok(ScenarioSnapshotV1::current(
         Revision::new(7),
         document,
         BTreeSet::new(),
@@ -404,20 +409,25 @@ fn portable_scenario() -> Result<PortableScenario, Box<dyn Error>> {
 
 #[test]
 fn normal_exported_scenario_bundle_still_inspects() -> Result<(), Box<dyn Error>> {
-    let bundle = assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: BundleId::from_uuid(Uuid::from_u128(0x018f_1e2d_3c4b_7a69_8def_2000_0000_0001)),
-        created_at: "2026-08-29T00:00:00Z".to_owned(),
-        application: ApplicationMetadata {
-            name: "Eutheto".to_owned(),
-            version: "0.1.0".to_owned(),
+    let bundle = assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: BundleId::from_uuid(Uuid::from_u128(
+                0x018f_1e2d_3c4b_7a69_8def_2000_0000_0001,
+            )),
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            application: ApplicationMetadata {
+                name: "Eutheto".to_owned(),
+                version: "0.1.0".to_owned(),
+            },
+            title: "Central directory control".to_owned(),
+            scenario: portable_scenario()?,
+            scenario_revisions: Vec::new(),
+            sections: BackupSections::default(),
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: BTreeMap::new(),
         },
-        title: "Central directory control".to_owned(),
-        scenario: portable_scenario()?,
-        scenario_revisions: Vec::new(),
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: BTreeMap::new(),
-    })?;
+        &portable_encode::encode_fixture_domain,
+    )?;
 
     let inspected = inspect(&bundle)?;
     assert_eq!(inspected.scenarios.len(), 1);

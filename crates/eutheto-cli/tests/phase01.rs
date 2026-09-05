@@ -1,7 +1,10 @@
+#[path = "../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+
 use eutheto_export::{
-    ApplicationMetadata, BackupSections, PortableScenario, ScenarioExportSnapshot,
-    assemble_scenario_export,
+    ApplicationMetadata, BackupSections, ScenarioExportSnapshot, assemble_scenario_export,
 };
+use eutheto_types::ScenarioSnapshotV1;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -21,27 +24,30 @@ fn write_extension_fixture_bundle(path: &Path) -> Result<String, Box<dyn Error>>
     let wrapper: Value = serde_json::from_str(include_str!(
         "../../../tests/migration/fixtures/portable_v1_scenario.json"
     ))?;
-    let scenario: PortableScenario = serde_json::from_value(
+    let scenario: ScenarioSnapshotV1 = serde_json::from_value(
         wrapper
             .get("input")
             .cloned()
             .ok_or("portable fixture omitted input")?,
     )?;
     let scenario_id = scenario.document.scenario_id.to_string();
-    let bytes = assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: "0195a5e4-7c00-7000-8000-000000000201".parse()?,
-        created_at: "2026-08-31T12:00:00Z".to_owned(),
-        application: ApplicationMetadata {
-            name: "Eutheto CLI process test".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+    let bytes = assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: "0195a5e4-7c00-7000-8000-000000000201".parse()?,
+            created_at: "2026-08-31T12:00:00Z".to_owned(),
+            application: ApplicationMetadata {
+                name: "Eutheto CLI process test".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            },
+            title: scenario.document.metadata.title.clone(),
+            scenario,
+            scenario_revisions: Vec::new(),
+            sections: BackupSections::default(),
+            nonsemantic_extensions: BTreeSet::from(["vendor.example".to_owned()]),
+            manifest_extensions: BTreeMap::new(),
         },
-        title: scenario.document.metadata.title.clone(),
-        scenario,
-        scenario_revisions: Vec::new(),
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::from(["vendor.example".to_owned()]),
-        manifest_extensions: BTreeMap::new(),
-    })?;
+        &portable_encode::encode_fixture_domain,
+    )?;
     fs::write(path, bytes)?;
     Ok(scenario_id)
 }

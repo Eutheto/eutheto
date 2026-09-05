@@ -10,7 +10,7 @@
   },
   "input": {
     "format": "eutheto/scenario",
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "revision": 7,
     "document": {
       "format": "eutheto/scenario",
@@ -65,8 +65,8 @@
     "status": "rejected",
     "errorKind": "UnsupportedNewerVersion",
     "versionSpace": "portable schema",
-    "foundVersion": 2,
-    "currentVersion": 1,
+    "foundVersion": 3,
+    "currentVersion": 2,
     "authoritativeMutation": false
   }
 }

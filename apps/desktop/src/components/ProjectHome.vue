@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import type { ComponentPublicInstance } from "vue";
-import type { FixedExclusion } from "../api/generated";
+import type { AppliedMigrationDto, FixedExclusion } from "../api/generated";
 
 import {
   defaultSupplementalCollisionChoices,
@@ -28,6 +28,11 @@ const fixedExclusionLabels: Readonly<Record<FixedExclusion, string>> = {
 function fixedExclusionLabel(exclusion: FixedExclusion): string {
   return fixedExclusionLabels[exclusion];
 }
+
+function appliedMigrationKey(migration: AppliedMigrationDto): string {
+  return `${migration.registry}\u0000${migration.name}\u0000${migration.fromVersion.toString()}\u0000${migration.toVersion.toString()}\u0000${migration.versionSpace ?? ""}\u0000${migration.subject?.packId ?? ""}\u0000${migration.subject?.scenarioId ?? ""}\u0000${migration.subject?.revision.toString() ?? ""}`;
+}
+
 const state = props.home.state;
 
 const createTitle = ref("");
@@ -658,10 +663,18 @@ async function confirmRestore(): Promise<void> {
                 <ul v-else>
                   <li
                     v-for="migration in state.importPreview.appliedMigrations"
-                    :key="`${migration.registry}:${migration.name}:${migration.fromVersion}`"
+                    :key="appliedMigrationKey(migration)"
                   >
                     {{ migration.registry }} · {{ migration.name }} · {{ migration.fromVersion }} →
                     {{ migration.toVersion }}
+                    <span v-if="migration.versionSpace">
+                      · {{ migration.versionSpace }} version space
+                    </span>
+                    <span v-if="migration.subject">
+                      · pack <code>{{ migration.subject.packId }}</code> · scenario
+                      <code>{{ migration.subject.scenarioId }}</code> · revision
+                      {{ migration.subject.revision }}
+                    </span>
                   </li>
                 </ul>
               </section>
@@ -1002,10 +1015,18 @@ async function confirmRestore(): Promise<void> {
                 <ul v-else>
                   <li
                     v-for="migration in state.restorePreview.appliedMigrations"
-                    :key="`${migration.registry}:${migration.name}:${migration.fromVersion}`"
+                    :key="appliedMigrationKey(migration)"
                   >
                     {{ migration.registry }} · {{ migration.name }} · {{ migration.fromVersion }} →
                     {{ migration.toVersion }}
+                    <span v-if="migration.versionSpace">
+                      · {{ migration.versionSpace }} version space
+                    </span>
+                    <span v-if="migration.subject">
+                      · pack <code>{{ migration.subject.packId }}</code> · scenario
+                      <code>{{ migration.subject.scenarioId }}</code> · revision
+                      {{ migration.subject.revision }}
+                    </span>
                   </li>
                 </ul>
               </section>

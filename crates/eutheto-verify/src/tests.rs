@@ -341,9 +341,9 @@ impl DomainPack for TestPack {
         unsupported()
     }
 
-    fn migrate_portable(
+    fn migrate_portable_step(
         &self,
-        _document: HistoricalPortableDomainDocument,
+        _document: PortableDomainDocument,
     ) -> Result<PortableDomainDocument, DomainPackError> {
         unsupported()
     }

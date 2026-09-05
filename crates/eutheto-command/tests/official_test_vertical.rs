@@ -2,8 +2,7 @@ use eutheto_command::{OFFICIAL_TEST_PACK_ID, OfficialTestPack};
 use eutheto_domain_api::{
     CompileContext, CounterfactualCompileContext, DomainBatchCommand, DomainCatalog,
     DomainMutation, DomainPack, DomainPackDescriptor, DomainPackError, DomainShareResult,
-    DomainValidationReport, HistoricalPortableDomainDocument, PortableDomainDocument,
-    PortableImportContext, ShareResultOptions,
+    DomainValidationReport, PortableImportContext, ShareResultOptions,
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, CounterfactualConditionV1, DomainAssignmentId, DomainEntityId,
@@ -24,7 +23,9 @@ use eutheto_planning_ir::{
     ProvenanceRecord, ProvenanceSourceKind, SolutionProjection, Variable, canonical_ir_hash,
     feature_usage, summarize, validate,
 };
-use eutheto_types::{CancellationToken, RuleId, ScenarioDocument, SolutionId};
+use eutheto_types::{
+    CancellationToken, PortableDomainDocument, RuleId, ScenarioDocument, SolutionId,
+};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -307,11 +308,11 @@ impl DomainPack for IntervalFixturePack {
         OfficialTestPack.export_portable(document)
     }
 
-    fn migrate_portable(
+    fn migrate_portable_step(
         &self,
-        document: HistoricalPortableDomainDocument,
+        document: PortableDomainDocument,
     ) -> Result<PortableDomainDocument, DomainPackError> {
-        OfficialTestPack.migrate_portable(document)
+        OfficialTestPack.migrate_portable_step(document)
     }
 
     fn import_portable(

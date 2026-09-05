@@ -1,19 +1,27 @@
 #![no_main]
 
+#[path = "../../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+#[path = "../../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+#[path = "../../../../tests/support/portable_migrate.rs"]
+mod portable_migrate;
+
 use eutheto_export::{
     ApplicationMetadata, BackupSections, CHECKSUM_ALGORITHM, CHECKSUMS_PATH,
-    CURRENT_BUNDLE_FORMAT_VERSION, CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, MANIFEST_PATH,
-    PORTABLE_LIMITS, PortableScenario, ScenarioExportSnapshot, assemble_scenario_export,
-    canonical_json, sha256_hex,
+    CURRENT_BUNDLE_FORMAT_VERSION, Checksums, MANIFEST_PATH, PORTABLE_LIMITS,
+    ScenarioExportSnapshot, assemble_scenario_export, canonical_json, sha256_hex,
 };
 use eutheto_import::{
     ImportError, InspectionPolicy, LogicalBundle, MigrationFailure, MigrationRegistries,
-    OuterMigrationStep, PortableMigrationStep, inspect_bundle,
+    OuterMigrationStep, PortableMigrationOutcome, PortableMigrationStep, inspect_bundle,
 };
+use eutheto_types::{SCENARIO_SNAPSHOT_SCHEMA_VERSION, ScenarioSnapshotV1};
 use libfuzzer_sys::fuzz_target;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
+use std::sync::Arc;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -31,15 +39,15 @@ fn marker(data: &[u8]) -> String {
 }
 
 fn current_bundle(data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let scenario: PortableScenario = serde_json::from_value(json!({
+    let scenario: ScenarioSnapshotV1 = serde_json::from_value(json!({
         "format": "eutheto/scenario",
-        "schemaVersion": CURRENT_PORTABLE_SCHEMA_VERSION,
+        "schemaVersion": SCENARIO_SNAPSHOT_SCHEMA_VERSION,
         "revision": 1,
         "document": {
             "format": "eutheto/scenario",
             "formatVersion": 1,
             "scenarioId": SCENARIO_ID,
-            "domainPack": {"id": "official.generic", "schemaVersion": 1},
+            "domainPack": {"id": "official.test", "schemaVersion": 1},
             "metadata": {
                 "title": "Migration fuzz",
                 "description": "",
@@ -69,30 +77,39 @@ fn current_bundle(data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         "semanticExtensions": {},
         "extensions": {}
     }))?;
-    Ok(assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: "0195a5e4-7c00-7000-8000-000000000111".parse()?,
-        created_at: "2026-08-29T00:00:00Z".to_owned(),
-        application: ApplicationMetadata {
-            name: "eutheto-import-fuzz".to_owned(),
-            version: "0".to_owned(),
+    Ok(assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: "0195a5e4-7c00-7000-8000-000000000111".parse()?,
+            created_at: "2026-08-29T00:00:00Z".to_owned(),
+            application: ApplicationMetadata {
+                name: "eutheto-import-fuzz".to_owned(),
+                version: "0".to_owned(),
+            },
+            title: "Migration chain".to_owned(),
+            scenario,
+            scenario_revisions: Vec::new(),
+            sections: BackupSections::default(),
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: BTreeMap::new(),
         },
-        title: "Migration chain".to_owned(),
-        scenario,
-        scenario_revisions: Vec::new(),
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: BTreeMap::new(),
-    })?)
+        &portable_encode::encode_fixture_domain,
+    )?)
 }
 
 fn rebuild_old_bundle(
     current: &[u8],
     policy: &InspectionPolicy,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let inspected = inspect_bundle(current, policy, &MigrationRegistries::current_only())?;
+    let inspected = inspect_bundle(
+        current,
+        policy,
+        &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
+    )?;
     let mut manifest = inspected.manifest;
     manifest.format_version = 0;
     manifest.schema_version = 0;
+    manifest.required_capabilities = inspected.scenarios[0].required_capabilities.clone();
     let mut scenario = serde_json::to_value(&inspected.scenarios[0])?;
     scenario["schemaVersion"] = Value::from(0);
     let scenario_path = format!("scenarios/{SCENARIO_ID}.json");
@@ -125,9 +142,7 @@ fn migrate_outer_v0(mut bundle: LogicalBundle) -> Result<LogicalBundle, Migratio
     let manifest = bundle
         .manifest
         .as_object_mut()
-        .ok_or_else(|| MigrationFailure {
-            message: "manifest must be an object".to_owned(),
-        })?;
+        .ok_or_else(|| MigrationFailure::Invalid("manifest must be an object".to_owned()))?;
     manifest.insert(
         "formatVersion".to_owned(),
         Value::from(CURRENT_BUNDLE_FORMAT_VERSION),
@@ -135,21 +150,22 @@ fn migrate_outer_v0(mut bundle: LogicalBundle) -> Result<LogicalBundle, Migratio
     Ok(bundle)
 }
 
-fn migrate_portable_v0(mut value: Value) -> Result<Value, MigrationFailure> {
-    let scenario = value.as_object_mut().ok_or_else(|| MigrationFailure {
-        message: "scenario must be an object".to_owned(),
-    })?;
-    scenario.insert(
-        "schemaVersion".to_owned(),
-        Value::from(CURRENT_PORTABLE_SCHEMA_VERSION),
-    );
-    Ok(value)
+fn migrate_portable_v0(mut value: Value) -> Result<PortableMigrationOutcome, MigrationFailure> {
+    let scenario = value
+        .as_object_mut()
+        .ok_or_else(|| MigrationFailure::Invalid("scenario must be an object".to_owned()))?;
+    scenario.insert("schemaVersion".to_owned(), Value::from(1));
+    Ok(PortableMigrationOutcome {
+        value,
+        introduced_requirements: BTreeSet::new(),
+        applied_migrations: Vec::new(),
+    })
 }
 
 fn fail_outer(_bundle: LogicalBundle) -> Result<LogicalBundle, MigrationFailure> {
-    Err(MigrationFailure {
-        message: "intentional typed migration failure".to_owned(),
-    })
+    Err(MigrationFailure::Invalid(
+        "intentional typed migration failure".to_owned(),
+    ))
 }
 
 fn bounded_policy() -> InspectionPolicy {
@@ -168,18 +184,27 @@ fn bounded_policy() -> InspectionPolicy {
     policy
 }
 
+fn portable_steps() -> Vec<PortableMigrationStep> {
+    vec![
+        PortableMigrationStep {
+            from_version: 0,
+            to_version: 1,
+            name: "portable-v0-to-v1",
+            migrate: Arc::new(migrate_portable_v0),
+        },
+        PortableMigrationStep {
+            from_version: 1,
+            to_version: 2,
+            name: "portable-v1-to-v2",
+            migrate: Arc::new(portable_migrate::migrate_fixture_v1),
+        },
+    ]
+}
+
 fuzz_target!(|data: &[u8]| {
     if data.len() > MAX_INPUT_BYTES {
         return;
     }
-    assert_eq!(
-        CURRENT_BUNDLE_FORMAT_VERSION, 1,
-        "advance the explicit historical migration chain with the format version"
-    );
-    assert_eq!(
-        CURRENT_PORTABLE_SCHEMA_VERSION, 1,
-        "advance the explicit historical migration chain with the schema version"
-    );
     let policy = bounded_policy();
     let current_bytes = current_bundle(data).expect("construct current migration bundle");
     let old_bytes =
@@ -191,29 +216,36 @@ fuzz_target!(|data: &[u8]| {
             name: "outer-v0-to-v1",
             migrate: migrate_outer_v0,
         }],
-        vec![PortableMigrationStep {
-            from_version: 0,
-            to_version: CURRENT_PORTABLE_SCHEMA_VERSION,
-            name: "portable-v0-to-v1",
-            migrate: migrate_portable_v0,
-        }],
+        portable_steps(),
     )
     .expect("register complete sequential historical migration chain");
 
-    let migrated =
-        inspect_bundle(&old_bytes, &policy, &registries).expect("valid historical chain");
-    let migrated_again =
-        inspect_bundle(&old_bytes, &policy, &registries).expect("deterministic historical chain");
+    let migrated = inspect_bundle(
+        &old_bytes,
+        &policy,
+        &registries,
+        &portable_decode::decode_fixture_domain,
+    )
+    .expect("valid historical chain");
+    let migrated_again = inspect_bundle(
+        &old_bytes,
+        &policy,
+        &registries,
+        &portable_decode::decode_fixture_domain,
+    )
+    .expect("deterministic historical chain");
     let current = inspect_bundle(
         &current_bytes,
         &policy,
         &MigrationRegistries::current_only(),
+        &portable_decode::decode_fixture_domain,
     )
     .expect("valid current bundle");
 
     assert_eq!(migrated.original_format_version, 0);
     assert_eq!(migrated.original_schema_version, 0);
-    assert_eq!(migrated.applied_migrations.len(), 2);
+    assert_eq!(migrated.applied_migrations.len(), 3);
+    assert_eq!(migrated.manifest, current.manifest);
     assert_eq!(
         canonical_json(&migrated.scenarios).expect("serialize migrated scenarios"),
         canonical_json(&current.scenarios).expect("serialize current scenarios")
@@ -250,20 +282,18 @@ fuzz_target!(|data: &[u8]| {
                 name: "typed-failure",
                 migrate: fail_outer,
             }],
-            vec![PortableMigrationStep {
-                from_version: 0,
-                to_version: CURRENT_PORTABLE_SCHEMA_VERSION,
-                name: "portable-v0-to-v1-before-failure",
-                migrate: migrate_portable_v0,
-            }],
+            portable_steps(),
         )
         .expect("complete registry with intentional outer failure");
-        match inspect_bundle(&old_bytes, &policy, &failing) {
+        match inspect_bundle(
+            &old_bytes,
+            &policy,
+            &failing,
+            &portable_decode::decode_fixture_domain,
+        ) {
             Ok(_) => panic!("an intentionally failing migration must not be accepted"),
-            Err(ImportError::Migration(message)) => {
-                assert!(message.contains("intentional typed migration failure"));
-            }
-            Err(_typed_refusal) => {}
+            Err(ImportError::Migration(_)) => {}
+            Err(error) => panic!("the outer migration failure must be returned, got {error}"),
         }
     }
 });

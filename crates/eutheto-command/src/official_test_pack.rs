@@ -7,9 +7,9 @@ use eutheto_domain_api::{
     CounterfactualCompileContext, DOMAIN_BATCH_SCHEMA_VERSION, DomainBatchCommand,
     DomainCapability, DomainCatalog, DomainChange, DomainMutation, DomainPack,
     DomainPackDescriptor, DomainPackError, DomainShareResult, DomainUiManifest,
-    DomainValidationReport, HistoricalPortableDomainDocument, KindDescriptor, LicenseMetadata,
-    LocalizedText, PortableDomainDocument, PortableImportContext, ScenarioVersionDescriptor,
-    ScoreDescriptor, ShareResultOptions, TransferDescriptor, validate_contract_value,
+    DomainValidationReport, KindDescriptor, LicenseMetadata, LocalizedText, PortableImportContext,
+    SchemaVersionDescriptor, ScoreDescriptor, ShareResultOptions, TransferDescriptor,
+    validate_contract_value,
 };
 use eutheto_domain_ir::{
     AcceptedResult, AssignmentValue, CounterfactualConditionPayloadV1, CounterfactualConditionV1,
@@ -31,8 +31,9 @@ use eutheto_planning_ir::{
     project_candidate, validate,
 };
 use eutheto_types::{
-    DomainCommandEnvelope, DomainPackRef, EntityId, PackId, RuleId, ScenarioDocument,
-    ScenarioDomain, SolutionId, ValidationIssue, ValidationSeverity,
+    AssignmentId, DomainCommandEnvelope, DomainPackRef, EntityId, PackId, PortableDomainDocument,
+    RuleId, ScenarioDocument, ScenarioDomain, SemanticCapability, SolutionId, ValidationIssue,
+    ValidationSeverity,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -41,7 +42,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 const CONFIGURE_ENTITY: &str = "official.test.configure_entity";
-const PORTABLE_CAPABILITY: &str = "official.test.portable-v1";
+const PORTABLE_CAPABILITY: &str = "official.test.portable";
+const HISTORICAL_PORTABLE_CAPABILITY_V1: &str = "official.test.portable-v1";
 const ENTITY_KIND: &str = "official.test.entity";
 const SCORE_LEVEL: &str = "official.test.score.target";
 const SCORE_CATEGORY: &str = "official.test.score.target-total";
@@ -135,7 +137,7 @@ struct PortableEntity {
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PortablePayload {
+struct HistoricalPortablePayloadV1 {
     schema_version: u32,
     entities: BTreeMap<String, PortableEntity>,
     extensions: BTreeMap<String, Value>,
@@ -150,6 +152,21 @@ struct HistoricalPortablePayloadV0 {
     extensions: BTreeMap<String, Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PortablePayloadV2 {
+    schema_version: u32,
+    #[serde(deserialize_with = "eutheto_types::deserialize_unique_id_map")]
+    entities: BTreeMap<EntityId, Value>,
+    #[serde(deserialize_with = "eutheto_types::deserialize_unique_id_map")]
+    rules: BTreeMap<RuleId, Value>,
+    #[serde(deserialize_with = "eutheto_types::deserialize_unique_id_map")]
+    preferences: BTreeMap<RuleId, Value>,
+    #[serde(deserialize_with = "eutheto_types::deserialize_unique_id_map")]
+    locked_assignments: BTreeMap<AssignmentId, Value>,
+    extensions: BTreeMap<String, Value>,
+}
+
 impl DomainPack for crate::OfficialTestPack {
     fn descriptor(&self) -> Result<DomainPackDescriptor, DomainPackError> {
         Ok(DomainPackDescriptor {
@@ -160,7 +177,7 @@ impl DomainPack for crate::OfficialTestPack {
                 "Synthetic Phase-02 domain-pack conformance fixture.",
             ),
             pack_version: Version::parse(OFFICIAL_TEST_PACK_VERSION).map_err(contract)?,
-            scenario_versions: ScenarioVersionDescriptor {
+            scenario_versions: SchemaVersionDescriptor {
                 latest: 1,
                 migratable_from: BTreeSet::new(),
             },
@@ -178,7 +195,10 @@ impl DomainPack for crate::OfficialTestPack {
             ]
             .into_iter()
             .collect(),
-            portable_schema_version: 1,
+            portable_versions: SchemaVersionDescriptor {
+                latest: 2,
+                migratable_from: [0, 1].into_iter().collect(),
+            },
             explanation_capabilities: [
                 ExplanationCapability::Validation,
                 ExplanationCapability::Infeasibility,
@@ -190,7 +210,9 @@ impl DomainPack for crate::OfficialTestPack {
             ]
             .into_iter()
             .collect(),
-            portable_capabilities: [PORTABLE_CAPABILITY.to_owned()].into_iter().collect(),
+            portable_capabilities: [historical_portable_capability_v1(), portable_capability()]
+                .into_iter()
+                .collect(),
             share_result_schema_version: 1,
             documentation_url: None,
             license: LicenseMetadata {
@@ -420,28 +442,22 @@ impl DomainPack for crate::OfficialTestPack {
         document: &ScenarioDocument,
     ) -> Result<PortableDomainDocument, DomainPackError> {
         require_pack(document)?;
-        let payload_value = serde_json::to_value(PortablePayload {
-            schema_version: 1,
-            entities: parse_entities(document)?
-                .into_iter()
-                .map(|(id, entity)| {
-                    (
-                        id.to_string(),
-                        PortableEntity {
-                            enabled: entity.enabled,
-                            target: entity.target,
-                        },
-                    )
-                })
-                .collect(),
-            extensions: document
-                .extensions
-                .iter()
-                .filter(|(key, _)| key.starts_with("nonsemantic."))
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect(),
-        })
-        .map_err(|error| payload("/portable", error))?;
+        crate::validate_document_shape(document).map_err(contract)?;
+        if document
+            .extensions
+            .keys()
+            .any(|namespace| !eutheto_types::is_portable_namespace(namespace))
+        {
+            return Err(contract("invalid portable extension namespace"));
+        }
+        let payload_value = json!({
+            "schemaVersion": 2,
+            "entities": &document.domain.entities,
+            "rules": &document.domain.rules,
+            "preferences": &document.domain.preferences,
+            "lockedAssignments": &document.domain.locked_assignments,
+            "extensions": &document.extensions,
+        });
         validate_contract_value(
             &generated_catalog()?.portable_schema,
             &payload_value,
@@ -449,52 +465,98 @@ impl DomainPack for crate::OfficialTestPack {
         )?;
         Ok(PortableDomainDocument {
             pack_id: document.domain_pack.id.clone(),
-            schema_version: 1,
-            required_capabilities: [PORTABLE_CAPABILITY.to_owned()].into_iter().collect(),
+            schema_version: 2,
+            required_capabilities: [portable_capability()].into_iter().collect(),
             payload: payload_value,
         })
     }
 
-    fn migrate_portable(
+    fn migrate_portable_step(
         &self,
-        document: HistoricalPortableDomainDocument,
+        document: PortableDomainDocument,
     ) -> Result<PortableDomainDocument, DomainPackError> {
         if document.pack_id.as_str() != OFFICIAL_TEST_PACK_ID {
             return Err(DomainPackError::PackUnavailable(
                 document.pack_id.to_string(),
             ));
         }
-        if document.schema_version != 0 {
-            return Err(DomainPackError::UnsupportedVersion(document.schema_version));
-        }
-        if !document.required_capabilities.is_empty() {
-            return Err(DomainPackError::Contract(
-                "unknown historical semantic portable capability".to_owned(),
-            ));
-        }
-        let historical: HistoricalPortablePayloadV0 = serde_json::from_value(document.payload)
-            .map_err(|error| payload("/portable", error))?;
-        if historical.schema_version != 0 {
-            return Err(DomainPackError::UnsupportedVersion(
-                historical.schema_version,
-            ));
-        }
-        validate_portable_extensions(&historical.extensions)?;
-        let payload_value = serde_json::to_value(PortablePayload {
-            schema_version: 1,
-            entities: historical.entities,
-            extensions: historical.extensions,
-        })
-        .map_err(|error| payload("/portable", error))?;
-        validate_contract_value(
-            &generated_catalog()?.portable_schema,
-            &payload_value,
-            ContractJsonLimits::DEFAULT,
-        )?;
+        let (schema_version, capability, payload_value) = match document.schema_version {
+            0 => {
+                if !document.required_capabilities.is_empty() {
+                    return Err(contract("unknown historical semantic portable capability"));
+                }
+                let historical: HistoricalPortablePayloadV0 =
+                    serde_json::from_value(document.payload)
+                        .map_err(|error| payload("/portable", error))?;
+                if historical.schema_version != 0 {
+                    return Err(DomainPackError::UnsupportedVersion(
+                        historical.schema_version,
+                    ));
+                }
+                validate_portable_extensions(&historical.extensions)?;
+                let value = serde_json::to_value(HistoricalPortablePayloadV1 {
+                    schema_version: 1,
+                    entities: historical.entities,
+                    extensions: historical.extensions,
+                })
+                .map_err(|error| payload("/portable", error))?;
+                (1, historical_portable_capability_v1(), value)
+            }
+            1 => {
+                if document.required_capabilities
+                    != [historical_portable_capability_v1()].into_iter().collect()
+                {
+                    return Err(contract(
+                        "unknown or missing historical semantic portable capability",
+                    ));
+                }
+                let historical: HistoricalPortablePayloadV1 =
+                    serde_json::from_value(document.payload)
+                        .map_err(|error| payload("/portable", error))?;
+                if historical.schema_version != 1 {
+                    return Err(DomainPackError::UnsupportedVersion(
+                        historical.schema_version,
+                    ));
+                }
+                validate_portable_extensions(&historical.extensions)?;
+                let mut entities = BTreeMap::new();
+                for (raw_id, entity) in historical.entities {
+                    let id = EntityId::from_str(&raw_id).map_err(contract)?;
+                    check_target(entity.target)?;
+                    let std::collections::btree_map::Entry::Vacant(entry) = entities.entry(id)
+                    else {
+                        return Err(contract("duplicate typed record identity"));
+                    };
+                    entry.insert(
+                        serde_json::to_value(TestEntity {
+                            id,
+                            enabled: entity.enabled,
+                            target: entity.target,
+                        })
+                        .map_err(|error| payload("/portable/entities", error))?,
+                    );
+                }
+                let value = json!({
+                    "schemaVersion": 2,
+                    "entities": entities,
+                    "rules": {},
+                    "preferences": {},
+                    "lockedAssignments": {},
+                    "extensions": historical.extensions,
+                });
+                validate_contract_value(
+                    &generated_catalog()?.portable_schema,
+                    &value,
+                    ContractJsonLimits::DEFAULT,
+                )?;
+                (2, portable_capability(), value)
+            }
+            version => return Err(DomainPackError::UnsupportedVersion(version)),
+        };
         Ok(PortableDomainDocument {
             pack_id: document.pack_id,
-            schema_version: 1,
-            required_capabilities: [PORTABLE_CAPABILITY.to_owned()].into_iter().collect(),
+            schema_version,
+            required_capabilities: [capability].into_iter().collect(),
             payload: payload_value,
         })
     }
@@ -509,51 +571,43 @@ impl DomainPack for crate::OfficialTestPack {
                 document.pack_id.to_string(),
             ));
         }
-        if document.schema_version != 1 {
+        if document.schema_version != 2 {
             return Err(DomainPackError::UnsupportedVersion(document.schema_version));
         }
-        let expected_capabilities: BTreeSet<_> =
-            [PORTABLE_CAPABILITY.to_owned()].into_iter().collect();
-        if document.required_capabilities != expected_capabilities {
-            return Err(DomainPackError::Contract(
-                "unknown or missing semantic portable capability".to_owned(),
-            ));
+        if document.required_capabilities != [portable_capability()].into_iter().collect() {
+            return Err(contract("unknown or missing semantic portable capability"));
         }
         validate_contract_value(
             &generated_catalog()?.portable_schema,
             &document.payload,
             ContractJsonLimits::DEFAULT,
         )?;
-        let portable: PortablePayload = serde_json::from_value(document.payload.clone())
+        let portable: PortablePayloadV2 = serde_json::from_value(document.payload.clone())
             .map_err(|error| payload("/portable", error))?;
-        if portable.schema_version != 1 {
+        if portable.schema_version != document.schema_version {
             return Err(DomainPackError::UnsupportedVersion(portable.schema_version));
         }
-        validate_portable_extensions(&portable.extensions)?;
         let mut result = context.scenario_shell.clone();
         require_pack(&result)?;
-        result.domain = ScenarioDomain::default();
-        for (id, entity) in portable.entities {
-            let id = EntityId::from_str(&id).map_err(contract)?;
-            check_target(entity.target)?;
-            result.domain.entities.insert(
-                id,
-                serde_json::to_value(TestEntity {
-                    id,
-                    enabled: entity.enabled,
-                    target: entity.target,
-                })
-                .map_err(|error| payload("/domain/entities", error))?,
-            );
-        }
+        result.domain = ScenarioDomain {
+            entities: portable.entities,
+            rules: portable.rules,
+            preferences: portable.preferences,
+            locked_assignments: portable.locked_assignments,
+        };
         result.domain_pack = DomainPackRef {
             id: document.pack_id.clone(),
             schema_version: 1,
         };
-        result
+        result.extensions = portable.extensions;
+        if result
             .extensions
-            .retain(|key, _| !key.starts_with("nonsemantic."));
-        result.extensions.extend(portable.extensions);
+            .keys()
+            .any(|namespace| !eutheto_types::is_portable_namespace(namespace))
+        {
+            return Err(contract("invalid portable extension namespace"));
+        }
+        crate::validate_document_shape(&result).map_err(contract)?;
         Ok(result)
     }
 
@@ -939,7 +993,7 @@ fn validate_generated_contract(generated: &GeneratedContract) -> Result<(), Doma
         && generated.pack.id == OFFICIAL_TEST_PACK_ID
         && generated.pack.pack_version == OFFICIAL_TEST_PACK_VERSION
         && generated.pack.latest_schema_version == 1
-        && generated.pack.portable_schema_version == 1
+        && generated.pack.portable_schema_version == 2
         && generated.pack.share_result_schema_version == 1
         && generated_ids.as_slice() == OFFICIAL_TEST_COMMAND_IDS
     {
@@ -1093,6 +1147,21 @@ fn require_pack(document: &ScenarioDocument) -> Result<(), DomainPackError> {
         ));
     }
     Ok(())
+}
+
+fn portable_capability() -> SemanticCapability {
+    SemanticCapability {
+        id: PORTABLE_CAPABILITY.to_owned(),
+        version: 2,
+    }
+}
+
+fn historical_portable_capability_v1() -> SemanticCapability {
+    SemanticCapability {
+        // This is the exact historical requirement, not a parsed version suffix.
+        id: HISTORICAL_PORTABLE_CAPABILITY_V1.to_owned(),
+        version: 1,
+    }
 }
 
 fn validate_portable_extensions(

@@ -10,6 +10,8 @@ pkgs.rustPlatform.buildRustPackage {
     "--package"
     "eutheto-cli"
   ];
+  # Integration fixtures require the debug-only pack; the installed build stays release.
+  checkType = "debug";
   cargoTestFlags = [
     "--package"
     "eutheto-cli"

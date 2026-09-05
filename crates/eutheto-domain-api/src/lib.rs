@@ -15,7 +15,8 @@ use eutheto_domain_ir::{
 use eutheto_planning_ir::{CandidateValues, PlanningIrLimitsV1, PlanningProblem};
 use eutheto_types::{
     CancellationToken, DomainCommandEnvelope, MAX_SCENARIO_DOCUMENT_BYTES, PackId,
-    ScenarioDocument, SolutionId, SolveBudgetView, ValidationIssue,
+    PortableDomainDocument, ScenarioDocument, SemanticCapability, SolutionId, SolveBudgetView,
+    ValidationIssue,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -60,19 +61,29 @@ pub enum DomainCapability {
     AiTools,
 }
 
-/// Current and sequentially migratable internal scenario versions.
+/// Current and sequentially migratable versions within one schema namespace.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ScenarioVersionDescriptor {
+pub struct SchemaVersionDescriptor {
     pub latest: u32,
     pub migratable_from: BTreeSet<u32>,
 }
 
-impl ScenarioVersionDescriptor {
+impl SchemaVersionDescriptor {
     /// Whether the version can be opened directly or migrated sequentially.
     #[must_use]
     pub fn supports(&self, version: u32) -> bool {
         version == self.latest || self.migratable_from.contains(&version)
+    }
+
+    fn has_complete_migration_paths(&self) -> bool {
+        self.latest != 0
+            && self.migratable_from.iter().all(|version| {
+                version.checked_add(1).is_some_and(|next| {
+                    next == self.latest
+                        || (next < self.latest && self.migratable_from.contains(&next))
+                })
+            })
     }
 }
 
@@ -84,14 +95,16 @@ pub struct DomainPackDescriptor {
     pub display_name: LocalizedText,
     pub description: LocalizedText,
     pub pack_version: Version,
-    pub scenario_versions: ScenarioVersionDescriptor,
+    pub scenario_versions: SchemaVersionDescriptor,
     pub icon_id: String,
     pub capabilities: BTreeSet<DomainCapability>,
     /// Canonical explanation kinds this pack can render. `Counterfactual` also gates temporary
     /// condition compilation.
     pub explanation_capabilities: BTreeSet<ExplanationCapability>,
-    pub portable_schema_version: u32,
-    pub portable_capabilities: BTreeSet<String>,
+    pub portable_versions: SchemaVersionDescriptor,
+    /// Supported requirements across the declared portable versions. Each payload declares
+    /// only the capabilities its own version actually requires.
+    pub portable_capabilities: BTreeSet<SemanticCapability>,
     pub share_result_schema_version: u32,
     pub documentation_url: Option<String>,
     pub license: LicenseMetadata,
@@ -410,26 +423,6 @@ pub struct DomainMutation {
     pub inverse: DomainBatchCommand,
 }
 
-/// Versioned pack-owned portable payload.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PortableDomainDocument {
-    pub pack_id: PackId,
-    pub schema_version: u32,
-    pub required_capabilities: BTreeSet<String>,
-    pub payload: Value,
-}
-
-/// Historical portable payload passed unchanged to the owning pack migration hook.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HistoricalPortableDomainDocument {
-    pub pack_id: PackId,
-    pub schema_version: u32,
-    pub required_capabilities: BTreeSet<String>,
-    pub payload: Value,
-}
-
 /// Import supplies an explicit scenario shell; packs cannot obtain persistence or host defaults.
 #[derive(Clone, Debug)]
 pub struct PortableImportContext {
@@ -577,14 +570,16 @@ pub trait DomainPack: Send + Sync {
         document: &ScenarioDocument,
     ) -> Result<PortableDomainDocument, DomainPackError>;
 
-    /// Migrates a historical portable document to the current portable schema version.
+    /// Migrates a historical portable document by exactly one schema version.
     ///
     /// # Errors
     ///
-    /// Returns an error if the document is invalid or its version cannot be migrated.
-    fn migrate_portable(
+    /// Returns an error if the document is invalid or its next version cannot be produced.
+    /// The returned envelope and payload must agree on the next version; callers own the
+    /// ordered migration loop and record one provenance entry for each successful step.
+    fn migrate_portable_step(
         &self,
-        document: HistoricalPortableDomainDocument,
+        document: PortableDomainDocument,
     ) -> Result<PortableDomainDocument, DomainPackError>;
 
     /// Imports a current portable document into the supplied scenario context.
@@ -729,7 +724,7 @@ impl DomainPackRegistryBuilder {
             if catalog.pack_id != descriptor.id
                 || catalog.scenario_schema_version != descriptor.scenario_versions.latest
                 || schema_version(&catalog.portable_schema)
-                    != Some(u64::from(descriptor.portable_schema_version))
+                    != Some(u64::from(descriptor.portable_versions.latest))
                 || schema_version(&catalog.share_result_schema)
                     != Some(u64::from(descriptor.share_result_schema_version))
                 || (descriptor
@@ -780,17 +775,18 @@ impl DomainPackDescriptor {
                 "pack version 0.0.0".to_owned(),
             ));
         }
-        if self.scenario_versions.latest == 0
+        if !self.scenario_versions.has_complete_migration_paths()
             || self.scenario_versions.migratable_from.contains(&0)
-            || self
-                .scenario_versions
-                .migratable_from
-                .iter()
-                .any(|version| *version >= self.scenario_versions.latest)
-            || self.portable_schema_version == 0
+            || !self.portable_versions.has_complete_migration_paths()
             || self.share_result_schema_version == 0
         {
             return Err(DomainPackError::InvalidVersion(self.id.to_string()));
+        }
+        for capability in &self.portable_capabilities {
+            validate_id(&capability.id, "portable capability")?;
+            if capability.version == 0 {
+                return Err(DomainPackError::InvalidVersion(capability.id.clone()));
+            }
         }
         if self.icon_id.is_empty()
             || self.capabilities.is_empty()

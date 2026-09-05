@@ -8,6 +8,7 @@ use eutheto_command::official_registry;
 use eutheto_command::{CommandError, apply_command_with_registry, validate_document_shape};
 use eutheto_domain_api::{
     DomainCatalog, DomainPackDescriptor, DomainPackError, DomainPackRegistry, DomainView,
+    PortableImportContext,
 };
 use eutheto_domain_ir::{
     AcceptedResult, AcceptedResultRefV1, AssignmentEvidenceV1, ComparisonContext,
@@ -20,17 +21,20 @@ use eutheto_domain_ir::{
 use eutheto_export::{
     ApplicationMetadata, BACKUP_SELECTION_EXTENSION, BACKUP_SELECTION_VERSION, BackupSections,
     BackupSelection as PortableBackupSelectionMetadata, BackupSelectionScope, BundleKind,
-    FixedExclusion, FullBackupSnapshot, OmittedAssetReason, PortableBackupAssetSelection,
-    PortableProjectMetadata, PortableScenario, ScenarioExportSnapshot, assemble_full_backup,
+    ExportError, FixedExclusion, FullBackupSnapshot, OmittedAssetReason,
+    PortableBackupAssetSelection, PortableScenario, ScenarioExportSnapshot, assemble_full_backup,
     assemble_scenario_export, backup_selection_extension_value, collect_scenario_owned_uuids,
     omitted_asset_placeholder, parse_omitted_asset_placeholder, prepare_bundle_atomic_cancellable,
     write_bundle_atomic_cancellable,
 };
 use eutheto_import::{
-    CollisionPlan, ImportOptions, ImportPreview, InspectedBundle, InspectionPolicy,
-    LocalLibrarySnapshot, LocalScenarioSnapshot, MigrationRegistries, PreservedBundleMetadata,
-    RestoreAuthorization, RestoreMode, SafetyBackupEvidence, StagedDisposition, UnopenedBundle,
-    inspect_bundle, inspect_unopened_bundle_for_exact_reexport, preflight_bundle_metadata,
+    AppliedMigration, CollisionPlan, DecodedPortableDomain, ImportOptions, ImportPreview,
+    InspectedBundle, InspectionPolicy, LocalLibrarySnapshot, LocalScenarioSnapshot,
+    MigrationFailure, MigrationRegistries, MigrationRegistryKind, MigrationSubject,
+    PackMigrationVersionSpace, PortableMigrationOutcome, PortableMigrationStep,
+    PreservedBundleMetadata, RestoreAuthorization, RestoreMode, SafetyBackupEvidence,
+    StagedDisposition, UnopenedBundle, inspect_bundle, inspect_unopened_bundle_for_exact_reexport,
+    preflight_bundle_metadata,
 };
 pub use eutheto_solver_api::{
     BackendSupportColumn, CapabilityMatrix, SupportCell, SupportFeature, SupportFeatureCategory,
@@ -47,14 +51,15 @@ use eutheto_types::{
     ActorRef, AppError, BackendId, BundleId, CancellationToken, Change, ChangeKind, ChangeSet,
     Clock, CommandEnvelope, CommandResult, CommandSource, DirectoryAvailabilityLabel,
     DomainPackRef, EventContext, EventPayload, EventTopic, IdGenerator, MonotonicClock, PackId,
-    PortableAsset, ProjectMetadataDto, ProjectSummaryDto, ProtocolFailure, RequestId, ResourceRef,
-    Revision, Rfc3339Timestamp, SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION,
-    ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings,
-    ScenarioViewDto, SolutionId, SolveRunId, SolveStatus, StorageFailure,
-    SupportApplicationMetadataDto, SupportDirectoryMetadataDto, SupportLibraryMetadataDto,
-    SupportPreviewDto, SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue,
-    ValidationReport, ValidationSeverity, VerificationFailure, extract_asset_references,
-    extract_result_dependency, extract_result_id, extract_scenario_references,
+    PortableAsset, PortableDomainDocument, PortableProjectMetadata, ProjectMetadataDto,
+    ProjectSummaryDto, ProtocolFailure, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
+    SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioDocument, ScenarioDomain,
+    ScenarioId, ScenarioMetadata, ScenarioSettings, ScenarioSnapshotV1, ScenarioViewDto,
+    SolutionId, SolveRunId, SolveStatus, StorageFailure, SupportApplicationMetadataDto,
+    SupportDirectoryMetadataDto, SupportLibraryMetadataDto, SupportPreviewDto,
+    SupportSchemaMetadataDto, UnsupportedFeature, ValidationIssue, ValidationReport,
+    ValidationSeverity, VerificationFailure, extract_asset_references, extract_result_dependency,
+    extract_result_id, extract_scenario_references,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -657,6 +662,195 @@ struct PendingImportPreview {
     portable_settings: BTreeMap<String, AppSetting<Value>>,
     safety_backup_failure: Option<PendingSafetyBackupFailure>,
     retained_bytes: usize,
+}
+
+impl PendingImportPreview {
+    fn retained_memory_charge(&self) -> Option<usize> {
+        let mut charge = self
+            .inspected
+            .retained_memory_bytes
+            .checked_add(size_of::<Self>())?
+            .checked_add(import_preview_records_memory_charge(&self.preview)?)?
+            .checked_add(import_preview_metadata_memory_charge(&self.preview)?)?
+            .checked_add(pending_tree_memory_charge(
+                1,
+                size_of::<(RequestId, PendingPortablePreview)>(),
+            )?)?;
+        charge = charge.checked_add(pending_tree_memory_charge(
+            self.portable_settings.len(),
+            size_of::<(String, AppSetting<Value>)>(),
+        )?)?;
+        for (key, setting) in &self.portable_settings {
+            charge = charge
+                .checked_add(key.capacity())?
+                .checked_add(32)?
+                .checked_add(eutheto_import::retained_value_memory_charge(
+                    &setting.value,
+                )?)?;
+        }
+        let receipt_charge = self
+            .safety_backup_failure
+            .as_ref()
+            .map_or(Some(0), |failure| {
+                failure
+                    .proof
+                    .capacity()
+                    .checked_add(failure.collision_plan_sha256.capacity())?
+                    .checked_add(64)
+            })?;
+        // Reserve room before any backup attempt for its canonical UUID proof and
+        // SHA-256 digest, including allocation overhead. Reinsertion also checks
+        // actual capacities, so retaining a failure cannot bypass the ceiling.
+        charge.checked_add(receipt_charge.max(256))
+    }
+}
+
+fn import_preview_records_memory_charge(preview: &ImportPreview) -> Option<usize> {
+    let mut charge = 0_usize;
+    for string in [
+        &preview.binding.file_sha256,
+        &preview.binding.options_sha256,
+        &preview.title,
+        &preview.created_at,
+        &preview.source_application.name,
+        &preview.source_application.version,
+    ] {
+        charge = charge.checked_add(string.capacity())?.checked_add(32)?;
+    }
+    for (capacity, item_size) in [
+        (
+            preview.scenarios.capacity(),
+            size_of::<eutheto_import::ScenarioPreview>(),
+        ),
+        (
+            preview.removed_scenarios.capacity(),
+            size_of::<LocalScenarioSnapshot>(),
+        ),
+        (
+            preview.supplemental_collisions.capacity(),
+            size_of::<eutheto_types::SupplementalIdentity>(),
+        ),
+        (
+            preview.removed_supplemental.capacity(),
+            size_of::<eutheto_types::SupplementalIdentity>(),
+        ),
+        (
+            preview.applied_migrations.capacity(),
+            size_of::<AppliedMigration>(),
+        ),
+        (preview.settings_changed.capacity(), size_of::<String>()),
+        (preview.settings_removed.capacity(), size_of::<String>()),
+    ] {
+        charge = charge
+            .checked_add(capacity.checked_mul(item_size)?)?
+            .checked_add(32)?;
+    }
+    for scenario in &preview.scenarios {
+        charge = charge
+            .checked_add(scenario.title.capacity())?
+            .checked_add(32)?;
+        if let Some(warning) = &scenario.same_identity_revision_warning {
+            charge = charge.checked_add(warning.capacity())?.checked_add(32)?;
+        }
+    }
+    for scenario in &preview.removed_scenarios {
+        charge = charge
+            .checked_add(scenario.title.capacity())?
+            .checked_add(32)?
+            .checked_add(pending_tree_memory_charge(
+                scenario.owned_uuids.len(),
+                size_of::<Uuid>(),
+            )?)?;
+    }
+    for identity in preview
+        .supplemental_collisions
+        .iter()
+        .chain(&preview.removed_supplemental)
+    {
+        charge = charge
+            .checked_add(identity.key.capacity())?
+            .checked_add(32)?;
+    }
+    for key in preview
+        .settings_changed
+        .iter()
+        .chain(&preview.settings_removed)
+    {
+        charge = charge.checked_add(key.capacity())?.checked_add(32)?;
+    }
+    for migration in &preview.applied_migrations {
+        charge = charge
+            .checked_add(migration.name.capacity())?
+            .checked_add(32)?;
+        if let Some(subject) = &migration.subject {
+            // PackId owns an exact-length copy made by its validated constructor.
+            charge = charge
+                .checked_add(subject.pack_id.as_str().len())?
+                .checked_add(32)?;
+        }
+    }
+    Some(charge)
+}
+
+fn import_preview_metadata_memory_charge(preview: &ImportPreview) -> Option<usize> {
+    let mut charge = 0_usize;
+    charge = charge.checked_add(pending_tree_memory_charge(
+        preview.required_capabilities.len(),
+        size_of::<eutheto_types::SemanticCapability>(),
+    )?)?;
+    for capability in &preview.required_capabilities {
+        charge = charge
+            .checked_add(capability.id.capacity())?
+            .checked_add(32)?;
+    }
+    for strings in [
+        &preview.preserved_extensions,
+        &preview.included_sections,
+        &preview.excluded_sections,
+    ] {
+        charge = charge.checked_add(pending_tree_memory_charge(
+            strings.len(),
+            size_of::<String>(),
+        )?)?;
+        for string in strings {
+            charge = charge.checked_add(string.capacity())?.checked_add(32)?;
+        }
+    }
+    if let Some(selection) = &preview.source_backup_selection {
+        charge = charge
+            .checked_add(pending_tree_memory_charge(
+                selection.fixed_exclusions.len(),
+                size_of::<FixedExclusion>(),
+            )?)?
+            .checked_add(pending_tree_memory_charge(
+                selection.excluded_asset_ids.len(),
+                size_of::<String>(),
+            )?)?;
+        for key in &selection.excluded_asset_ids {
+            charge = charge.checked_add(key.capacity())?.checked_add(32)?;
+        }
+    }
+    charge = charge.checked_add(pending_tree_memory_charge(
+        preview.omitted_assets.len(),
+        size_of::<(String, eutheto_export::OmittedAssetPlaceholder)>(),
+    )?)?;
+    for (key, asset) in &preview.omitted_assets {
+        for string in [
+            key,
+            &asset.format,
+            &asset.original_media_type,
+            &asset.content_sha256,
+        ] {
+            charge = charge.checked_add(string.capacity())?.checked_add(32)?;
+        }
+    }
+    Some(charge)
+}
+
+fn pending_tree_memory_charge(items: usize, item_size: usize) -> Option<usize> {
+    // Charge a complete 11-slot BTree node per item, even for sparse roots,
+    // plus links and allocator overhead. No temporary serialization is needed.
+    items.checked_mul(item_size.checked_mul(11)?.checked_add(256)?)
 }
 
 #[derive(Clone)]
@@ -2162,27 +2356,15 @@ impl EuthetoApp {
         .map_err(|error| import_error(&error))?;
         self.check_cancelled()?;
         preflight_import_packs(&metadata, &self.pack_registry)?;
-        let mut inspected = tokio::task::spawn_blocking(move || {
-            inspect_bundle(
-                &bytes,
-                &InspectionPolicy::default(),
-                &MigrationRegistries::default(),
-            )
-        })
-        .await
-        .map_err(join_error)?
-        .map_err(|error| import_error(&error))?;
+        let registry = Arc::clone(&self.pack_registry);
+        let mut inspected =
+            tokio::task::spawn_blocking(move || inspect_application_bundle(&bytes, &registry))
+                .await
+                .map_err(join_error)?
+                .map_err(|error| import_error(&error))?;
         self.check_cancelled()?;
         let mut portable_settings =
             prepare_portable_inspection(&mut inspected, options.restore_mode, &self.pack_registry)?;
-        let retained_bytes = inspected.retained_memory_bytes;
-        if retained_bytes > MAX_PENDING_PREVIEW_BYTES {
-            return Err(protocol_error(
-                "portable.preview_too_large",
-                "The portable preview exceeds the retained preview limit.",
-                false,
-            ));
-        }
         let (local, local_settings) = self.local_library_snapshot().await?;
         let mut preview = eutheto_import::build_preview(&inspected, &options, &local)
             .map_err(|error| import_error(&error))?;
@@ -2210,29 +2392,18 @@ impl EuthetoApp {
         self.check_cancelled()?;
         let preview_id = RequestId::new(self.ids.as_ref()).map_err(id_error)?;
         self.check_cancelled()?;
-        let mut previews = self.previews.lock().await;
-        while previews.len() >= MAX_PENDING_PREVIEWS
-            || preview_total_bytes(&previews)
-                .checked_add(retained_bytes)
-                .is_none_or(|total| total > MAX_PENDING_PREVIEW_BYTES)
-        {
-            let Some(oldest) = previews.keys().next().copied() else {
-                break;
-            };
-            previews.remove(&oldest);
-        }
-        previews.insert(
+        self.retain_portable_preview(
             preview_id,
-            PendingPortablePreview::Import(Box::new(PendingImportPreview {
+            PendingImportPreview {
                 inspected,
                 preview: preview.clone(),
                 options,
                 portable_settings,
                 safety_backup_failure: None,
-                retained_bytes,
-            })),
-        );
-        drop(previews);
+                retained_bytes: 0,
+            },
+        )
+        .await?;
         Ok(AppQueryResult::PortablePreview {
             preview_id,
             preview: Box::new(preview),
@@ -2678,7 +2849,7 @@ impl EuthetoApp {
                     collision_plan_sha256: collision_plan_sha256.to_owned(),
                 });
                 self.retain_portable_preview(preview_id, pending.clone())
-                    .await;
+                    .await?;
                 Err(protocol_error(
                     "restore.safety_backup_failed",
                     &safe_reason,
@@ -2710,7 +2881,21 @@ impl EuthetoApp {
         }
     }
 
-    async fn retain_portable_preview(&self, preview_id: RequestId, pending: PendingImportPreview) {
+    async fn retain_portable_preview(
+        &self,
+        preview_id: RequestId,
+        mut pending: PendingImportPreview,
+    ) -> Result<(), AppError> {
+        pending.retained_bytes = pending
+            .retained_memory_charge()
+            .filter(|charge| *charge <= MAX_PENDING_PREVIEW_BYTES)
+            .ok_or_else(|| {
+                protocol_error(
+                    "portable.preview_too_large",
+                    "The portable preview exceeds the retained preview limit.",
+                    false,
+                )
+            })?;
         let mut previews = self.previews.lock().await;
         while previews.len() >= MAX_PENDING_PREVIEWS
             || preview_total_bytes(&previews)
@@ -2726,6 +2911,7 @@ impl EuthetoApp {
             preview_id,
             PendingPortablePreview::Import(Box::new(pending)),
         );
+        Ok(())
     }
 
     async fn create_portable_safety_backup(&self) -> Result<String, AppError> {
@@ -2749,14 +2935,12 @@ impl EuthetoApp {
             .safety_backups
             .join(format!("{bundle_id}.eutheto"));
         self.write_bundle(destination.clone(), bytes).await?;
+        let registry = Arc::clone(&self.pack_registry);
         let verified_digest = tokio::task::spawn_blocking(move || {
             let published = std::fs::read(destination)?;
-            inspect_bundle(
-                &published,
-                &InspectionPolicy::default(),
-                &MigrationRegistries::default(),
-            )
-            .map_err(|_| std::io::Error::other("published safety backup verification failed"))?;
+            inspect_application_bundle(&published, &registry).map_err(|_| {
+                std::io::Error::other("published safety backup verification failed")
+            })?;
             Ok::<_, std::io::Error>(eutheto_export::sha256_hex(&published))
         })
         .await
@@ -2816,10 +3000,15 @@ impl EuthetoApp {
             nonsemantic_extensions: BTreeSet::new(),
             manifest_extensions,
         };
-        let bytes = tokio::task::spawn_blocking(move || assemble_scenario_export(&snapshot))
-            .await
-            .map_err(join_error)?
-            .map_err(|error| export_error(&error))?;
+        let registry = Arc::clone(&self.pack_registry);
+        let bytes = tokio::task::spawn_blocking(move || {
+            assemble_scenario_export(&snapshot, &|document| {
+                encode_portable_domain(document, &registry)
+            })
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(|error| export_error(&error))?;
         self.check_cancelled()?;
         Ok((bytes, scenario_revision, library_revision))
     }
@@ -2867,10 +3056,15 @@ impl EuthetoApp {
             nonsemantic_extensions: library.nonsemantic_extensions.clone(),
             manifest_extensions,
         };
-        let bytes = tokio::task::spawn_blocking(move || assemble_full_backup(&snapshot))
-            .await
-            .map_err(join_error)?
-            .map_err(|error| export_error(&error))?;
+        let registry = Arc::clone(&self.pack_registry);
+        let bytes = tokio::task::spawn_blocking(move || {
+            assemble_full_backup(&snapshot, &|document| {
+                encode_portable_domain(document, &registry)
+            })
+        })
+        .await
+        .map_err(join_error)?
+        .map_err(|error| export_error(&error))?;
         self.check_cancelled()?;
         Ok((bytes, summary, library_revision))
     }
@@ -2889,12 +3083,9 @@ impl EuthetoApp {
                 false,
             ));
         }
+        let registry = Arc::clone(&self.pack_registry);
         let (inspected, bytes) = tokio::task::spawn_blocking(move || {
-            let inspected = inspect_bundle(
-                &bytes,
-                &InspectionPolicy::default(),
-                &MigrationRegistries::default(),
-            )?;
+            let inspected = inspect_application_bundle(&bytes, &registry)?;
             Ok::<_, eutheto_import::ImportError>((inspected, bytes))
         })
         .await
@@ -3094,6 +3285,173 @@ fn safe_backup_failure_reason(error: &AppError) -> Option<String> {
     })
 }
 
+fn inspect_application_bundle(
+    bytes: &[u8],
+    registry: &Arc<DomainPackRegistry>,
+) -> Result<InspectedBundle, eutheto_import::ImportError> {
+    let migration_registry = Arc::clone(registry);
+    let migrations = MigrationRegistries::new(
+        Vec::new(),
+        vec![PortableMigrationStep {
+            from_version: 1,
+            to_version: 2,
+            name: "global-portable-v1-to-v2",
+            migrate: Arc::new(move |value| migrate_global_portable_v1(value, &migration_registry)),
+        }],
+    )?;
+    inspect_bundle(bytes, &InspectionPolicy::default(), &migrations, &|wire| {
+        decode_portable_domain(wire, registry)
+    })
+}
+
+fn portable_conversion_failure() -> MigrationFailure {
+    MigrationFailure::Invalid(
+        "The registered domain pack could not safely convert this scenario revision.".to_owned(),
+    )
+}
+
+fn portable_conversion_error(error: AppError) -> MigrationFailure {
+    match error {
+        AppError::Validation(report) => MigrationFailure::Validation(report),
+        _ => portable_conversion_failure(),
+    }
+}
+
+fn migrate_global_portable_v1(
+    value: Value,
+    registry: &DomainPackRegistry,
+) -> Result<PortableMigrationOutcome, MigrationFailure> {
+    let mut snapshot: ScenarioSnapshotV1 =
+        serde_json::from_value(value).map_err(|_| portable_conversion_failure())?;
+    eutheto_export::validate_scenario_snapshot(&snapshot)
+        .map_err(|_| portable_conversion_failure())?;
+    validate_document_shape(&snapshot.document).map_err(|error| {
+        portable_conversion_error(validation_error(
+            error.code(),
+            "/domain",
+            "The imported domain payload is malformed.",
+        ))
+    })?;
+    let mut applied_migrations = Vec::new();
+    migrate_import_document(
+        &mut snapshot.document,
+        registry,
+        snapshot.revision,
+        &mut applied_migrations,
+    )
+    .map_err(portable_conversion_error)?;
+    let domain = encode_portable_domain(&snapshot.document, registry)
+        .map_err(|_| portable_conversion_failure())?;
+    let introduced_requirements = domain
+        .required_capabilities
+        .difference(&snapshot.required_capabilities)
+        .cloned()
+        .collect();
+    let wire = PortableScenario::from_snapshot(&snapshot, domain)
+        .map_err(|_| portable_conversion_failure())?;
+    Ok(PortableMigrationOutcome {
+        value: serde_json::to_value(wire).map_err(|_| portable_conversion_failure())?,
+        introduced_requirements,
+        applied_migrations,
+    })
+}
+
+fn validate_portable_domain_envelope(
+    domain: &PortableDomainDocument,
+    descriptor: &DomainPackDescriptor,
+) -> Result<(), MigrationFailure> {
+    if domain.pack_id != descriptor.id
+        || !descriptor.portable_versions.supports(domain.schema_version)
+        || domain.payload.get("schemaVersion").and_then(Value::as_u64)
+            != Some(u64::from(domain.schema_version))
+        || !domain
+            .required_capabilities
+            .is_subset(&descriptor.portable_capabilities)
+    {
+        return Err(portable_conversion_failure());
+    }
+    let bytes =
+        eutheto_export::canonical_json(domain).map_err(|_| portable_conversion_failure())?;
+    if u64::try_from(bytes.len()).map_or(true, |size| {
+        size > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+    }) {
+        return Err(portable_conversion_failure());
+    }
+    eutheto_export::validate_portable_json_value(
+        &domain.payload,
+        &eutheto_export::PORTABLE_LIMITS,
+        0,
+    )
+    .map_err(|_| portable_conversion_failure())
+}
+
+fn decode_portable_domain(
+    wire: &PortableScenario,
+    registry: &DomainPackRegistry,
+) -> Result<DecodedPortableDomain, MigrationFailure> {
+    let descriptor = registry
+        .descriptors()
+        .find(|descriptor| descriptor.id == wire.domain.pack_id)
+        .ok_or_else(portable_conversion_failure)?;
+    let pack = registry
+        .require(&wire.domain.pack_id)
+        .map_err(|_| portable_conversion_failure())?;
+    validate_portable_domain_envelope(&wire.domain, descriptor)?;
+    let mut domain = std::borrow::Cow::Borrowed(&wire.domain);
+    let mut applied_migrations = Vec::new();
+    while domain.schema_version != descriptor.portable_versions.latest {
+        let previous = domain.schema_version;
+        let expected = previous
+            .checked_add(1)
+            .ok_or_else(portable_conversion_failure)?;
+        domain = std::borrow::Cow::Owned(
+            pack.migrate_portable_step(domain.into_owned())
+                .map_err(|_| portable_conversion_failure())?,
+        );
+        if domain.schema_version != expected {
+            return Err(portable_conversion_failure());
+        }
+        validate_portable_domain_envelope(&domain, descriptor)?;
+        applied_migrations.push(AppliedMigration {
+            registry: MigrationRegistryKind::Portable,
+            name: "pack-portable-schema".to_owned(),
+            from_version: previous,
+            to_version: expected,
+            version_space: Some(PackMigrationVersionSpace::Portable),
+            subject: Some(MigrationSubject {
+                pack_id: wire.domain.pack_id.clone(),
+                scenario_id: wire.scenario_id,
+                revision: wire.revision,
+            }),
+        });
+    }
+    let context = PortableImportContext {
+        scenario_shell: ScenarioDocument::new(
+            wire.scenario_id,
+            DomainPackRef {
+                id: wire.domain.pack_id.clone(),
+                schema_version: descriptor.scenario_versions.latest,
+            },
+            wire.metadata.clone(),
+            wire.settings.clone(),
+            ScenarioDomain::default(),
+            BTreeMap::new(),
+        ),
+    };
+    let document = pack
+        .import_portable(&domain, &context)
+        .map_err(|_| portable_conversion_failure())?;
+    if document.domain_pack.schema_version != descriptor.scenario_versions.latest {
+        return Err(portable_conversion_failure());
+    }
+    validate_document_shape(&document).map_err(|_| portable_conversion_failure())?;
+    Ok(DecodedPortableDomain {
+        document,
+        required_capabilities: domain.required_capabilities.clone(),
+        applied_migrations,
+    })
+}
+
 fn preflight_import_packs(
     metadata: &PreservedBundleMetadata,
     registry: &DomainPackRegistry,
@@ -3106,21 +3464,21 @@ fn preflight_import_packs(
         else {
             return Err(unsupported_import_pack());
         };
-        let Some(schema_version) = scenario.pack_schema_version else {
-            return Err(unsupported_import_pack());
-        };
         let Some(descriptor) = registry
             .descriptors()
             .find(|descriptor| descriptor.id == pack_id)
         else {
             return Err(unsupported_import_pack());
         };
-        if schema_version != descriptor.scenario_versions.latest
-            && !descriptor
-                .scenario_versions
-                .migratable_from
-                .contains(&schema_version)
-        {
+        let supported = match (
+            scenario.internal_pack_schema_version,
+            scenario.portable_pack_schema_version,
+        ) {
+            (Some(version), None) => descriptor.scenario_versions.supports(version),
+            (None, Some(version)) => descriptor.portable_versions.supports(version),
+            _ => false,
+        };
+        if !supported {
             return Err(unsupported_import_pack());
         }
     }
@@ -3158,14 +3516,6 @@ fn prepare_portable_inspection(
         }
     }
     let portable_settings = take_portable_settings(&mut portable_preferences, restore_mode)?;
-    migrate_import_documents(
-        inspected
-            .scenarios
-            .iter_mut()
-            .chain(&mut inspected.scenario_revisions)
-            .map(|item| &mut item.document),
-        registry,
-    )?;
     validate_import_documents(
         inspected
             .scenarios
@@ -3183,19 +3533,11 @@ fn preview_total_bytes(previews: &BTreeMap<RequestId, PendingPortablePreview>) -
     })
 }
 
-fn migrate_import_documents<'a>(
-    documents: impl IntoIterator<Item = &'a mut ScenarioDocument>,
-    registry: &DomainPackRegistry,
-) -> Result<(), AppError> {
-    for document in documents {
-        migrate_import_document(document, registry)?;
-    }
-    Ok(())
-}
-
 fn migrate_import_document(
     document: &mut ScenarioDocument,
     registry: &DomainPackRegistry,
+    revision: Revision,
+    applied: &mut Vec<AppliedMigration>,
 ) -> Result<(), AppError> {
     let Some(descriptor) = registry
         .descriptors()
@@ -3263,23 +3605,31 @@ fn migrate_import_document(
                 "The domain pack migration changed host-owned scenario data.",
             ));
         }
-    }
-    validate_document_shape(&migrated).map_err(|error| {
-        validation_error(
-            error.code(),
-            "/domain",
-            "The migrated domain payload is malformed.",
-        )
-    })?;
-    if pack
-        .validate_full(&migrated)
-        .issues
-        .iter()
-        .any(|issue| issue.severity == ValidationSeverity::Error)
-    {
-        return Err(migration_contract_error(
-            "The migrated scenario failed domain-pack validation.",
-        ));
+        validate_document_shape(&migrated).map_err(|_| {
+            migration_contract_error("The migrated domain payload is malformed or exceeds limits.")
+        })?;
+        let bytes = eutheto_export::canonical_json(&migrated).map_err(|_| {
+            migration_contract_error("The migrated domain payload could not be serialized.")
+        })?;
+        if u64::try_from(bytes.len()).map_or(true, |size| {
+            size > eutheto_export::PORTABLE_LIMITS.max_json_bytes
+        }) {
+            return Err(migration_contract_error(
+                "The migrated domain payload exceeds the document byte limit.",
+            ));
+        }
+        applied.push(AppliedMigration {
+            registry: MigrationRegistryKind::Portable,
+            name: "pack-internal-schema".to_owned(),
+            from_version: previous_version,
+            to_version: expected_version,
+            version_space: Some(PackMigrationVersionSpace::Internal),
+            subject: Some(MigrationSubject {
+                pack_id: original_pack_id.clone(),
+                scenario_id: original_scenario_id,
+                revision,
+            }),
+        });
     }
     *document = migrated;
     Ok(())
@@ -3309,9 +3659,8 @@ fn validate_import_documents<'a>(
                 "The imported scenario domain pack is not available.",
             ));
         }
-        // Every document passes the generic shape gate. Historical documents have already
-        // passed pack validation after migration; current documents retain the established
-        // contract in which pack validation is observable through ValidateScenario and commands.
+        // Portability accepts structurally valid drafts. Solving validation remains an explicit
+        // ValidateScenario/solve operation, not an import or migration gate.
         validate_document_shape(document).map_err(|error| {
             validation_error(
                 error.code(),
@@ -3521,8 +3870,45 @@ fn scenario_backup_selection_manifest_extensions(
     )]))
 }
 
-fn portable_scenario(project: &StoredProject, include_project_metadata: bool) -> PortableScenario {
-    let mut scenario = PortableScenario::current(
+fn encode_portable_domain(
+    document: &ScenarioDocument,
+    registry: &DomainPackRegistry,
+) -> Result<PortableDomainDocument, ExportError> {
+    let failed = || {
+        ExportError::InvalidModel(
+            "registered pack rejected portable conversion of this scenario revision".to_owned(),
+        )
+    };
+    let descriptor = registry
+        .descriptors()
+        .find(|descriptor| descriptor.id == document.domain_pack.id)
+        .ok_or_else(failed)?;
+    if !descriptor
+        .scenario_versions
+        .supports(document.domain_pack.schema_version)
+    {
+        return Err(failed());
+    }
+    let pack = registry
+        .require(&document.domain_pack.id)
+        .map_err(|_| failed())?;
+    let encoded = pack.export_portable(document).map_err(|_| failed())?;
+    if encoded.pack_id != descriptor.id
+        || encoded.schema_version != descriptor.portable_versions.latest
+        || !encoded
+            .required_capabilities
+            .is_subset(&descriptor.portable_capabilities)
+    {
+        return Err(failed());
+    }
+    Ok(encoded)
+}
+
+fn portable_scenario(
+    project: &StoredProject,
+    include_project_metadata: bool,
+) -> ScenarioSnapshotV1 {
+    let mut scenario = ScenarioSnapshotV1::current(
         project.summary.revision,
         project.document.clone(),
         project.portable.required_capabilities.clone(),
@@ -3585,7 +3971,7 @@ fn library_uuid_closure(snapshot: &eutheto_store::LibrarySnapshot) -> LibraryUui
 
 fn scenario_export_sections(
     library: &eutheto_store::LibrarySnapshot,
-    scenario: &PortableScenario,
+    scenario: &ScenarioSnapshotV1,
 ) -> Result<BackupSections, AppError> {
     let scenario_id = scenario.document.scenario_id;
     let mut results = BTreeMap::new();
@@ -4512,6 +4898,14 @@ fn import_error(error: &eutheto_import::ImportError) -> AppError {
             "The portable migration registry is invalid.",
             false,
         ),
+        ImportError::Migration(MigrationFailure::Validation(report)) => {
+            AppError::Validation(report.clone())
+        }
+        ImportError::Migration(_) => validation_error(
+            "portable.migration_failed",
+            "/bundle",
+            "The portable scenario could not be migrated safely.",
+        ),
         ImportError::Zip(_) | ImportError::Io(_) => AppError::Storage(StorageFailure {
             code: "portable.archive_unreadable".to_owned(),
             message: "The portable archive could not be read safely.".to_owned(),
@@ -4534,7 +4928,6 @@ fn import_error(error: &eutheto_import::ImportError) -> AppError {
         | ImportError::InvalidManifest(_)
         | ImportError::InvalidScenario { .. }
         | ImportError::CountMismatch(_)
-        | ImportError::Migration(_)
         | ImportError::ConflictingScenarioRevision { .. }
         | ImportError::Remap(_) => validation_error(
             "portable.content_invalid",
@@ -4553,8 +4946,7 @@ fn filesystem_error(_: std::io::Error) -> AppError {
     })
 }
 
-fn export_error(error: &eutheto_export::ExportError) -> AppError {
-    use eutheto_export::ExportError;
+fn export_error(error: &ExportError) -> AppError {
     match error {
         ExportError::Cancelled => {
             protocol_error("operation.cancelled", "The operation was cancelled.", false)
@@ -4645,7 +5037,7 @@ mod tests {
         ));
 
         let destination = "/home/operator/private-library/backup.eutheto";
-        let raw_error = eutheto_export::ExportError::DestinationExists(PathBuf::from(destination));
+        let raw_error = ExportError::DestinationExists(PathBuf::from(destination));
         let exists = export_error(&raw_error);
         assert!(!format!("{exists:?}").contains(destination));
         assert!(matches!(
@@ -4682,9 +5074,9 @@ mod tests {
             Some("The private application storage path is unsafe or inaccessible.")
         );
         assert!(!format!("{unsafe_private_path:?}").contains("/home/operator"));
-        let publication_failure = export_error(&eutheto_export::ExportError::DestinationExists(
-            PathBuf::from("/private/safety-backup.eutheto"),
-        ));
+        let publication_failure = export_error(&ExportError::DestinationExists(PathBuf::from(
+            "/private/safety-backup.eutheto",
+        )));
         assert!(safe_backup_failure_reason(&publication_failure).is_some());
         let unrelated = AppError::Storage(StorageFailure {
             code: "storage.operation_failed".to_owned(),

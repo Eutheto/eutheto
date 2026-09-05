@@ -459,7 +459,8 @@ export interface UnopenedBundleMetadataDto {
     readonly path: string;
     readonly scenarioId: string | null;
     readonly packId: string | null;
-    readonly packSchemaVersion: number | null;
+    readonly internalPackSchemaVersion: number | null;
+    readonly portablePackSchemaVersion: number | null;
   }[];
 }
 
@@ -587,6 +588,12 @@ export interface AppliedMigrationDto {
   readonly name: string;
   readonly fromVersion: number;
   readonly toVersion: number;
+  readonly versionSpace?: "internal" | "portable";
+  readonly subject?: {
+    readonly packId: string;
+    readonly scenarioId: string;
+    readonly revision: number;
+  };
 }
 
 export interface PortableSourceApplicationDto {

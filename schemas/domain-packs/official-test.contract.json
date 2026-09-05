@@ -4,7 +4,7 @@
     "id": "official.test",
     "packVersion": "0.1.0",
     "latestSchemaVersion": 1,
-    "portableSchemaVersion": 1,
+    "portableSchemaVersion": 2,
     "shareResultSchemaVersion": 1
   },
   "commands": [
@@ -87,27 +87,33 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
-    "required": ["schemaVersion", "entities", "extensions"],
+    "required": ["schemaVersion", "entities", "rules", "preferences", "lockedAssignments", "extensions"],
     "properties": {
       "schemaVersion": {
-        "const": 1
+        "const": 2
       },
       "entities": {
         "type": "object",
         "additionalProperties": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["enabled", "target"],
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "target": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 10
-            }
-          }
+          "type": "object"
+        }
+      },
+      "rules": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object"
+        }
+      },
+      "preferences": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object"
+        }
+      },
+      "lockedAssignments": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object"
         }
       },
       "extensions": {
@@ -180,13 +186,13 @@
     ],
     "importers": [
       {
-        "id": "official.test.import.portable-v1",
+        "id": "official.test.import.portable-v2",
         "titleKey": "official.test.import.title"
       }
     ],
     "exporters": [
       {
-        "id": "official.test.export.portable-v1",
+        "id": "official.test.export.portable-v2",
         "titleKey": "official.test.export.title"
       }
     ]

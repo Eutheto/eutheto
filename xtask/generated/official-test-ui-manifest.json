@@ -9,13 +9,13 @@
     ],
     "exporters": [
       {
-        "id": "official.test.export.portable-v1",
+        "id": "official.test.export.portable-v2",
         "titleKey": "official.test.export.title"
       }
     ],
     "importers": [
       {
-        "id": "official.test.import.portable-v1",
+        "id": "official.test.import.portable-v2",
         "titleKey": "official.test.import.title"
       }
     ],

@@ -109,8 +109,7 @@ pub fn problem_with_variables(include_boolean: bool) -> PlanningProblem {
                 .expect("fixed scenario ID is UUIDv7"),
             scenario_revision: 1,
             projection_version: PROJECTION_SCHEMA_VERSION,
-            compiler_id: CompilerId::new("compiler.fuzz")
-                .expect("fixed compiler ID is canonical"),
+            compiler_id: CompilerId::new("compiler.fuzz").expect("fixed compiler ID is canonical"),
             compiler_version: "1".to_owned(),
             compile_metadata: BTreeMap::new(),
             display_text: BTreeMap::new(),

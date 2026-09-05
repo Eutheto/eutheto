@@ -1,3 +1,8 @@
+#[path = "../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+#[path = "../../../tests/support/portable_encode.rs"]
+mod portable_encode;
+
 use eutheto_command::official_registry;
 use eutheto_core::{
     AppCommand, AppCommandResult, AppDependencies, AppPaths, AppQuery, AppQueryResult,
@@ -21,9 +26,8 @@ use eutheto_domain_ir::{
 };
 use eutheto_export::{
     BackupSections, CHECKSUMS_PATH, CURRENT_PORTABLE_SCHEMA_VERSION, Checksums, FullBackupSnapshot,
-    MANIFEST_PATH, PortableProjectMetadata, ScenarioExportSnapshot, SemanticCapability,
-    assemble_full_backup, assemble_scenario_export, backup_selection_from_manifest,
-    collect_scenario_owned_uuids, parse_omitted_asset_placeholder,
+    MANIFEST_PATH, ScenarioExportSnapshot, assemble_full_backup, assemble_scenario_export,
+    backup_selection_from_manifest, collect_scenario_owned_uuids, parse_omitted_asset_placeholder,
 };
 use eutheto_import::{
     CollisionAction, CollisionPlan, ImportOptions, ImportProvenance, InspectedBundle,
@@ -45,11 +49,11 @@ use eutheto_types::{
     CommandEnvelope, CommandId, CommandSource, CounterfactualJobId, DirectoryAvailabilityLabel,
     DomainPackRef, DurationMillis, EntityId, EventPayload, EventTopic, ExplanationMode, FixedClock,
     FixedIdGenerator, GapPolicy, Horizon, IanaTimeZone, IdGenerationError, IdGenerator, LocaleTag,
-    OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset, PreservationPolicy,
-    ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
+    OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset, PortableProjectMetadata,
+    PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
     SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioId,
-    ScenarioSettings, SolutionId, SolveMode, SolveOptions, SolveRunId, SolveStatus,
-    SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem, WorkerThreadPolicy,
+    ScenarioSettings, SemanticCapability, SolutionId, SolveMode, SolveOptions, SolveRunId,
+    SolveStatus, SupportPreviewDto, SystemClock, SystemIdGenerator, UnitSystem, WorkerThreadPolicy,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -278,12 +282,12 @@ fn with_unknown_pack_and_invalid_domain(bytes: &[u8]) -> Result<Vec<u8>, Box<dyn
             .get(&scenario_path)
             .ok_or("fixture scenario is missing")?,
     )?;
-    scenario["document"]["domainPack"]["id"] = json!("vendor.unknown");
-    scenario["document"]["domain"] = json!("__INVALID_DOMAIN__");
+    scenario["domain"]["packId"] = json!("vendor.unknown");
+    scenario["domain"]["payload"] = json!("__INVALID_DOMAIN__");
     let encoded = String::from_utf8(eutheto_export::canonical_json(&scenario)?)?
         .replace(
-            "\"domain\":\"__INVALID_DOMAIN__\"",
-            "\"domain\":{\"entities\":[],\"entities\":{}}",
+            "\"payload\":\"__INVALID_DOMAIN__\"",
+            "\"payload\":{\"entities\":[],\"entities\":{}}",
         )
         .into_bytes();
     assert!(String::from_utf8_lossy(&encoded).contains("\"entities\":[],\"entities\":{}"));
@@ -1331,6 +1335,7 @@ async fn portable_preview_is_stale_after_library_mutation() -> Result<(), Box<dy
         &bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     assert_eq!(inspected.scenarios.len(), 1);
     assert_eq!(inspected.scenarios[0].revision, Revision::new(1));
@@ -2045,6 +2050,7 @@ async fn seed_local_identity_closure(
         &seed_bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let entity_id = "018f1e2d-3c4b-7a69-8def-012345678940";
     let nested_id = "018f1e2d-3c4b-7a69-8def-012345678941";
@@ -2154,17 +2160,20 @@ fn collision_scenario_bundle(
         .domain
         .entities
         .insert(collision_id.parse()?, json!({"id": collision_id}));
-    Ok(assemble_scenario_export(&ScenarioExportSnapshot {
-        bundle_id: seed.manifest.bundle_id,
-        created_at: seed.manifest.created_at.clone(),
-        application: seed.manifest.application.clone(),
-        title: "Identity collision".to_owned(),
-        scenario,
-        scenario_revisions: Vec::new(),
-        sections: BackupSections::default(),
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: BTreeMap::new(),
-    })?)
+    Ok(assemble_scenario_export(
+        &ScenarioExportSnapshot {
+            bundle_id: seed.manifest.bundle_id,
+            created_at: seed.manifest.created_at.clone(),
+            application: seed.manifest.application.clone(),
+            title: "Identity collision".to_owned(),
+            scenario,
+            scenario_revisions: Vec::new(),
+            sections: BackupSections::default(),
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: BTreeMap::new(),
+        },
+        &portable_encode::encode_fixture_domain,
+    )?)
 }
 
 #[tokio::test]
@@ -2193,6 +2202,7 @@ async fn preview_detects_local_nested_semantic_historical_and_result_identities(
         &seed_bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     for collision_id in collision_ids {
         let result = target
@@ -2275,6 +2285,7 @@ async fn duplicate_uses_injected_ids_for_the_complete_owned_graph() -> Result<()
         &bytes,
         &identity_fixture_inspection_policy(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let exported_owned = std::iter::once(&inspected.scenarios[0])
         .chain(inspected.scenario_revisions.iter())
@@ -2387,6 +2398,112 @@ async fn portable_preview_binds_bundle_kind_before_retaining_state() -> Result<(
     Ok(())
 }
 
+async fn backup_with_large_preview_titles() -> Result<Vec<u8>, Box<dyn Error>> {
+    let source_directory = private_tempdir()?;
+    let source = EuthetoApp::open(dependencies(&source_directory)?)
+        .await
+        .boxed()?;
+    let scenario_id = create_project(&source, "Preview budget seed").await?;
+    let seed_bytes = match source
+        .query(AppQuery::ExportScenario(scenario_id))
+        .await
+        .boxed()?
+    {
+        AppQueryResult::Bundle { bytes, .. } => bytes,
+        other => return Err(format!("unexpected scenario export: {other:?}").into()),
+    };
+    let mut seed = inspect_bundle(
+        &seed_bytes,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
+    )?;
+    let mut scenario = seed.scenarios.remove(0);
+    scenario.project = Some(PortableProjectMetadata::default());
+    // Each title is below the 1 MiB string limit. Deterministic high-entropy
+    // text also stays below the archive compression-ratio ceiling.
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    scenario.document.metadata.title = (0..900 * 1024)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            char::from(b'a' + state.to_le_bytes()[4] % 26)
+        })
+        .collect();
+    let scenarios = (0..40)
+        .map(|index| {
+            let mut scenario = scenario.clone();
+            scenario.document.scenario_id = ScenarioId::from_uuid(Uuid::from_u128(
+                0x018f_1e2d_3c4b_7a69_8def_0123_4567_8000 + index,
+            ));
+            scenario
+        })
+        .collect();
+    let bytes = assemble_full_backup(
+        &FullBackupSnapshot {
+            bundle_id: seed.manifest.bundle_id,
+            created_at: seed.manifest.created_at,
+            application: seed.manifest.application,
+            title: "Derived preview memory".to_owned(),
+            scenarios,
+            scenario_revisions: Vec::new(),
+            sections: BackupSections::default(),
+            nonsemantic_extensions: seed.manifest.nonsemantic_extensions,
+            manifest_extensions: complete_full_backup_extensions()?,
+        },
+        &portable_encode::encode_fixture_domain,
+    )?;
+    Ok(bytes)
+}
+
+#[tokio::test]
+async fn portable_preview_rejects_derived_titles_exceeding_retained_budget_without_writes()
+-> Result<(), Box<dyn Error>> {
+    let bytes = backup_with_large_preview_titles().await?;
+    let inspected = inspect_bundle(
+        &bytes,
+        &InspectionPolicy::default(),
+        &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
+    )?;
+    let title_bytes: usize = inspected
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.document.metadata.title.len())
+        .sum();
+    assert!(inspected.retained_memory_bytes < 64 * 1024 * 1024);
+    assert!(inspected.retained_memory_bytes + title_bytes > 64 * 1024 * 1024);
+    drop(inspected);
+
+    let target_directory = private_tempdir()?;
+    let target = EuthetoApp::open(dependencies(&target_directory)?)
+        .await
+        .boxed()?;
+    let result = target
+        .query(AppQuery::PreviewRestore {
+            bytes,
+            options: ImportOptions {
+                restore_mode: RestoreMode::AddBackup,
+                include_results: true,
+                include_assets: true,
+            },
+        })
+        .await;
+    assert!(matches!(
+        result,
+        Err(AppError::Protocol(failure)) if failure.code == "portable.preview_too_large"
+    ));
+    drop(target);
+    let (store, _) =
+        SqliteScenarioStore::open(target_directory.path().join("eutheto.sqlite")).await?;
+    let snapshot = store.library_snapshot().await?;
+    assert_eq!(snapshot.revision, Revision::INITIAL);
+    assert!(snapshot.projects.is_empty());
+    assert!(snapshot.provenance.is_empty());
+    Ok(())
+}
+
 async fn create_inspected_backup() -> Result<(Vec<u8>, ScenarioId), Box<dyn Error>> {
     let source_directory = private_tempdir()?;
     let source = EuthetoApp::open(dependencies(&source_directory)?)
@@ -2433,6 +2550,7 @@ async fn create_inspected_backup() -> Result<(Vec<u8>, ScenarioId), Box<dyn Erro
         &backup,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     assert_eq!(inspected.scenarios.len(), 1);
     assert_eq!(inspected.scenarios[0].revision, Revision::new(1));
@@ -2624,6 +2742,7 @@ async fn assert_restored_backup(
         &restored_export,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     assert_eq!(inspected.scenarios.len(), 1);
     assert_eq!(inspected.scenarios[0].revision, Revision::new(1));
@@ -2695,6 +2814,7 @@ async fn backup_audit_selection_is_explicitly_deferred_and_never_silently_omitte
         &bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     for path in inspected.checksums.files.keys() {
         let path = path.to_ascii_lowercase();
@@ -2749,6 +2869,7 @@ async fn restore_large_asset_fixture() -> Result<(EuthetoApp, TempDir, ScenarioI
         &scenario_bundle,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let mut scenario = seed.scenarios.remove(0);
     scenario.extensions.insert(
@@ -2774,17 +2895,20 @@ async fn restore_large_asset_fixture() -> Result<(EuthetoApp, TempDir, ScenarioI
             redistribution_permitted: true,
         },
     );
-    let restore_bundle = assemble_full_backup(&FullBackupSnapshot {
-        bundle_id: seed.manifest.bundle_id,
-        created_at: seed.manifest.created_at,
-        application: seed.manifest.application,
-        title: "Large asset restore".to_owned(),
-        scenarios: vec![scenario],
-        scenario_revisions: Vec::new(),
-        sections,
-        nonsemantic_extensions: seed.manifest.nonsemantic_extensions,
-        manifest_extensions: complete_full_backup_extensions()?,
-    })?;
+    let restore_bundle = assemble_full_backup(
+        &FullBackupSnapshot {
+            bundle_id: seed.manifest.bundle_id,
+            created_at: seed.manifest.created_at,
+            application: seed.manifest.application,
+            title: "Large asset restore".to_owned(),
+            scenarios: vec![scenario],
+            scenario_revisions: Vec::new(),
+            sections,
+            nonsemantic_extensions: seed.manifest.nonsemantic_extensions,
+            manifest_extensions: complete_full_backup_extensions()?,
+        },
+        &portable_encode::encode_fixture_domain,
+    )?;
 
     let target_directory = private_tempdir()?;
     let target = EuthetoApp::open(dependencies(&target_directory)?)
@@ -2913,6 +3037,7 @@ async fn assert_omitted_placeholder_survives_restore(
             &exported,
             &InspectionPolicy::default(),
             &MigrationRegistries::default(),
+            &portable_decode::decode_fixture_domain,
         )?;
         assert_eq!(
             inspected
@@ -2999,6 +3124,7 @@ async fn large_asset_exclusion_is_explicit_and_distinct_from_including_assets()
         &included_bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let original_asset = included
         .additional_entries
@@ -3032,6 +3158,7 @@ async fn large_asset_exclusion_is_explicit_and_distinct_from_including_assets()
         &excluded_bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let placeholder_bytes = assert_threshold_placeholder(&excluded, original_asset)?;
     assert_omitted_placeholder_survives_restore(
@@ -3077,6 +3204,7 @@ async fn exclude_all_assets_emits_reconnection_placeholders_for_referenced_asset
         &bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let selection = backup_selection_from_manifest(&inspected.manifest)?
         .ok_or("exclude-all backup selection metadata is missing")?;
@@ -3132,6 +3260,7 @@ async fn backup_selection_metadata_distinguishes_empty_results_from_excluded_res
             &bytes,
             &InspectionPolicy::default(),
             &MigrationRegistries::default(),
+            &portable_decode::decode_fixture_domain,
         )?;
         assert_eq!(inspected.manifest.counts.results, 0);
         assert_eq!(
@@ -3214,6 +3343,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
         &scenario_export,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let expected_placeholder = assert_scenario_placeholder_selection(&inspected)?;
 
@@ -3264,6 +3394,7 @@ async fn scenario_export_and_reimport_preserve_omitted_asset_reconnection_metada
         &reexported,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     assert_eq!(
         assert_scenario_placeholder_selection(&inspected)?,
@@ -3289,6 +3420,7 @@ async fn create_historical_closure_backup() -> Result<(ScenarioId, Vec<u8>), Box
         &seed_bytes,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     let mut current = seed.scenarios[0].clone();
     current.revision = Revision::new(7);
@@ -3327,17 +3459,20 @@ async fn create_historical_closure_backup() -> Result<(ScenarioId, Vec<u8>), Box
             redistribution_permitted: true,
         },
     );
-    let bundle = assemble_full_backup(&FullBackupSnapshot {
-        bundle_id: seed.manifest.bundle_id,
-        created_at: seed.manifest.created_at,
-        application: seed.manifest.application,
-        title: "Historical closure".to_owned(),
-        scenarios: vec![current],
-        scenario_revisions: vec![historical],
-        sections,
-        nonsemantic_extensions: BTreeSet::new(),
-        manifest_extensions: complete_full_backup_extensions()?,
-    })?;
+    let bundle = assemble_full_backup(
+        &FullBackupSnapshot {
+            bundle_id: seed.manifest.bundle_id,
+            created_at: seed.manifest.created_at,
+            application: seed.manifest.application,
+            title: "Historical closure".to_owned(),
+            scenarios: vec![current],
+            scenario_revisions: vec![historical],
+            sections,
+            nonsemantic_extensions: BTreeSet::new(),
+            manifest_extensions: complete_full_backup_extensions()?,
+        },
+        &portable_encode::encode_fixture_domain,
+    )?;
     Ok((scenario_id, bundle))
 }
 
@@ -3377,6 +3512,7 @@ async fn scenario_export_keeps_historical_results_and_historical_only_assets()
         &exported,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     assert_eq!(inspected.scenario_revisions.len(), 1);
     assert_eq!(
@@ -3460,6 +3596,7 @@ async fn failed_destructive_restore_rolls_back_across_restart_and_keeps_verified
         &std::fs::read(&safety_backup_path)?,
         &InspectionPolicy::default(),
         &MigrationRegistries::default(),
+        &portable_decode::decode_fixture_domain,
     )?;
     drop(app);
     drop(store);

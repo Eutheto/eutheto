@@ -8,6 +8,8 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+eutheto-command = { path = "../../eutheto-command", version = "=0.1.0" }
+eutheto-domain-api = { path = "../../eutheto-domain-api", version = "=0.1.0" }
 eutheto-domain-ir = { path = "../../eutheto-domain-ir", version = "=0.1.0" }
 eutheto-export = { path = "../../eutheto-export", version = "=0.1.0" }
 eutheto-import = { path = "..", version = "=0.1.0" }

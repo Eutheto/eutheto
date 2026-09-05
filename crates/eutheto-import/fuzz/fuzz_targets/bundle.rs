@@ -1,5 +1,8 @@
 #![no_main]
 
+#[path = "../../../../tests/support/portable_decode.rs"]
+mod portable_decode;
+
 use eutheto_export::PORTABLE_LIMITS;
 use eutheto_import::{InspectionPolicy, MigrationRegistries, inspect_bundle};
 use libfuzzer_sys::fuzz_target;
@@ -29,5 +32,10 @@ fuzz_target!(|data: &[u8]| {
 
     let policy = bounded_policy();
     let registries = MigrationRegistries::current_only();
-    let _inspection = inspect_bundle(data, &policy, &registries);
+    let _inspection = inspect_bundle(
+        data,
+        &policy,
+        &registries,
+        &portable_decode::decode_fixture_domain,
+    );
 });

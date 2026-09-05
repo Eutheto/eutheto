@@ -2,7 +2,12 @@ import { createSSRApp, h } from "vue";
 import { renderToString } from "@vue/server-renderer";
 import { describe, expect, it, vi, type Mock } from "vitest";
 
-import type { FixedExclusion, ScenarioChangedEvent, ValidationIssue } from "../api/generated";
+import type {
+  AppliedMigrationDto,
+  FixedExclusion,
+  ScenarioChangedEvent,
+  ValidationIssue,
+} from "../api/generated";
 import ProjectHome from "./ProjectHome.vue";
 import {
   defaultSupplementalCollisionChoices,
@@ -343,6 +348,64 @@ describe("ProjectHome", () => {
       warning: scenario.sameIdentityRevisionWarning,
     });
   });
+
+  it.each(["import", "restore"] as const)(
+    "distinguishes migration subjects and version spaces in the %s preview",
+    async (mode) => {
+      const api = fakeApi([project]);
+      const otherScenarioId = "01900000-0000-7000-8000-000000000002";
+      const subjects = [
+        { scenarioId: project.scenarioId, revision: 2, versionSpace: "internal" },
+        { scenarioId: project.scenarioId, revision: 3, versionSpace: "internal" },
+        { scenarioId: otherScenarioId, revision: 2, versionSpace: "internal" },
+        { scenarioId: project.scenarioId, revision: 2, versionSpace: "portable" },
+      ] as const;
+      const appliedMigrations: readonly AppliedMigrationDto[] = [
+        ...portablePreview("scenario-export").appliedMigrations,
+        ...subjects.map(({ scenarioId, revision, versionSpace }) => ({
+          registry: "portable" as const,
+          name: "pack-v1-to-v2",
+          fromVersion: 1,
+          toVersion: 2,
+          versionSpace,
+          subject: { packId: "official.test", scenarioId, revision },
+        })),
+      ];
+      api.previewImport.mockResolvedValue(
+        response({ ...portablePreview("scenario-export"), appliedMigrations }),
+      );
+      api.previewRestore.mockResolvedValue(
+        response({ ...portablePreview("full-backup"), appliedMigrations }),
+      );
+      const home = createProjectHomeController(api);
+      await home.load();
+      if (mode === "import") {
+        await home.previewImport({ includeResults: true, includeAssets: true });
+      } else {
+        await home.previewRestore("add-backup");
+      }
+      const html = await render(home);
+      const section =
+        html.match(
+          new RegExp(
+            `<section aria-labelledby="${mode}-migrations-heading">([\\s\\S]*?)</section>`,
+          ),
+        )?.[1] ?? "";
+      const rows = [...section.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)].map((match) =>
+        (match[1] ?? "")
+          .replace(/<[^>]*>/g, "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
+      for (const { scenarioId, revision, versionSpace } of subjects) {
+        expect(rows).toContainEqual(
+          expect.stringContaining(
+            `${versionSpace} version space · pack official.test · scenario ${scenarioId} · revision ${revision.toString()}`,
+          ),
+        );
+      }
+    },
+  );
 
   it("renders collision review for chooser-backed import and add/replace restore previews", async () => {
     const api = fakeApi([project]);

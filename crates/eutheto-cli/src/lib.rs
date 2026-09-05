@@ -1528,7 +1528,8 @@ fn preserved_bundle_metadata_value(metadata: &PreservedBundleMetadata) -> Value 
                 "path": scenario.path,
                 "scenarioId": scenario.scenario_id,
                 "packId": scenario.pack_id,
-                "packSchemaVersion": scenario.pack_schema_version,
+                "internalPackSchemaVersion": scenario.internal_pack_schema_version,
+                "portablePackSchemaVersion": scenario.portable_pack_schema_version,
             })
         }).collect::<Vec<_>>(),
     })
