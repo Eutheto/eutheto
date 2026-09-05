@@ -5,7 +5,7 @@ use eutheto_command::{
 };
 use eutheto_types::{
     ActorRef, AddEntity, AddRule, AssignmentId, CommandBatch, CommandEnvelope, CommandId,
-    CommandSource, DomainCommandEnvelope, LockAssignment, PersonId, Revision, RuleId,
+    CommandSource, DomainCommandEnvelope, EntityId, LockAssignment, Revision, RuleId,
     ScenarioCommand, ScenarioDocument, SetPreference, UnlockAssignment, UpdateEntity, UpdateRule,
 };
 use serde_json::{Value, json};
@@ -115,7 +115,7 @@ fn assert_leaf_command_family<const N: usize>(
 #[test]
 fn every_generic_leaf_command_has_an_exact_inverse() -> Result<(), Box<dyn Error>> {
     let revision = Revision::new(0);
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
     let rule_id = RuleId::from_str(RULE_ID)?;
     let preference_id = RuleId::from_str(PREFERENCE_ID)?;
     let assignment_id = AssignmentId::from_str(ASSIGNMENT_ID)?;
@@ -214,7 +214,7 @@ fn every_generic_leaf_command_has_an_exact_inverse() -> Result<(), Box<dyn Error
 fn batch_is_atomic_and_inverse_runs_in_reverse_order() -> Result<(), Box<dyn Error>> {
     let scenario = document(OFFICIAL_TEST_PACK_ID)?;
     let revision = Revision::new(4);
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
     let command = ScenarioCommand::ApplyBatch(CommandBatch {
         label: Some("Add and rename person".to_owned()),
         commands: vec![
@@ -288,7 +288,7 @@ fn batch_is_atomic_and_inverse_runs_in_reverse_order() -> Result<(), Box<dyn Err
 fn domain_command_uses_the_phase_02_pack_and_is_reversible() -> Result<(), Box<dyn Error>> {
     let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
     let revision = Revision::new(0);
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
     scenario.domain.entities.insert(
         entity_id,
         json!({ "id": entity_id, "enabled": false, "target": 0 }),
@@ -324,7 +324,7 @@ fn domain_command_uses_the_phase_02_pack_and_is_reversible() -> Result<(), Box<d
 fn unsupported_pack_and_domain_commands_are_typed_failures() -> Result<(), Box<dyn Error>> {
     let unsupported_pack = document(UNSUPPORTED_PACK_ID)?;
     let revision = Revision::new(0);
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
     let error = apply(
         &unsupported_pack,
         revision,
@@ -366,7 +366,7 @@ fn unsupported_pack_and_domain_commands_are_typed_failures() -> Result<(), Box<d
 fn validation_codes_and_application_are_stable_and_deterministic() -> Result<(), Box<dyn Error>> {
     let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
     let revision = Revision::new(7);
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
     scenario
         .domain
         .entities
@@ -391,7 +391,7 @@ fn validation_codes_and_application_are_stable_and_deterministic() -> Result<(),
         CODE_DUPLICATE_ENTITY
     );
 
-    let missing_id = PersonId::from_str("0195a5e4-7c00-7000-8000-000000000099")?;
+    let missing_id = EntityId::from_str("0195a5e4-7c00-7000-8000-000000000099")?;
     let error = apply(
         &scenario,
         revision,
@@ -441,7 +441,7 @@ fn validation_codes_and_application_are_stable_and_deterministic() -> Result<(),
 fn fast_validation_is_derived_from_the_registered_phase_02_pack() -> Result<(), Box<dyn Error>> {
     let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
     let revision = Revision::new(0);
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
     scenario.domain.entities.insert(
         entity_id,
         json!({ "id": entity_id, "enabled": false, "target": 0 }),
@@ -494,7 +494,7 @@ fn credential_bearing_generic_commands_fail_at_every_ingress_shape() -> Result<(
         "credential-handle",
         "credential-item",
     ];
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
 
     for (index, key) in PROHIBITED_KEYS.into_iter().enumerate() {
         let mut scenario = document(OFFICIAL_TEST_PACK_ID)?;
@@ -562,7 +562,7 @@ fn credential_bearing_generic_commands_fail_at_every_ingress_shape() -> Result<(
 #[test]
 fn harmless_key_substrings_remain_valid_command_data() -> Result<(), Box<dyn Error>> {
     let scenario = document(OFFICIAL_TEST_PACK_ID)?;
-    let entity_id = PersonId::from_str(ENTITY_ID)?;
+    let entity_id = EntityId::from_str(ENTITY_ID)?;
     let command = ScenarioCommand::AddEntity(AddEntity {
         entity_id,
         value: json!({

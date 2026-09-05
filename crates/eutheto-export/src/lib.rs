@@ -2966,7 +2966,7 @@ mod tests {
     fn backup_rejects_owned_identity_shared_by_scenario_families()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut first = scenario_from_json(Value::Null)?;
-        let shared_id: eutheto_types::PersonId = "018f1e2d-3c4b-7a69-8def-012345678940".parse()?;
+        let shared_id: eutheto_types::EntityId = "018f1e2d-3c4b-7a69-8def-012345678940".parse()?;
         first
             .document
             .domain
