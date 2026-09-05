@@ -307,6 +307,8 @@ Every seating command has a stable `official.seating.*` type ID, strict JSON Sch
 
 Generated TypeScript declarations include seating DTOs. Mutations carry scenario ID, expected revision, and request ID. Responses carry request ID, current revision, warnings, schema version, changed IDs, and invalidated view keys. Purpose-built views include overview, paged entities/rules, `SeatingViewport { bounds, zoom_bucket }`, solution summary, table list, and guest/relationship inspectors.
 
+This catalog is a first-class Phase-10 assistant input, not a workforce-shaped API adapted by analogy. Bounded identity resolution must disambiguate duplicate guest/table labels using stable IDs; command-derived previews distinguish same-table, actual-seat adjacency, physical distance across tables, Required/Preference strength, accessibility requirements, and lock consequences with canonical units. Phase 09 owns these deterministic meanings and examples; Phase 10 owns conversational proposal execution and evaluation.
+
 Use general scenario endpoints (`scenario_get_view`, entity/search/catalog queries, `scenario_apply_command`, batch, validation, undo/redo/history), solve endpoints, and complete solution compare/explain/counterfactual/lock/repair/export endpoints from Appendix D. Events carry version/timestamp/request/job/scenario/revision fields. Only frontend API modules call Tauri; Vue components call typed services/composables.
 
 The working CLI name `optimizer` remains an unresolved naming gate. The CLI can validate, apply typed commands, solve, verify, compare, explain, and export seating scenarios without the desktop. `projects import/export` uses the portable services; `solutions export --format csv|svg|html|pdf|json` uses the accepted-result/privacy gates and report builder. Human/JSON results use the `eutheto` schema namespace and stable exit codes; every saved solution is independently accepted.
@@ -345,6 +347,8 @@ Property/differential tests cover integer transform composition; translation/rot
 Share/report tests prove exact preview-to-payload equality; default omission of sensitive/source-only fields; inert rendering of malicious guest/relationship/label text; one-file `file://` operation with zero required network requests; HTML/SVG/list semantic agreement; keyboard/focus/screen-reader and graphical/list parity; print/PDF page context and grayscale readability; immutable generated output after source edits; atomic cancellation/failure cleanup; supported-browser compatibility; and responsive 500-guest output.
 
 Desktop acceptance proves canvas/list synchronization through revisioned commands, keyboard parity for every drag operation, focus restoration, screen-reader labels/announcements, non-color overlays, stale/error/empty/active states, undo/redo, and responsive 500-guest pan/zoom/select. Required usability task: create an across-table physical-separation rule, inspect its overlay/evidence, optimize, manually move/lock, repair, export editable data, and share a privacy-reviewed immutable arrangement.
+
+Retain synthetic duplicate-name, across-table-distance, accessibility, seat-lock, and infeasible-relationship examples as the seating side of Phase-10 cross-domain acceptance. Later experiment/voice clients reuse the same catalog, verified metrics, geometry and accessible list representation; their implementation is not a Phase-09 exit requirement.
 
 ## Risks and failure handling
 

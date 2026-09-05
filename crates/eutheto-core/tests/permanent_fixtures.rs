@@ -25,7 +25,7 @@ use eutheto_import::{
 use eutheto_planning_ir::{CandidateValues, PlanningProblem};
 use eutheto_store::SqliteScenarioStore;
 use eutheto_types::{
-    AppError, BundleId, FixedClock, PersonId, RequestId, Revision, Rfc3339Timestamp,
+    AppError, BundleId, EntityId, FixedClock, RequestId, Revision, Rfc3339Timestamp,
     ScenarioDocument, SolutionId, SystemIdGenerator, ValidationIssue, ValidationSeverity,
 };
 use serde_json::{Value, json};
@@ -112,7 +112,7 @@ impl DomainPack for HistoricalFixturePack {
             return Ok(shell);
         }
         let person_id = "018f47f2-e880-7000-8000-000000000099"
-            .parse::<PersonId>()
+            .parse::<EntityId>()
             .map_err(|error| DomainPackError::Contract(error.to_string()))?;
         shell.domain.entities.insert(
             person_id,

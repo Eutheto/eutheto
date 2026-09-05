@@ -18,8 +18,8 @@ use eutheto_planning_ir::{
     canonical_ir_hash, summarize, validate,
 };
 use eutheto_types::{
-    CancellationToken, DomainCommandEnvelope, DurationMillis, FixedMonotonicClock, PackId,
-    ParentSolveBudget, PersonId, RuleId, ScenarioDocument, SolutionId,
+    CancellationToken, DomainCommandEnvelope, DurationMillis, EntityId, FixedMonotonicClock,
+    PackId, ParentSolveBudget, RuleId, ScenarioDocument, SolutionId,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -499,7 +499,7 @@ fn compile_project_verify_and_score_are_deterministic() -> Result<(), Box<dyn Er
     assert_eq!(verification_scope.required_rules.len(), 1);
     assert_eq!(
         verification_scope.required_rules[0].rule_id,
-        RuleId::from_uuid(PersonId::from_str(ENTITY_ID)?.as_uuid())
+        RuleId::from_uuid(EntityId::from_str(ENTITY_ID)?.as_uuid())
     );
     let first = pack.compile(&source, &context())?;
     let second = pack.compile(&source, &context())?;
@@ -634,7 +634,7 @@ fn unknown_internal_and_portable_fields_are_rejected() -> Result<(), Box<dyn Err
     let pack = OfficialTestPack;
     let mut source = document()?;
     source.domain.entities.insert(
-        PersonId::from_str(ENTITY_ID)?,
+        EntityId::from_str(ENTITY_ID)?,
         json!({ "id": ENTITY_ID, "enabled": true, "target": 3, "future": true }),
     );
     assert!(!pack.validate_fast(&source).issues.is_empty());

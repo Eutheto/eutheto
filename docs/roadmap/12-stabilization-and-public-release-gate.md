@@ -385,6 +385,10 @@ A standalone result flow is done only when one accepted immutable result builds 
 
 An AI capability is done only when a deterministic non-AI equivalent exists; the tool is typed/allowlisted; read/write risk is classified; writes produce a diff preview and require explicit apply; stale revision behavior and prompt-injection/malformed-call tests pass; secret/data scope is documented; provider failure preserves state; deterministic evidence is inspectable; and a fake provider covers it in CI.
 
+For Phase 10, exercise both workforce and event seating with synthetic, versioned conversations and strict expected command/evidence outcomes. Include ambiguous identities, Required-versus-Preference interpretation, stale/partial proposals, duplicate or delayed tool events, and a real evidence citation paired with an unsupported claim. Switching from local-only to an external profile must not upload prior private messages, summaries, cached tool results, or retained context without a newly approved disclosure. Default conversations are ephemeral; explicit retention and deletion leave applied commands and minimal durable provenance intact. Native credential canaries and keyring-unavailable recovery preserve the same no-secret-in-Vue boundary.
+
+Manual acceptance checks that users distinguish a draft proposal, applied scenario, and accepted result; can correct a wrong interpretation; and understand scope, provider destination, usage uncertainty, and unresolved search. Schema validity or a plausible explanation alone is not evidence of useful or truthful assistance. Record correction effort and observed confusion without introducing telemetry.
+
 ## Public-MVP release gate
 
 Every item is mandatory unless the affected target/feature is explicitly removed and all docs/manifests are updated.
@@ -455,6 +459,7 @@ Every item is mandatory unless the affected target/feature is explicitly removed
 - security, privacy, AI, provider, credential, updater, support-bundle, standalone-report CSP/no-network, and exact share-preview guidance;
 - Portable Scenario/Result/Share Result compatibility matrices; editable export versus backup versus sharing; migration/collision/reconnection; add/replace restore, safety backup, recovery, data deletion/retention, update, uninstall, and offline instructions;
 - final extension/media types/file associations, supported OS/target/browser matrix, artifact/checksum/signature verification, stability labels, and known limitations.
+- named-profile setup, capability/billing limitations, native credential recovery, context/profile-switch disclosure, opt-in conversation retention/deletion, separately confirmed solve actions, and workforce/seating proposal walkthroughs match the implemented Phase-10 contract.
 
 All documentation walkthroughs must match the exact candidate.
 
@@ -541,6 +546,7 @@ Phase 12 and public MVP are complete only when every definition of done and ever
 - It does not use live paid provider calls as deterministic CI evidence.
 - It does not convert experimental Pumpkin into a stable default without its support/cancellation/benchmark gates.
 - It does not publish merely because a date/tag was planned; evidence controls publication.
+- Conversational experiments, voice, MCP servers, delegated reasoning, and conditional subscription-runtime support have their own post-MVP Phase-13 gates. Audio/remote-host evaluations do not become public-MVP prerequisites. When those capabilities ship later, apply the same exact-artifact, security, privacy, accessibility, recovery, and evidence discipline to their supported modes; school and transportation are not prerequisites for the MVP assistant corpus.
 
 ## Assumption and version gates
 

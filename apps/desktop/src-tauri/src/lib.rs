@@ -23,7 +23,7 @@ use eutheto_import::{
 use eutheto_types::{
     ActorRef, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
     CancellationToken, CommandBatch, CommandEnvelope, CommandId, CommandResult, CommandSource,
-    DomainPackRef, EventTopic, FieldErrorDto, FoundationStatus, PackId, PersonId,
+    DomainPackRef, EntityId, EventTopic, FieldErrorDto, FoundationStatus, PackId,
     ProjectMetadataDto, ProjectSummaryDto, RequestId, ResourceRef, Revision, Rfc3339Timestamp,
     SafeDiagnosticValue, ScenarioCommand, ScenarioId, ScenarioSettings, ScenarioSummaryDto,
     ScenarioViewDto, SupplementalIdentity, SupportPreviewDto, SystemClock, SystemIdGenerator,
@@ -482,7 +482,7 @@ struct EntityRequest {
     #[serde(rename = "scenarioId")]
     scenario: ScenarioId,
     #[serde(rename = "entityId")]
-    entity: PersonId,
+    entity: EntityId,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -784,7 +784,7 @@ struct ScenarioSetupStatusDto {
 struct ScenarioEntityDto {
     scenario_id: ScenarioId,
     revision: Revision,
-    entity_id: PersonId,
+    entity_id: EntityId,
     value: Option<Value>,
 }
 
@@ -3541,7 +3541,7 @@ mod tests {
     use eutheto_types::{
         ActorRef, AddEntity, ApiErrorCategoryDto, ApiErrorDto, ApiResponseDto, AppError, BackendId,
         CancellationToken, CommandEnvelope, CommandId, CommandResult, CommandSource, DomainPackRef,
-        EventTopic, PersonId, ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId,
+        EntityId, EventTopic, ProjectMetadataDto, ProjectSummaryDto, REVISION_MAX_V1, RequestId,
         Revision, SafeDiagnosticValue, ScenarioCommand, ScenarioSettings, ScenarioViewDto,
         SystemClock, SystemIdGenerator,
     };
@@ -4901,7 +4901,7 @@ mod tests {
             json!([source_scenario_id])
         );
 
-        let source_entity_id = PersonId::new(&ids)?;
+        let source_entity_id = EntityId::new(&ids)?;
         let source_entity = json!({
             "id": source_entity_id.to_string(),
             "name": "Authoritative portable entity"
@@ -5253,7 +5253,7 @@ mod tests {
             assert_eq!(error.code, "portable.preview_not_found");
         }
 
-        let entity_id = PersonId::new(&ids)?;
+        let entity_id = EntityId::new(&ids)?;
         let mutation_request_id = RequestId::new(&ids)?;
         let committed: ApiResponseDto<CommandResult> = invoke_ok(
             &reopened_webview,
@@ -5361,7 +5361,7 @@ mod tests {
         );
         let authoritative_document = redone_view.result.document;
 
-        let stale_entity_id = PersonId::new(&ids)?;
+        let stale_entity_id = EntityId::new(&ids)?;
         let stale_response = invoke_ipc(
             &reopened_webview,
             "scenario_apply_command",

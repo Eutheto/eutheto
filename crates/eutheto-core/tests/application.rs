@@ -43,9 +43,9 @@ use eutheto_store::{
 use eutheto_types::{
     ActorRef, AddEntity, AppError, BackendId, BackendSelection, Clock, CommandBatch,
     CommandEnvelope, CommandId, CommandSource, CounterfactualJobId, DirectoryAvailabilityLabel,
-    DomainPackRef, DurationMillis, EventPayload, EventTopic, ExplanationMode, FixedClock,
+    DomainPackRef, DurationMillis, EntityId, EventPayload, EventTopic, ExplanationMode, FixedClock,
     FixedIdGenerator, GapPolicy, Horizon, IanaTimeZone, IdGenerationError, IdGenerator, LocaleTag,
-    OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PersonId, PortableAsset, PreservationPolicy,
+    OverlapPolicy, PORTABLE_LARGE_ASSET_BYTES_V1, PortableAsset, PreservationPolicy,
     ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
     SCENARIO_FORMAT_VERSION, SUPPORT_PREVIEW_SCHEMA_VERSION, ScenarioCommand, ScenarioId,
     ScenarioSettings, SolutionId, SolveMode, SolveOptions, SolveRunId, SolveStatus,
@@ -337,7 +337,7 @@ fn add_entity_envelope(
     _name: &str,
 ) -> Result<CommandEnvelope, Box<dyn Error>> {
     let ids = SystemIdGenerator;
-    let person_id = PersonId::new(&ids)?;
+    let person_id = EntityId::new(&ids)?;
     Ok(CommandEnvelope {
         command_id: CommandId::new(&ids)?,
         scenario_id,
@@ -1078,8 +1078,8 @@ async fn batch_undo_and_redo_survive_restart() -> Result<(), Box<dyn Error>> {
     let scenario_id = create_project(&app, "History").await.boxed()?;
     let initial_document = scenario_view(&app, scenario_id).await.boxed()?.document;
     let ids = SystemIdGenerator;
-    let first = PersonId::new(&ids)?;
-    let second = PersonId::new(&ids)?;
+    let first = EntityId::new(&ids)?;
+    let second = EntityId::new(&ids)?;
     let envelope = CommandEnvelope {
         command_id: CommandId::new(&ids)?,
         scenario_id,

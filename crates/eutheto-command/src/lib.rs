@@ -12,7 +12,7 @@ use eutheto_domain_api::{
 };
 use eutheto_types::{
     AddEntity, AddRule, AssignmentId, Change, ChangeKind, ChangeSet, CommandBatch, CommandEnvelope,
-    CommandResult, DomainCommandEnvelope, LockAssignment, PersonId, PortableJsonLimits, Revision,
+    CommandResult, DomainCommandEnvelope, EntityId, LockAssignment, PortableJsonLimits, Revision,
     RuleId, ScenarioCommand, ScenarioDocument, SetPreference, UnlockAssignment, UpdateEntity,
     UpdateRule, ValidationDelta, ValidationIssue, validate_nonsecret_portable_json,
 };
@@ -877,7 +877,7 @@ fn validation_error(
     }
 }
 
-fn entity_path(id: &PersonId) -> String {
+fn entity_path(id: &EntityId) -> String {
     format!("/domain/entities/{id}")
 }
 

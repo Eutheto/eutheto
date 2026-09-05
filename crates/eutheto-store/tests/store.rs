@@ -31,8 +31,8 @@ use eutheto_store::{
 };
 use eutheto_types::{
     ActorRef, BackendId, BackendSelection, BundleId, CommandId, CommandSource, CounterfactualJobId,
-    DomainPackRef, DurationMillis, ExplanationMode, GapPolicy, Horizon, IanaTimeZone, LocaleTag,
-    MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId, PersonId, PortableAsset,
+    DomainPackRef, DurationMillis, EntityId, ExplanationMode, GapPolicy, Horizon, IanaTimeZone,
+    LocaleTag, MAX_SCENARIO_DOCUMENT_BYTES, OverlapPolicy, PackId, PortableAsset,
     PreservationPolicy, ReproducibilityMode, RequestId, ResourceLimits, Revision, Rfc3339Timestamp,
     RuleId, ScenarioDocument, ScenarioDomain, ScenarioId, ScenarioMetadata, ScenarioSettings,
     SolutionId, SolveMode, SolveOptions, SolveRunId, SolveStatus, SupplementalIdentity,
@@ -716,14 +716,14 @@ async fn direct_create_rejects_duplicate_identity_occurrences_without_artifacts(
     let path = directory.path().join("library.sqlite3");
     let root_id = scenario_id(110)?;
     let mut root_collision = document(root_id)?;
-    let root_person = PersonId::from_uuid(root_id.as_uuid());
+    let root_person = EntityId::from_uuid(root_id.as_uuid());
     root_collision
         .domain
         .entities
         .insert(root_person, json!({"id": root_person}));
     let entity_rule_id = Uuid::now_v7();
     let mut typed_collision = document(scenario_id(111)?)?;
-    let person = PersonId::from_uuid(entity_rule_id);
+    let person = EntityId::from_uuid(entity_rule_id);
     let rule = RuleId::from_uuid(entity_rule_id);
     typed_collision
         .domain
@@ -798,7 +798,7 @@ async fn command_rejects_identity_owned_by_another_project_atomically() -> Resul
     let owner_id = scenario_id(92)?;
     let target_id = scenario_id(93)?;
     let shared_uuid = scenario_id(94)?.as_uuid();
-    let person_id: PersonId = shared_uuid.to_string().parse()?;
+    let person_id: EntityId = shared_uuid.to_string().parse()?;
     let rule_id: RuleId = shared_uuid.to_string().parse()?;
     let mut owner = document(owner_id)?;
     owner.domain.entities.insert(
@@ -861,7 +861,7 @@ async fn removed_identity_remains_reserved_for_undo() -> Result<(), Box<dyn Erro
     let owner_id = scenario_id(95)?;
     let target_id = scenario_id(96)?;
     let reserved_uuid = scenario_id(97)?.as_uuid();
-    let person_id: PersonId = reserved_uuid.to_string().parse()?;
+    let person_id: EntityId = reserved_uuid.to_string().parse()?;
     let rule_id: RuleId = reserved_uuid.to_string().parse()?;
     store
         .create_project(NewProject {
@@ -2568,7 +2568,7 @@ async fn duplicate_refuses_missing_extra_and_occupied_identity_mappings_without_
 
 fn assert_remapped_duplicate_graph(
     copy: &StoredProject,
-    person: PersonId,
+    person: EntityId,
     rule: RuleId,
     semantic_id: Uuid,
     mapped_document_nonsemantic: Uuid,
@@ -2658,7 +2658,7 @@ async fn duplicate_remaps_owned_graph_and_preserves_portable_metadata_after_rest
     let path = directory.path().join("library.sqlite3");
     let source_id = scenario_id(90)?;
     let copy_id = scenario_id(91)?;
-    let person = PersonId::from_uuid(Uuid::now_v7());
+    let person = EntityId::from_uuid(Uuid::now_v7());
     let rule = RuleId::from_uuid(Uuid::now_v7());
     let semantic_id = Uuid::now_v7();
     let document_nonsemantic_owned = Uuid::now_v7();

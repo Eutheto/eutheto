@@ -20,6 +20,8 @@ Binding architecture decisions include [ADR-006](../adr/006-solver-neutral-plann
 
 Phase 14 is a sibling post-MVP branch entered directly from a completed Phase 12. It does **not** depend on completing the broad Phase 13 umbrella or any unrelated Phase-13 branch. If a Phase-13 capability is later consumed, that capability becomes an explicit, versioned Phase-14 dependency rather than an implicit prerequisite.
 
+The early conversational experiment/voice deliveries in [Phase 13, Branch K](13-post-mvp-roadmap.md#branch-k--early-conversational-experiments-voice-and-optional-integrations) are likewise independent of Transportation. Phase-10 and initial Branch-K evaluations use workforce and seating; they must not require Transportation fixtures or production capabilities. Transportation remains usable without those assistant extensions.
+
 Entry requires:
 
 - the Phase-12 public release baseline, including versioned internal, Portable Scenario, immutable Result, privacy-filtered Share Result, bundle/report formats; stable IDs; permanent migrations; reversible revisioned commands; application services; local persistence; generated TypeScript contracts; desktop/CLI surfaces; one-file HTML/PDF report renderer; and packaged release evidence;
@@ -247,6 +249,8 @@ Explanations name verified eligibility, availability, shared journey facts, hist
 ### Commands and application services
 
 Every Transportation mutation is a namespaced typed command with schema/version, expected revision, request identity, permission/risk metadata, reversibility, human summary, invalidated views, and generated TypeScript contract. Commands cover people, calendars/source links, commitments/overrides, places/aliases, vehicles/drivers, transit and advanced limits, travel assumptions, rules/preferences, locks/manual edits, imports, and repair. AI, if later enabled, may only propose these same reviewed commands.
+
+When optional Transportation assistant exposure is introduced after the corresponding production pack/capability gates, extend the shared evaluation corpus rather than creating a transport-specific agent. Include ambiguous places/dates, stale snapshot evidence, hypothetical versus applied commitments, and attempted inference of travel times, driving eligibility, supervision, or transit consent. The assistant cannot invent historical traffic, refresh a provider implicitly, or enable transit for a non-opted-in person; all policy changes require the same typed preview and explicit approval. Text/voice privacy also covers precise addresses, calendar notes, and spoken personal information.
 
 Shared application services own provider setup/secrets, transactional sync/import, snapshot refresh/status, model estimation, staged solve jobs, cancellation, projection/verification acceptance, explain/counterfactual, compare, lock/repair, and export orchestration. Components never call Tauri directly; typed frontend services/composables do. No provider secret storage becomes pack-specific.
 

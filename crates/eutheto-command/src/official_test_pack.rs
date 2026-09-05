@@ -31,7 +31,7 @@ use eutheto_planning_ir::{
     project_candidate, validate,
 };
 use eutheto_types::{
-    DomainCommandEnvelope, DomainPackRef, PackId, PersonId, RuleId, ScenarioDocument,
+    DomainCommandEnvelope, DomainPackRef, EntityId, PackId, RuleId, ScenarioDocument,
     ScenarioDomain, SolutionId, ValidationIssue, ValidationSeverity,
 };
 use semver::Version;
@@ -113,7 +113,7 @@ struct GeneratedUiItem {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TestEntity {
-    id: PersonId,
+    id: EntityId,
     enabled: bool,
     target: i64,
 }
@@ -121,7 +121,7 @@ struct TestEntity {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigureEntity {
-    entity_id: PersonId,
+    entity_id: EntityId,
     enabled: bool,
     target: i64,
 }
@@ -534,7 +534,7 @@ impl DomainPack for crate::OfficialTestPack {
         require_pack(&result)?;
         result.domain = ScenarioDomain::default();
         for (id, entity) in portable.entities {
-            let id = PersonId::from_str(&id).map_err(contract)?;
+            let id = EntityId::from_str(&id).map_err(contract)?;
             check_target(entity.target)?;
             result.domain.entities.insert(
                 id,
@@ -1111,7 +1111,7 @@ fn validate_portable_extensions(
 
 fn parse_entities(
     document: &ScenarioDocument,
-) -> Result<BTreeMap<PersonId, TestEntity>, DomainPackError> {
+) -> Result<BTreeMap<EntityId, TestEntity>, DomainPackError> {
     require_pack(document)?;
     let mut entities = BTreeMap::new();
     for (id, value) in &document.domain.entities {
@@ -1209,7 +1209,7 @@ impl ProblemParts {
 
     fn add_entity(
         &mut self,
-        id: &PersonId,
+        id: &EntityId,
         entity: &TestEntity,
         preference_provenance: &ProvenanceId,
     ) -> Result<(), DomainPackError> {
@@ -1236,7 +1236,7 @@ struct EntityProblemSymbols {
 }
 
 impl EntityProblemSymbols {
-    fn new(id: &PersonId) -> Result<Self, DomainPackError> {
+    fn new(id: &EntityId) -> Result<Self, DomainPackError> {
         let suffix = id.to_string();
         Ok(Self {
             bool_id: BoolVariableId::new(format!("official_test.enabled.{suffix}"))
@@ -1425,7 +1425,7 @@ fn compile_metadata(
 fn build_problem(
     document: &ScenarioDocument,
     context: &CompileContext,
-    entities: &BTreeMap<PersonId, TestEntity>,
+    entities: &BTreeMap<EntityId, TestEntity>,
 ) -> Result<PlanningProblem, DomainPackError> {
     let preference_provenance =
         ProvenanceId::new("official_test.preference.target").map_err(contract)?;

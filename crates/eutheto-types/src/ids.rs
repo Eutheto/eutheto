@@ -188,10 +188,8 @@ macro_rules! define_id {
 }
 
 define_id!(ScenarioId, "Stable identity of a scenario.");
-define_id!(
-    PersonId,
-    "Stable identity of a generic Phase-01 entity/person."
-);
+define_id!(EntityId, "Stable identity of a domain entity.");
+define_id!(PersonId, "Stable identity of a person.");
 define_id!(RuleId, "Stable identity of a rule or preference.");
 define_id!(
     AssignmentId,

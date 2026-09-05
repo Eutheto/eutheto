@@ -2,8 +2,8 @@
 
 use crate::budget::DurationMillis;
 use crate::ids::{
-    AssignmentId, BackendId, CommandId, CounterfactualJobId, PackId, PersonId, RequestId, RuleId,
-    ScenarioId, SolutionId, SolveRunId,
+    AssignmentId, BackendId, CommandId, CounterfactualJobId, EntityId, PackId, PersonId, RequestId,
+    RuleId, ScenarioId, SolutionId, SolveRunId,
 };
 use crate::values::{
     GapPolicy, Horizon, IanaTimeZone, LocaleTag, OverlapPolicy, Revision, Rfc3339Timestamp,
@@ -87,7 +87,7 @@ pub struct ScenarioSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScenarioDomain {
     /// Entity records keyed by stable identity.
-    pub entities: BTreeMap<PersonId, Value>,
+    pub entities: BTreeMap<EntityId, Value>,
     /// Rule records keyed by stable identity.
     pub rules: BTreeMap<RuleId, Value>,
     /// Preference records keyed by stable identity.
@@ -213,7 +213,7 @@ pub enum CommandSource {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AddEntity {
     /// New entity identity.
-    pub entity_id: PersonId,
+    pub entity_id: EntityId,
     /// Pack-owned entity value.
     pub value: Value,
 }
@@ -223,7 +223,7 @@ pub struct AddEntity {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateEntity {
     /// Existing entity identity.
-    pub entity_id: PersonId,
+    pub entity_id: EntityId,
     /// Replacement pack-owned value.
     pub value: Value,
 }
@@ -233,7 +233,7 @@ pub struct UpdateEntity {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoveEntity {
     /// Existing entity identity.
-    pub entity_id: PersonId,
+    pub entity_id: EntityId,
 }
 
 /// Adds a generic rule.
@@ -462,7 +462,7 @@ pub struct CommandResult {
 pub enum ResourceRef {
     /// Scenario resource.
     Scenario(ScenarioId),
-    /// Generic entity resource.
+    /// Person resource.
     Person(PersonId),
     /// Rule or preference resource.
     Rule(RuleId),

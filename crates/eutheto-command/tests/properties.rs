@@ -3,7 +3,7 @@ use eutheto_command::{
     OFFICIAL_TEST_PACK_ID, apply_command,
 };
 use eutheto_types::{
-    ActorRef, AddEntity, CommandBatch, CommandEnvelope, CommandId, CommandSource, PersonId,
+    ActorRef, AddEntity, CommandBatch, CommandEnvelope, CommandId, CommandSource, EntityId,
     Revision, ScenarioCommand, ScenarioDocument, UpdateEntity,
 };
 use proptest::char::range;
@@ -66,9 +66,9 @@ fn document() -> Result<ScenarioDocument, TestCaseError> {
     .map_err(case_error)
 }
 
-fn person_id(index: u8) -> Result<PersonId, TestCaseError> {
+fn person_id(index: u8) -> Result<EntityId, TestCaseError> {
     let suffix = u64::from(index).saturating_add(0x100);
-    PersonId::from_str(&format!("0195a5e4-7c00-7000-8000-{suffix:012x}")).map_err(case_error)
+    EntityId::from_str(&format!("0195a5e4-7c00-7000-8000-{suffix:012x}")).map_err(case_error)
 }
 
 fn envelope(
