@@ -16,7 +16,7 @@ export interface PlannerFieldProps {
   readonly required?: boolean;
   readonly disabled?: boolean;
   readonly readOnly?: boolean;
-  readonly locale?: string;
+  readonly locale?: string | undefined;
 }
 
 /** A request key identifies one complete native query invocation, including its page. */
