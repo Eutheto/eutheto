@@ -53,18 +53,17 @@ impl HistoryPageRequestV1 {
                 "The history page limit must be between 1 and 100.",
             ));
         }
-        if let Some(continuation) = &self.continuation {
-            if continuation.scenario_id != self.scenario_id
+        if let Some(continuation) = &self.continuation
+            && (continuation.scenario_id != self.scenario_id
                 || continuation.revision != self.expected_revision
                 || continuation.before_sequence == 0
-                || Revision::try_new(continuation.before_sequence).is_err()
-            {
-                return Err(validation_error(
-                    "history.continuation_invalid",
-                    "/continuation",
-                    "The history continuation must match the requested scenario and revision and contain a valid sequence.",
-                ));
-            }
+                || Revision::try_new(continuation.before_sequence).is_err())
+        {
+            return Err(validation_error(
+                "history.continuation_invalid",
+                "/continuation",
+                "The history continuation must match the requested scenario and revision and contain a valid sequence.",
+            ));
         }
         Ok(())
     }

@@ -148,7 +148,7 @@ fn sequences(page: &HistoryPageDtoV1) -> Vec<u64> {
 
 async fn assert_stale(app: &EuthetoApp, previous: &HistoryPageDtoV1, actual: u64) -> TestResult {
     let mut stale = request(previous.scenario_id, previous.revision.value(), 1);
-    stale.continuation = previous.continuation.clone();
+    stale.continuation.clone_from(&previous.continuation);
     assert!(matches!(app.query(AppQuery::HistoryPage(stale)).await,
         Err(AppError::Conflict { expected_revision, actual_revision })
             if expected_revision == previous.revision && actual_revision == Revision::new(actual)));

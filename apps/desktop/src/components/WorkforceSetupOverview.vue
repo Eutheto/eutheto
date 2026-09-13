@@ -289,7 +289,10 @@ async function refresh(): Promise<void> {
             </div>
           </dl>
         </section>
-        <section class="state-panel" aria-labelledby="setup-validation">
+        <section
+          class="page-stack rounded-sm border border-line p-4"
+          aria-labelledby="setup-validation"
+        >
           <h3 id="setup-validation" tabindex="-1">{{ messages.setup.validation }}</h3>
           <ValidationSummary
             :findings="snapshot.summary.fast"

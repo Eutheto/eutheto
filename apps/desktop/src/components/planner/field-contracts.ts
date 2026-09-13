@@ -12,7 +12,7 @@ export interface PlannerFieldProps {
   readonly label: string;
   readonly id?: string;
   readonly description?: string;
-  readonly error?: string;
+  readonly error?: string | undefined;
   readonly required?: boolean;
   readonly disabled?: boolean;
   readonly readOnly?: boolean;

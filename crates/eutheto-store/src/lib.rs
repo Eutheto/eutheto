@@ -2502,39 +2502,9 @@ impl SqliteScenarioStore {
             {
                 return Err(StoreError::Integrity("invalid history cursor state".to_owned()));
             }
-            let (tail_count, tail_generation): (i64, Option<i64>) = transaction.query_row(
-                "SELECT COUNT(*), MAX(branch_generation) FROM command_journal
-                 WHERE scenario_id = ?1 AND history_sequence = ?2",
-                params![&scenario_key, u64_to_i64(max_sequence)?],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+            let (undo_available, redo_available) = history_page_availability(
+                &transaction, &scenario_key, cursor, generation, max_sequence,
             )?;
-            if tail_count != i64::from(max_sequence > 0)
-                || tail_generation.map(i64_to_u64).transpose()?
-                    != (max_sequence > 0).then_some(generation)
-            {
-                return Err(StoreError::Integrity(
-                    "history branch does not match its retained tail".to_owned(),
-                ));
-            }
-            let (cursor_count, reversible): (i64, bool) = transaction.query_row(
-                "SELECT COUNT(*), COALESCE(MAX(inverse_json IS NOT NULL), 0)
-                 FROM command_journal WHERE scenario_id = ?1 AND history_sequence = ?2",
-                params![&scenario_key, u64_to_i64(cursor)?],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            let redo_count: i64 = transaction.query_row(
-                "SELECT COUNT(*) FROM command_journal
-                 WHERE scenario_id = ?1 AND history_sequence = ?2",
-                params![&scenario_key, u64_to_i64(cursor + 1)?],
-                |row| row.get(0),
-            )?;
-            if cursor_count != i64::from(cursor > 0)
-                || redo_count != i64::from(cursor < max_sequence)
-            {
-                return Err(StoreError::Integrity(
-                    "history cursor references missing or ambiguous journal entries".to_owned(),
-                ));
-            }
             let mut entries = Vec::with_capacity(limit as usize);
             let mut next_before_sequence = None;
             {
@@ -2586,8 +2556,8 @@ impl SqliteScenarioStore {
                 revision,
                 entries,
                 next_before_sequence,
-                undo_available: cursor > 0 && reversible,
-                redo_available: cursor < max_sequence,
+                undo_available,
+                redo_available,
             })
         })
         .await
@@ -6950,6 +6920,47 @@ fn load_history_entry(
         ));
     };
     parse_history_row(row, cursor)
+}
+
+/// Checks retained-tail/cursor links without loading journal payloads.
+fn history_page_availability(
+    transaction: &rusqlite::Transaction<'_>,
+    scenario_key: &str,
+    cursor: u64,
+    generation: u64,
+    max_sequence: u64,
+) -> Result<(bool, bool), StoreError> {
+    let (tail_count, tail_generation): (i64, Option<i64>) = transaction.query_row(
+        "SELECT COUNT(*), MAX(branch_generation) FROM command_journal
+         WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(max_sequence)?],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if tail_count != i64::from(max_sequence > 0)
+        || tail_generation.map(i64_to_u64).transpose()? != (max_sequence > 0).then_some(generation)
+    {
+        return Err(StoreError::Integrity(
+            "history branch does not match its retained tail".to_owned(),
+        ));
+    }
+    let (cursor_count, reversible): (i64, bool) = transaction.query_row(
+        "SELECT COUNT(*), COALESCE(MAX(inverse_json IS NOT NULL), 0)
+         FROM command_journal WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(cursor)?],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let redo_count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM command_journal
+         WHERE scenario_id = ?1 AND history_sequence = ?2",
+        params![scenario_key, u64_to_i64(cursor + 1)?],
+        |row| row.get(0),
+    )?;
+    if cursor_count != i64::from(cursor > 0) || redo_count != i64::from(cursor < max_sequence) {
+        return Err(StoreError::Integrity(
+            "history cursor references missing or ambiguous journal entries".to_owned(),
+        ));
+    }
+    Ok((cursor > 0 && reversible, cursor < max_sequence))
 }
 
 fn parse_history_summary_row(
